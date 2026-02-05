@@ -30,7 +30,7 @@
  */
 
 #define DEFAULT_QUEUE_DEPTH 256   /**< Default ring queue depth */
-#define BUFFER_ALIGNMENT 4096     /**< Page alignment for O_DIRECT */
+#define BUFFER_ALIGNMENT ((size_t)sysconf(_SC_PAGESIZE))  /**< Page alignment for O_DIRECT */
 #define TICK_INTERVAL_MS 10       /**< Adaptive tick interval */
 /**
  * Maximum number of io_uring rings (1 ring per CPU core).

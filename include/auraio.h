@@ -129,7 +129,7 @@ typedef struct {
   int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4) */
   int min_in_flight;         /**< Minimum in-flight limit (default: 4) */
   double max_p99_latency_ms; /**< Target max P99 latency, 0 = auto */
-  size_t buffer_alignment;   /**< Buffer alignment (default: 4096) */
+  size_t buffer_alignment;   /**< Buffer alignment (default: system page size) */
   bool disable_adaptive;     /**< Disable adaptive tuning */
 
   /* Advanced io_uring features (Phase 5) */
