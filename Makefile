@@ -51,8 +51,66 @@ src/%.o: src/%.c
 test: all
 	$(MAKE) -C tests
 
-# Run all tests (C, C++, Rust)
-test-all: test cpp-test rust-test
+# Run all tests (C, C++, Rust) with combined summary
+test-all: all
+	@echo "========================================"
+	@echo "AuraIO Test Suite"
+	@echo "========================================"
+	@c_pass=0; c_fail=0; cpp_pass=0; cpp_fail=0; rust_pass=0; rust_fail=0; \
+	echo ""; \
+	echo "--- C Tests ---"; \
+	c_out=$$($(MAKE) -C tests 2>&1) && c_ok=1 || c_ok=0; \
+	echo "$$c_out"; \
+	c_pass=$$(echo "$$c_out" | grep -oE '^[0-9]+ tests passed' | tail -1 | grep -oE '^[0-9]+'); \
+	[ -z "$$c_pass" ] && c_pass=0; \
+	if [ "$$c_ok" -eq 0 ]; then c_fail=1; fi; \
+	echo ""; \
+	echo "--- C++ Tests ---"; \
+	cpp_out=$$($(MAKE) -C tests cpp-test 2>&1) && cpp_ok=1 || cpp_ok=0; \
+	echo "$$cpp_out"; \
+	cpp_pass=$$(echo "$$cpp_out" | grep -oE 'Passed: [0-9]+' | grep -oE '[0-9]+'); \
+	cpp_fail_count=$$(echo "$$cpp_out" | grep -oE 'Failed: [0-9]+' | grep -oE '[0-9]+'); \
+	[ -z "$$cpp_pass" ] && cpp_pass=0; \
+	[ -z "$$cpp_fail_count" ] && cpp_fail_count=0; \
+	if [ "$$cpp_ok" -eq 0 ] || [ "$$cpp_fail_count" -gt 0 ]; then cpp_fail=1; fi; \
+	echo ""; \
+	echo "--- Rust Tests ---"; \
+	rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
+	echo "$$rust_out"; \
+	rust_pass=$$(echo "$$rust_out" | grep -oE '[0-9]+ passed' | awk '{s+=$$1} END{print s+0}'); \
+	rust_ignored=$$(echo "$$rust_out" | grep -oE '[0-9]+ ignored' | awk '{s+=$$1} END{print s+0}'); \
+	[ -z "$$rust_pass" ] && rust_pass=0; \
+	[ -z "$$rust_ignored" ] && rust_ignored=0; \
+	if [ "$$rust_ok" -eq 0 ]; then rust_fail=1; fi; \
+	total=$$((c_pass + cpp_pass + rust_pass)); \
+	echo ""; \
+	echo "========================================"; \
+	echo "Test Summary"; \
+	echo "========================================"; \
+	if [ "$$c_fail" -eq 0 ]; then \
+		echo "  C:      $$c_pass passed [OK]"; \
+	else \
+		echo "  C:      FAILED"; \
+	fi; \
+	if [ "$$cpp_fail" -eq 0 ]; then \
+		echo "  C++:    $$cpp_pass passed [OK]"; \
+	else \
+		echo "  C++:    FAILED ($$cpp_fail_count failures)"; \
+	fi; \
+	if [ "$$rust_fail" -eq 0 ]; then \
+		echo "  Rust:   $$rust_pass passed, $$rust_ignored ignored [OK]"; \
+	else \
+		echo "  Rust:   FAILED"; \
+	fi; \
+	echo "  --------"; \
+	echo "  Total:  $$total tests passed"; \
+	echo "========================================"; \
+	if [ "$$c_fail" -ne 0 ] || [ "$$cpp_fail" -ne 0 ] || [ "$$rust_fail" -ne 0 ]; then \
+		echo "RESULT: FAILED"; \
+		exit 1; \
+	else \
+		echo "RESULT: ALL PASSED"; \
+	fi
 
 # Build examples
 examples: all

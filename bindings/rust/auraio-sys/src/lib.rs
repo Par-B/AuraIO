@@ -13,7 +13,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use auraio_sys::*;
 //!
 //! unsafe {

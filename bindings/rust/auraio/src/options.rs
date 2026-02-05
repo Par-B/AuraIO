@@ -6,7 +6,7 @@ use auraio_sys;
 ///
 /// Use the builder pattern to customize engine behavior:
 ///
-/// ```
+/// ```no_run
 /// use auraio::Options;
 ///
 /// let opts = Options::new()

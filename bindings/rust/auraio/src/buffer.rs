@@ -11,7 +11,10 @@ use std::ptr::NonNull;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// use auraio::Engine;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let engine = Engine::new()?;
 /// let buf = engine.allocate_buffer(4096)?;
 ///
@@ -19,6 +22,8 @@ use std::ptr::NonNull;
 /// // Use buf.as_slice() for reading
 ///
 /// // Buffer automatically returned to pool when dropped
+/// # Ok(())
+/// # }
 /// ```
 pub struct Buffer {
     engine: *mut auraio_sys::auraio_engine_t,

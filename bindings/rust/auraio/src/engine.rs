@@ -24,11 +24,12 @@ use std::ptr::NonNull;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use auraio::{Engine, BufferRef};
 /// use std::fs::File;
 /// use std::os::unix::io::AsRawFd;
 ///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let engine = Engine::new()?;
 /// let mut buf = engine.allocate_buffer(4096)?;
 /// let file = File::open("/etc/hostname")?;
@@ -41,6 +42,8 @@ use std::ptr::NonNull;
 /// })?;
 ///
 /// engine.wait(-1)?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct Engine {
     handle: NonNull<auraio_sys::auraio_engine_t>,

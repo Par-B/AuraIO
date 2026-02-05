@@ -5,7 +5,7 @@
 //!
 //! # Quick Start
 //!
-//! ```ignore
+//! ```no_run
 //! use auraio::{Engine, BufferRef};
 //! use std::fs::File;
 //! use std::os::unix::io::AsRawFd;
