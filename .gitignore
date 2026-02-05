@@ -10,6 +10,7 @@ tests/test_engine
 tests/test_buffer
 tests/test_ring
 tests/test_cpp
+tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan
 tests/stress_test
