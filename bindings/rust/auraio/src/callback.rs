@@ -1,0 +1,57 @@
+//! Callback type erasure for I/O completions
+
+use crate::error::{Error, Result};
+
+/// Type-erased callback storage
+///
+/// We box the callback to store it as user_data in the C API.
+/// The trampoline function unboxes and invokes it.
+pub(crate) type BoxedCallback = Box<dyn FnOnce(Result<usize>) + Send + 'static>;
+
+/// Context stored as user_data for each I/O operation
+pub(crate) struct CallbackContext {
+    pub callback: Option<BoxedCallback>,
+}
+
+impl CallbackContext {
+    pub fn new<F>(callback: F) -> Box<Self>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        Box::new(Self {
+            callback: Some(Box::new(callback)),
+        })
+    }
+}
+
+/// C callback trampoline
+///
+/// This function is passed to the C API. It converts the result and
+/// invokes the Rust callback.
+///
+/// # Safety
+///
+/// - `user_data` must be a valid pointer to a `Box<CallbackContext>`
+/// - This function takes ownership of the context and drops it after invocation
+pub(crate) extern "C" fn callback_trampoline(
+    _req: *mut auraio_sys::auraio_request_t,
+    result: isize,
+    user_data: *mut std::ffi::c_void,
+) {
+    if user_data.is_null() {
+        return;
+    }
+
+    // Take ownership of the context
+    let ctx = unsafe { Box::from_raw(user_data as *mut CallbackContext) };
+
+    if let Some(callback) = ctx.callback {
+        let rust_result = if result < 0 {
+            Err(Error::from_raw_os_error(-result as i32))
+        } else {
+            Ok(result as usize)
+        };
+        callback(rust_result);
+    }
+    // Context is dropped here, freeing the memory
+}

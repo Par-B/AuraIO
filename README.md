@@ -5,6 +5,7 @@
 ![Linux](https://img.shields.io/badge/platform-Linux%206.0%2B-blue)
 ![C11](https://img.shields.io/badge/language-C11-orange)
 ![C++20](https://img.shields.io/badge/language-C%2B%2B20-orange)
+![Rust](https://img.shields.io/badge/language-Rust-orange)
 ![io_uring](https://img.shields.io/badge/backend-io__uring-green)
 
 > Self-tuning async I/O for Linux. Zero config. Maximum throughput.
@@ -46,7 +47,7 @@ void on_complete(auraio_request_t *req, ssize_t n, void *ctx) {
 
 **Migration effort:** ~20 lines of boilerplate, then mechanical transformation of each I/O call.
 
-## Two APIs: C for Systems, C++ for Applications
+## Three APIs: C, C++, and Rust
 
 ### C API — Maximum Control
 
@@ -95,6 +96,48 @@ auraio::Task<void> copy_file(auraio::Engine& engine, int src, int dst) {
 }
 ```
 
+### Rust API — Safety and Performance
+
+For Rust applications requiring safe, high-performance async I/O:
+
+```rust
+use auraio::{Engine, Result};
+use std::os::unix::io::AsRawFd;
+
+fn main() -> Result<()> {
+    let engine = Engine::new()?;
+    let buf = engine.allocate_buffer(4096)?;
+
+    engine.read(fd, &buf, 4096, 0, |result| {
+        match result {
+            Ok(n) => println!("Read {} bytes", n),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+    })?;
+
+    engine.wait(-1)?;
+    Ok(())
+}
+```
+
+**With async/await (feature flag):**
+
+```rust
+use auraio::{Engine, async_io::AsyncEngine};
+
+async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
+    let buf = engine.allocate_buffer(65536)?;
+    let mut offset = 0i64;
+    loop {
+        let n = engine.async_read(src, &buf, 65536, offset).await?;
+        if n == 0 { break; }
+        engine.async_write(dst, &buf, n, offset).await?;
+        offset += n as i64;
+    }
+    Ok(())
+}
+```
+
 ### Which API Should I Use?
 
 | Building... | Recommended | Why |
@@ -104,7 +147,8 @@ auraio::Task<void> copy_file(auraio::Engine& engine, int src, int dst) {
 | Web service, API server | **C++** | RAII, lambdas, faster iteration |
 | Data pipeline, ETL | **C++** | Coroutines simplify async flows |
 | Embedded system | **C** | Minimal dependencies |
-| Uncertain | **C++** | Can always drop to C via `engine.handle()` |
+| Rust application | **Rust** | Memory safety, async/await, cargo integration |
+| Uncertain | **C++** or **Rust** | Both offer RAII and modern patterns |
 
 ## Features
 
@@ -113,8 +157,8 @@ auraio::Task<void> copy_file(auraio::Engine& engine, int src, int dst) {
 - **CPU-Aware Routing** — Submissions go to the calling thread's core
 - **AIMD Self-Tuning** — Finds optimal concurrency without benchmarking
 - **Scalable Buffer Pool** — Thread-local caches, auto-scaling shards
-- **Dual API** — C for systems, C++ for applications
-- **Coroutine Support** — C++20 `co_await` for clean async code
+- **Triple API** — C for systems, C++ for applications, Rust for safety
+- **Coroutine Support** — C++20 `co_await` and Rust async/await
 - **Thread-Safe** — Multiple threads can submit concurrently
 - **Event Loop Integration** — Pollable fd for epoll/kqueue
 
@@ -177,9 +221,46 @@ int main() {
 }
 ```
 
-See [`examples/`](examples/) for more: bulk readers, write modes, coroutines.
+### Rust Example
+
+```rust
+use auraio::{Engine, Result};
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+fn main() -> Result<()> {
+    let engine = Engine::new()?;
+    let buf = engine.allocate_buffer(4096)?;
+
+    let file = File::open("/etc/hostname").unwrap();
+    let fd = file.as_raw_fd();
+    let done = Arc::new(AtomicBool::new(false));
+    let done_cb = done.clone();
+
+    engine.read(fd, &buf, 4096, 0, move |result| {
+        match result {
+            Ok(n) => println!("Read {} bytes", n),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+        done_cb.store(true, Ordering::SeqCst);
+    })?;
+
+    while !done.load(Ordering::SeqCst) {
+        engine.wait(100)?;
+    }
+
+    println!("Content: {}", String::from_utf8_lossy(buf.as_slice()));
+    Ok(())
+}
+```
+
+See [`examples/`](examples/) for more: bulk readers, write modes, coroutines, async copy.
 
 ## Installation
+
+### C/C++ Library
 
 ```bash
 git clone https://github.com/yourusername/auraio.git
@@ -197,16 +278,37 @@ gcc myapp.c -lauraio -luring -lpthread -o myapp
 g++ -std=c++20 myapp.cpp -lauraio -luring -lpthread -o myapp
 ```
 
+### Rust Crate
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+auraio = { path = "path/to/auraio/bindings/rust/auraio" }
+
+# For async/await support:
+auraio = { path = "path/to/auraio/bindings/rust/auraio", features = ["async"] }
+```
+
+Or build the Rust bindings from the repository:
+
+```bash
+make rust           # Build Rust bindings
+make rust-test      # Run Rust tests
+make rust-examples  # Build Rust examples
+```
+
 ## Requirements
 
 - **Linux 6.0+** (io_uring features)
 - **liburing** — `apt install liburing-dev`
 - **C11 compiler** (C API)
 - **C++20 compiler** (C++ API, optional)
+- **Rust 1.70+** (Rust bindings, optional)
 
 ## API Overview
 
-### Core Operations
+### Core Operations (C)
 
 | Function | Description |
 |----------|-------------|
@@ -224,23 +326,32 @@ g++ -std=c++20 myapp.cpp -lauraio -luring -lpthread -o myapp
 | `co_await engine.async_read(...)` | Coroutine-style async |
 | `~Engine()` | `auraio_destroy()` |
 
+### Rust Equivalents
+
+| Rust | Equivalent to |
+|------|---------------|
+| `Engine::new()?` | `auraio_create()` |
+| `engine.read(fd, &buf, ...)` | `auraio_read(...)` with closure callback |
+| `engine.async_read(...).await` | Future-based async (requires `async` feature) |
+| `drop(engine)` | `auraio_destroy()` |
+
 Full API documentation: [`docs/`](docs/)
 
 ## How It Works
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Your Application                       │
+│                       Your Application                      │
 ├─────────────────────────────────────────────────────────────┤
-│                        AuraIO API                           │
-├─────────────────────────────────────────────────────────────┤
-│  Ring 0 (Core 0)  │  Ring 1 (Core 1)  │  ...  │  Ring N    │
-│  ┌─────────────┐  │  ┌─────────────┐  │       │            │
-│  │  Adaptive   │  │  │  Adaptive   │  │       │            │
-│  │  Controller │  │  │  Controller │  │       │            │
-│  └─────────────┘  │  └─────────────┘  │       │            │
-├───────────────────┴───────────────────┴───────┴────────────┤
-│                       io_uring / Kernel                     │
+│                         AuraIO API                          │
+├───────────────────┬───────────────────┬───────┬─────────────┤
+│  Ring 0 (Core 0)  │  Ring 1 (Core 1)  │  ...  │   Ring N    │
+│  ┌─────────────┐  │  ┌─────────────┐  │       │             │
+│  │  Adaptive   │  │  │  Adaptive   │  │       │             │
+│  │  Controller │  │  │  Controller │  │       │             │
+│  └─────────────┘  │  └─────────────┘  │       │             │
+├───────────────────┴───────────────────┴───────┴─────────────┤
+│                      io_uring / Kernel                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 

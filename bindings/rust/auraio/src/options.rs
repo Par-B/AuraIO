@@ -1,0 +1,96 @@
+//! Engine configuration options
+
+use auraio_sys;
+
+/// Engine configuration options
+///
+/// Use the builder pattern to customize engine behavior:
+///
+/// ```
+/// use auraio::Options;
+///
+/// let opts = Options::new()
+///     .queue_depth(512)
+///     .ring_count(4)
+///     .enable_sqpoll(true);
+/// ```
+#[derive(Debug, Clone)]
+pub struct Options {
+    inner: auraio_sys::auraio_options_t,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Options {
+    /// Create new options with default values
+    pub fn new() -> Self {
+        let mut inner: auraio_sys::auraio_options_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            auraio_sys::auraio_options_init(&mut inner);
+        }
+        Self { inner }
+    }
+
+    /// Set the queue depth per ring (default: 256)
+    pub fn queue_depth(mut self, depth: i32) -> Self {
+        self.inner.queue_depth = depth;
+        self
+    }
+
+    /// Set the number of rings (default: 0 = auto, one per CPU)
+    pub fn ring_count(mut self, count: i32) -> Self {
+        self.inner.ring_count = count;
+        self
+    }
+
+    /// Set the initial in-flight limit (default: queue_depth/4)
+    pub fn initial_in_flight(mut self, limit: i32) -> Self {
+        self.inner.initial_in_flight = limit;
+        self
+    }
+
+    /// Set the minimum in-flight limit (default: 4)
+    pub fn min_in_flight(mut self, limit: i32) -> Self {
+        self.inner.min_in_flight = limit;
+        self
+    }
+
+    /// Set the target max P99 latency in milliseconds (default: 0 = auto)
+    pub fn max_p99_latency_ms(mut self, latency: f64) -> Self {
+        self.inner.max_p99_latency_ms = latency;
+        self
+    }
+
+    /// Set buffer alignment (default: 4096)
+    pub fn buffer_alignment(mut self, alignment: usize) -> Self {
+        self.inner.buffer_alignment = alignment;
+        self
+    }
+
+    /// Disable adaptive tuning
+    pub fn disable_adaptive(mut self, disable: bool) -> Self {
+        self.inner.disable_adaptive = disable;
+        self
+    }
+
+    /// Enable SQPOLL mode (requires root or CAP_SYS_NICE)
+    pub fn enable_sqpoll(mut self, enable: bool) -> Self {
+        self.inner.enable_sqpoll = enable;
+        self
+    }
+
+    /// Set SQPOLL idle timeout in milliseconds (default: 1000)
+    pub fn sqpoll_idle_ms(mut self, timeout: i32) -> Self {
+        self.inner.sqpoll_idle_ms = timeout;
+        self
+    }
+
+    /// Get a reference to the underlying C options struct
+    pub(crate) fn as_ptr(&self) -> *const auraio_sys::auraio_options_t {
+        &self.inner
+    }
+}

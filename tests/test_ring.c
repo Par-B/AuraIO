@@ -22,11 +22,14 @@
 #include "../include/auraio.h"
 #include "../src/adaptive_ring.h"
 
+static int test_count = 0;
+
 #define TEST(name) static void test_##name(void)
 #define RUN_TEST(name) do { \
     printf("  %-40s", #name); \
     test_##name(); \
     printf(" OK\n"); \
+    test_count++; \
 } while(0)
 
 /* Test file path */
@@ -1497,6 +1500,6 @@ int main(void) {
     /* Version API tests */
     RUN_TEST(version_api);
 
-    printf("\nAll io_uring ring tests passed!\n");
+    printf("\n%d tests passed\n", test_count);
     return 0;
 }

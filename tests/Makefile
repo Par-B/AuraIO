@@ -15,14 +15,19 @@ TESTS = test_engine test_buffer test_ring
 CPP_TESTS = test_cpp
 
 all: $(TESTS)
-	@echo "Running all tests..."
-	@for t in $(TESTS); do \
+	@echo "Running all C tests..."
+	@total=0; \
+	for t in $(TESTS); do \
 		echo ""; \
 		echo "=== $$t ==="; \
-		./$$t || exit 1; \
-	done
-	@echo ""
-	@echo "All tests passed!"
+		output=$$(./$$t) || exit 1; \
+		echo "$$output"; \
+		count=$$(echo "$$output" | grep -oE '^[0-9]+ tests passed' | grep -oE '^[0-9]+'); \
+		if [ -n "$$count" ]; then total=$$((total + count)); fi; \
+	done; \
+	echo ""; \
+	echo "=== C Tests Summary ==="; \
+	echo "$$total tests passed"
 
 test_engine: test_engine.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
@@ -40,7 +45,7 @@ test_ring: test_ring.c ../lib/libauraio.a
 test_cpp: test_cpp.cpp ../lib/libauraio.so
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS) $(RPATH)
 
-test-cpp: test_cpp
+cpp-test: test_cpp
 	./test_cpp
 
 # ============================================================================
@@ -131,4 +136,4 @@ test_ring_asan: test_ring.c ../lib/libauraio_asan.a
 clean:
 	rm -f $(TESTS) $(CPP_TESTS) stress_test $(TSAN_TESTS) $(ASAN_TESTS)
 
-.PHONY: all clean valgrind valgrind-quick tsan asan test-cpp stress stress-full
+.PHONY: all clean valgrind valgrind-quick tsan asan cpp-test stress stress-full
