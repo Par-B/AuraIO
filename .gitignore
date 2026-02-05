@@ -4,6 +4,7 @@
 *.so
 *.so.*
 lib/
+.cache
 
 # Test binaries
 tests/test_engine
