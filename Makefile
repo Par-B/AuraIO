@@ -188,8 +188,17 @@ deps-check:
 ALL_SRC = $(SRC) $(wildcard tests/*.c) $(wildcard examples/*.c)
 HEADERS = $(wildcard include/*.h) $(wildcard src/*.h)
 
-# Run cppcheck (errors and warnings, not style)
-lint: lint-cppcheck
+# Run lint: prefer cppcheck, fall back to clang-tidy
+lint:
+	@if command -v cppcheck >/dev/null 2>&1; then \
+		$(MAKE) lint-cppcheck; \
+	elif command -v clang-tidy-18 >/dev/null 2>&1; then \
+		$(MAKE) lint-clang-tidy; \
+	elif command -v clang-tidy >/dev/null 2>&1; then \
+		$(MAKE) lint-clang-tidy; \
+	else \
+		echo "No linter found. Install cppcheck or clang-tidy."; exit 1; \
+	fi
 
 # cppcheck - errors and warnings only (CI-safe)
 lint-cppcheck:
