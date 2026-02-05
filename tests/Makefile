@@ -57,6 +57,84 @@ stress-full: stress_test
 	./stress_test --duration 30
 
 # ============================================================================
+# Performance Benchmark (for perf profiling)
+# ============================================================================
+
+perf_bench: perf_bench.c ../lib/libauraio.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+bench: perf_bench
+	./perf_bench all 5
+
+bench-throughput: perf_bench
+	./perf_bench throughput 10
+
+bench-latency: perf_bench
+	./perf_bench latency 10
+
+bench-scalability: perf_bench
+	./perf_bench scalability 3
+
+# ============================================================================
+# Portable Performance Test Suite (with fio baseline)
+# ============================================================================
+
+.PHONY: check-deps perf-test perf-test-quick perf-test-full perf-baseline
+
+# Check benchmark dependencies
+check-deps:
+	@echo "Checking benchmark dependencies..."
+	@echo ""
+	@command -v fio > /dev/null 2>&1 && echo "[OK] fio: $$(fio --version)" || echo "[MISSING] fio - install with: apt install fio"
+	@command -v perf > /dev/null 2>&1 && echo "[OK] perf: $$(perf --version 2>&1 | head -1)" || echo "[OPTIONAL] perf - install with: apt install linux-tools-common linux-tools-$$(uname -r)"
+	@command -v numactl > /dev/null 2>&1 && echo "[OK] numactl" || echo "[OPTIONAL] numactl - install with: apt install numactl"
+	@command -v iostat > /dev/null 2>&1 && echo "[OK] iostat" || echo "[OPTIONAL] iostat - install with: apt install sysstat"
+	@echo ""
+	@test -e /proc/sys/kernel/io_uring_disabled && \
+		(test "$$(cat /proc/sys/kernel/io_uring_disabled)" = "0" && echo "[OK] io_uring: enabled" || echo "[ERROR] io_uring: disabled") || \
+		echo "[OK] io_uring: likely supported (kernel $$(uname -r))"
+
+# Quick performance test (5 sec per test)
+perf-test-quick: perf_bench
+	./run_perf_test.sh --quick --compare
+
+# Full performance test (30 sec per test)
+perf-test-full: perf_bench
+	./run_perf_test.sh --full --compare
+
+# Standard performance test (10 sec per test)
+perf-test: perf_bench
+	./run_perf_test.sh --compare
+
+# Run fio baseline only
+perf-baseline:
+	./run_perf_test.sh --baseline
+
+# Run AuraIO benchmark with perf profiling
+perf-profile: perf_bench
+	./run_perf_test.sh --auraio --with-perf
+
+# ============================================================================
+# Performance Analysis (laptop-safe, with FIO comparison + report)
+# ============================================================================
+
+# Quick analysis (3s per test) - fast sanity check
+analyze-quick: perf_bench
+	./run_analysis.sh --quick
+
+# Standard analysis (5s per test) - good for laptops
+analyze: perf_bench
+	./run_analysis.sh --standard
+
+# Full analysis (10s per test) - more stable numbers
+analyze-full: perf_bench
+	./run_analysis.sh --full
+
+# AuraIO-only analysis (no FIO baseline)
+analyze-no-fio: perf_bench
+	./run_analysis.sh --skip-fio
+
+# ============================================================================
 # Valgrind memory tests
 # ============================================================================
 valgrind: $(TESTS)
@@ -129,6 +207,9 @@ test_ring_asan: test_ring.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench $(TSAN_TESTS) $(ASAN_TESTS)
 
-.PHONY: all clean valgrind valgrind-quick tsan asan test-cpp stress stress-full
+.PHONY: all clean valgrind valgrind-quick tsan asan test-cpp stress stress-full \
+        bench bench-throughput bench-latency bench-scalability \
+        check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
+        analyze analyze-quick analyze-full analyze-no-fio
