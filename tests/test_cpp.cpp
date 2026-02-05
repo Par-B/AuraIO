@@ -5,9 +5,10 @@
 
 #include <auraio.hpp>
 
-#include <iostream>
 #include <string>
+#include <stdexcept>
 #include <cstring>
+#include <cstdio>
 #include <cassert>
 #include <fcntl.h>
 #include <unistd.h>
@@ -18,17 +19,17 @@ static int tests_failed = 0;
 
 #define TEST(name) void test_##name()
 #define RUN_TEST(name) do { \
-    std::cout << "  " << #name << "... "; \
-    std::cout.flush(); \
+    printf("  %-40s", #name); \
+    fflush(stdout); \
     try { \
         test_##name(); \
-        std::cout << "PASS\n"; \
+        printf(" OK\n"); \
         tests_passed++; \
     } catch (const std::exception& e) { \
-        std::cout << "FAIL: " << e.what() << "\n"; \
+        printf(" FAIL: %s\n", e.what()); \
         tests_failed++; \
     } catch (...) { \
-        std::cout << "FAIL: unknown exception\n"; \
+        printf(" FAIL: unknown exception\n"); \
         tests_failed++; \
     } \
 } while(0)
@@ -737,44 +738,29 @@ TEST(coroutine_sequential) {
 // =============================================================================
 
 int main() {
-    std::cout << "=== AuraIO C++ Bindings Tests ===\n\n";
+    printf("Running C++ binding tests...\n");
 
-    std::cout << "Engine Tests:\n";
     RUN_TEST(engine_default_construct);
     RUN_TEST(engine_with_options);
     RUN_TEST(engine_move_construct);
     RUN_TEST(engine_move_assign);
     RUN_TEST(engine_poll_fd_valid);
-
-    std::cout << "\nOptions Tests:\n";
     RUN_TEST(options_default_values);
     RUN_TEST(options_builder_chain);
     RUN_TEST(options_all_setters);
-
-    std::cout << "\nBuffer Tests:\n";
     RUN_TEST(buffer_allocate);
     RUN_TEST(buffer_move_construct);
     RUN_TEST(buffer_move_assign);
     RUN_TEST(buffer_wrap_no_free);
     RUN_TEST(buffer_span_access);
-
-    std::cout << "\nBufferRef Tests:\n";
     RUN_TEST(bufferref_from_ptr);
     RUN_TEST(bufferref_from_buffer);
     RUN_TEST(bufferref_fixed);
-
-    std::cout << "\nError Tests:\n";
     RUN_TEST(error_from_errno);
     RUN_TEST(error_what_message);
     RUN_TEST(error_predicates);
-
-    std::cout << "\nRequest Tests:\n";
     RUN_TEST(request_null_handle);
-
-    std::cout << "\nStats Tests:\n";
     RUN_TEST(stats_all_fields);
-
-    std::cout << "\nI/O Tests (Callback-based):\n";
     RUN_TEST(read_basic);
     RUN_TEST(read_with_capture);
     RUN_TEST(write_basic);
@@ -782,30 +768,25 @@ int main() {
     RUN_TEST(fdatasync_basic);
     RUN_TEST(readv_basic);
     RUN_TEST(writev_basic);
-
-    std::cout << "\nEvent Loop Tests:\n";
     RUN_TEST(poll_processes_completions);
     RUN_TEST(wait_blocks);
     RUN_TEST(multiple_concurrent_ops);
-
-    std::cout << "\nRAII Tests:\n";
     RUN_TEST(raii_engine_scope);
     RUN_TEST(raii_buffer_scope);
     RUN_TEST(raii_exception_safety);
 
 #if __has_include(<coroutine>)
-    std::cout << "\nCoroutine Tests:\n";
     RUN_TEST(async_read_basic);
     RUN_TEST(async_write_basic);
     RUN_TEST(async_fsync_basic);
     RUN_TEST(coroutine_sequential);
-#else
-    std::cout << "\nCoroutine Tests: SKIPPED (no <coroutine> header)\n";
 #endif
 
-    std::cout << "\n=== Summary ===\n";
-    std::cout << "Passed: " << tests_passed << "\n";
-    std::cout << "Failed: " << tests_failed << "\n";
+    if (tests_failed > 0) {
+        printf("\n%d tests passed, %d FAILED\n", tests_passed, tests_failed);
+    } else {
+        printf("\n%d tests passed\n", tests_passed);
+    }
 
     return tests_failed > 0 ? 1 : 0;
 }

@@ -25,8 +25,16 @@ use std::os::unix::io::RawFd;
 ///
 /// ## Safe Pattern
 ///
-/// ```ignore
-/// let handle = engine.read(fd, buf, len, 0, |result| {
+/// ```no_run
+/// # use auraio::Engine;
+/// # use std::fs::File;
+/// # use std::os::unix::io::AsRawFd;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let engine = Engine::new()?;
+/// # let buf = engine.allocate_buffer(4096)?;
+/// # let file = File::open("/etc/hostname")?;
+/// # let fd = file.as_raw_fd();
+/// let handle = engine.read(fd, (&buf).into(), 4096, 0, |result| {
 ///     // Handle is INVALID inside this callback!
 ///     // Do NOT pass the handle into the closure.
 /// })?;
@@ -38,14 +46,26 @@ use std::os::unix::io::RawFd;
 ///
 /// engine.wait(-1)?;  // Callback runs during wait()
 /// // UNSAFE: handle is now invalid, do not use!
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// ## Dangerous Pattern
 ///
-/// ```ignore
-/// let handle = engine.read(...)?;
+/// ```no_run
+/// # use auraio::Engine;
+/// # use std::fs::File;
+/// # use std::os::unix::io::AsRawFd;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let engine = Engine::new()?;
+/// # let buf = engine.allocate_buffer(4096)?;
+/// # let file = File::open("/etc/hostname")?;
+/// # let fd = file.as_raw_fd();
+/// let handle = engine.read(fd, (&buf).into(), 4096, 0, |_| {})?;
 /// engine.wait(-1)?;  // Callback executes here
 /// handle.is_pending();  // ❌ UNDEFINED BEHAVIOR - handle is dangling!
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct RequestHandle {

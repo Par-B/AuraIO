@@ -68,15 +68,31 @@ test-all: all
 	echo "--- C++ Tests ---"; \
 	cpp_out=$$($(MAKE) -C tests cpp-test 2>&1) && cpp_ok=1 || cpp_ok=0; \
 	echo "$$cpp_out"; \
-	cpp_pass=$$(echo "$$cpp_out" | grep -oE 'Passed: [0-9]+' | grep -oE '[0-9]+'); \
-	cpp_fail_count=$$(echo "$$cpp_out" | grep -oE 'Failed: [0-9]+' | grep -oE '[0-9]+'); \
+	cpp_pass=$$(echo "$$cpp_out" | grep -oE '^[0-9]+ tests passed' | tail -1 | grep -oE '^[0-9]+'); \
+	cpp_fail_count=$$(echo "$$cpp_out" | grep -oE '[0-9]+ FAILED' | grep -oE '[0-9]+'); \
 	[ -z "$$cpp_pass" ] && cpp_pass=0; \
 	[ -z "$$cpp_fail_count" ] && cpp_fail_count=0; \
 	if [ "$$cpp_ok" -eq 0 ] || [ "$$cpp_fail_count" -gt 0 ]; then cpp_fail=1; fi; \
 	echo ""; \
 	echo "--- Rust Tests ---"; \
 	rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
-	echo "$$rust_out"; \
+	echo "$$rust_out" | awk ' \
+		/^test / { \
+			s=$$NF; line=$$0; \
+			sub(/^test /, "", line); sub(/ \.\.\. [a-zA-Z]+$$/, "", line); \
+			sub(/^tests::/, "", line); \
+			if (line ~ / - /) { \
+				path=line; sub(/ - .*/, "", path); \
+				sub(/^.+\.rs - /, "", line); \
+				gsub(/\(line [0-9]+\)/, "", line); \
+				sub(/ *- *compile */, "", line); \
+				gsub(/^ +| +$$/, "", line); \
+				if (line == "") { n=split(path,a,"/"); line=a[n]; sub(/\.rs$$/, "", line) } \
+			} \
+			if (s=="ok") printf "  %-40s OK\n", line; \
+			else if (s=="FAILED") printf "  %-40s FAIL\n", line; \
+			else if (s=="ignored") printf "  %-40s SKIP\n", line; \
+		}'; \
 	rust_pass=$$(echo "$$rust_out" | grep -oE '[0-9]+ passed' | awk '{s+=$$1} END{print s+0}'); \
 	rust_ignored=$$(echo "$$rust_out" | grep -oE '[0-9]+ ignored' | awk '{s+=$$1} END{print s+0}'); \
 	[ -z "$$rust_pass" ] && rust_pass=0; \
@@ -98,7 +114,11 @@ test-all: all
 		echo "  C++:    FAILED ($$cpp_fail_count failures)"; \
 	fi; \
 	if [ "$$rust_fail" -eq 0 ]; then \
-		echo "  Rust:   $$rust_pass passed, $$rust_ignored ignored [OK]"; \
+		if [ "$$rust_ignored" -gt 0 ]; then \
+			echo "  Rust:   $$rust_pass passed, $$rust_ignored skipped [OK]"; \
+		else \
+			echo "  Rust:   $$rust_pass passed [OK]"; \
+		fi; \
 	else \
 		echo "  Rust:   FAILED"; \
 	fi; \
@@ -138,7 +158,31 @@ rust: all
 
 # Run Rust tests
 rust-test: all
-	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml
+	@printf "Running Rust tests...\n"
+	@rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
+	echo "$$rust_out" | awk ' \
+		/^test / { \
+			s=$$NF; line=$$0; \
+			sub(/^test /, "", line); sub(/ \.\.\. [a-zA-Z]+$$/, "", line); \
+			sub(/^tests::/, "", line); \
+			if (line ~ / - /) { \
+				path=line; sub(/ - .*/, "", path); \
+				sub(/^.+\.rs - /, "", line); \
+				gsub(/\(line [0-9]+\)/, "", line); \
+				sub(/ *- *compile */, "", line); \
+				gsub(/^ +| +$$/, "", line); \
+				if (line == "") { n=split(path,a,"/"); line=a[n]; sub(/\.rs$$/, "", line) } \
+			} \
+			if (s=="ok") { printf "  %-40s OK\n", line; p++ } \
+			else if (s=="FAILED") { printf "  %-40s FAIL\n", line; f++ } \
+			else if (s=="ignored") { printf "  %-40s SKIP\n", line; ig++ } \
+		} \
+		END { \
+			if (f>0) printf "\n%d tests passed, %d FAILED\n",p,f; \
+			else if (ig>0) printf "\n%d tests passed, %d skipped\n",p,ig; \
+			else printf "\n%d tests passed\n",p \
+		}'; \
+	if [ "$$rust_ok" -eq 0 ]; then exit 1; fi
 
 # Build Rust examples
 rust-examples: rust

@@ -187,10 +187,20 @@ impl Engine {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use auraio::Engine;
+    /// # use std::fs::File;
+    /// # use std::os::unix::io::AsRawFd;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let engine = Engine::new()?;
+    /// # let buf = engine.allocate_buffer(4096)?;
+    /// # let file = File::open("/etc/hostname")?;
+    /// # let fd = file.as_raw_fd();
     /// engine.read(fd, (&buf).into(), 4096, 0, |result| {
     ///     println!("Read result: {:?}", result);
     /// })?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn read<F>(
         &self,
