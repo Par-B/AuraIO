@@ -273,8 +273,50 @@ test-tsan: tsan
 test-asan: asan
 	$(MAKE) -C tests asan
 
-# Run all sanitizer tests
-test-sanitizers: test-valgrind test-tsan test-asan
+# Run all sanitizer tests with summary
+test-sanitizers: all tsan asan
+	@echo ""
+	@echo "========================================"
+	@echo "  Sanitizer Test Suite"
+	@echo "========================================"
+	@vg_fail=0; tsan_fail=0; asan_fail=0; \
+	echo ""; \
+	echo "--- Valgrind ---"; \
+	$(MAKE) -C tests valgrind 2>&1 && vg_ok=1 || vg_ok=0; \
+	if [ "$$vg_ok" -eq 0 ]; then vg_fail=1; fi; \
+	echo ""; \
+	echo "--- ThreadSanitizer ---"; \
+	$(MAKE) -C tests tsan 2>&1 && tsan_ok=1 || tsan_ok=0; \
+	if [ "$$tsan_ok" -eq 0 ]; then tsan_fail=1; fi; \
+	echo ""; \
+	echo "--- AddressSanitizer ---"; \
+	$(MAKE) -C tests asan 2>&1 && asan_ok=1 || asan_ok=0; \
+	if [ "$$asan_ok" -eq 0 ]; then asan_fail=1; fi; \
+	echo ""; \
+	echo "========================================"; \
+	echo "  Sanitizer Summary"; \
+	echo "========================================"; \
+	if [ "$$vg_fail" -eq 0 ]; then \
+		echo "  Valgrind:  [OK]"; \
+	else \
+		echo "  Valgrind:  FAILED"; \
+	fi; \
+	if [ "$$tsan_fail" -eq 0 ]; then \
+		echo "  TSan:      [OK]"; \
+	else \
+		echo "  TSan:      FAILED"; \
+	fi; \
+	if [ "$$asan_fail" -eq 0 ]; then \
+		echo "  ASan:      [OK]"; \
+	else \
+		echo "  ASan:      FAILED"; \
+	fi; \
+	echo "========================================"; \
+	if [ "$$vg_fail" -ne 0 ] || [ "$$tsan_fail" -ne 0 ] || [ "$$asan_fail" -ne 0 ]; then \
+		echo "RESULT: FAILED"; exit 1; \
+	else \
+		echo "RESULT: ALL PASSED"; \
+	fi
 
 # =============================================================================
 # Dependency management

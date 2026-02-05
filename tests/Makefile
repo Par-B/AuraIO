@@ -170,13 +170,37 @@ TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan
 
 tsan: $(TSAN_TESTS)
 	@echo "Running ThreadSanitizer tests..."
-	@for t in $(TSAN_TESTS); do \
+	@# TSan crashes on kernels 6.5+ with high ASLR entropy (mmap_rnd_bits > 30).
+	@# Use setarch to disable ASLR when needed.
+	@TSAN_WRAP=""; \
+	NEED_WRAP=0; \
+	RND=$$(cat /proc/sys/vm/mmap_rnd_bits 2>/dev/null); \
+	if [ -n "$$RND" ] && [ "$$RND" -gt 30 ] 2>/dev/null; then \
+		NEED_WRAP=1; \
+	elif [ -z "$$RND" ]; then \
+		KMAJOR=$$(uname -r | cut -d. -f1); \
+		KMINOR=$$(uname -r | cut -d. -f2); \
+		if [ "$$KMAJOR" -gt 6 ] 2>/dev/null || \
+		   { [ "$$KMAJOR" -eq 6 ] && [ "$$KMINOR" -ge 5 ]; } 2>/dev/null; then \
+			NEED_WRAP=1; \
+		fi; \
+	fi; \
+	if [ "$$NEED_WRAP" -eq 1 ]; then \
+		if command -v setarch >/dev/null 2>&1; then \
+			TSAN_WRAP="setarch $$(uname -m) --addr-no-randomize"; \
+			echo "(using setarch to reduce ASLR for TSan compatibility)"; \
+		else \
+			echo "WARNING: high ASLR entropy detected, TSan may crash."; \
+			echo "  Fix: sudo sysctl vm.mmap_rnd_bits=28"; \
+		fi; \
+	fi; \
+	for t in $(TSAN_TESTS); do \
 		echo ""; \
 		echo "=== $$t ==="; \
-		./$$t || exit 1; \
-	done
-	@echo ""
-	@echo "All TSAN tests passed!"
+		$$TSAN_WRAP ./$$t || exit 1; \
+	done; \
+	echo ""; \
+	echo "All TSAN tests passed!"
 
 test_engine_tsan: test_engine.c ../lib/libauraio_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
