@@ -347,6 +347,16 @@ bench-no-fio: all
 bench-deps: all
 	$(MAKE) -C tests check-deps
 
+# Deep performance analysis (flamegraphs, cachegrind, pahole, callgrind)
+bench-deep: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_deep_analysis.sh $(BENCH_DIR_FLAG)
+
+# Quick deep analysis (~10 min)
+bench-deep-quick: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_deep_analysis.sh --quick $(BENCH_DIR_FLAG)
+
 # =============================================================================
 # Dependency management
 # =============================================================================
@@ -680,6 +690,8 @@ help:
 	@echo "  make bench-full     Full benchmark (10s/test)"
 	@echo "  make bench-no-fio   Benchmark without FIO baseline"
 	@echo "  make bench-deps     Check benchmark dependencies"
+	@echo "  make bench-deep     Deep analysis (flamegraphs, cachegrind, pahole)"
+	@echo "  make bench-deep-quick Quick deep analysis (~10 min)"
 	@echo "  BENCH_DIR=/path     Override test file directory (default: /tmp/auraio_bench)"
 	@echo ""
 	@echo "Code quality:"
@@ -696,5 +708,5 @@ help:
         cpp-test cpp-examples \
         rust rust-test rust-examples rust-clean \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
-        bench bench-quick bench-full bench-no-fio bench-deps \
+        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
         lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual

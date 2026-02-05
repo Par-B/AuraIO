@@ -238,7 +238,21 @@ test_ring_asan: test_ring.c ../lib/libauraio_asan.a
 clean:
 	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench $(TSAN_TESTS) $(ASAN_TESTS)
 
+# ============================================================================
+# Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)
+# ============================================================================
+
+deep-analysis: perf_bench
+	./run_deep_analysis.sh
+
+deep-analysis-quick: perf_bench
+	./run_deep_analysis.sh --quick
+
+deep-analysis-no-valgrind: perf_bench
+	./run_deep_analysis.sh --skip-valgrind
+
 .PHONY: all clean valgrind valgrind-quick tsan asan cpp-test stress stress-full \
         bench bench-throughput bench-latency bench-scalability \
         check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
-        analyze analyze-quick analyze-full analyze-no-fio
+        analyze analyze-quick analyze-full analyze-no-fio \
+        deep-analysis deep-analysis-quick deep-analysis-no-valgrind
