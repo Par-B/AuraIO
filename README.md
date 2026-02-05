@@ -1,7 +1,7 @@
 # AuraIO
 
 **Aura** = **A**daptive **U**ring **R**untime **A**rchitecture
-
+ 
 ![Linux](https://img.shields.io/badge/platform-Linux%206.0%2B-blue)
 ![C11](https://img.shields.io/badge/language-C11-orange)
 ![io_uring](https://img.shields.io/badge/backend-io__uring-green)
