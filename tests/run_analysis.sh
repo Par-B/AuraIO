@@ -32,12 +32,16 @@ while [[ $# -gt 0 ]]; do
         --full)      DURATION=10; LABEL="full"; shift ;;
         --skip-fio)  RUN_FIO=false; shift ;;
         --skip-perf) RUN_PERF=false; shift ;;
+        --dir)       TEST_DIR="$2"; shift 2 ;;
         --help|-h)
             head -n 11 "$0" | tail -n 9
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# Export so perf_bench picks it up
+export AURAIO_BENCH_DIR="$TEST_DIR"
 
 # Colors
 GREEN='\033[0;32m'
@@ -133,8 +137,8 @@ rio = r.get('iops', 0)
 wio = w.get('iops', 0)
 rbw = r.get('bw', 0) / 1024  # KB/s -> MB/s
 wbw = w.get('bw', 0) / 1024
-rp99 = r.get('clat_ns', {}).get('percentile', {}).get('99.000000', 0) / 1000
-wp99 = w.get('clat_ns', {}).get('percentile', {}).get('99.000000', 0) / 1000
+rp99 = r.get('lat_ns', {}).get('percentile', {}).get('99.000000', 0) / 1000
+wp99 = w.get('lat_ns', {}).get('percentile', {}).get('99.000000', 0) / 1000
 ravg = r.get('lat_ns', {}).get('mean', 0) / 1000
 if rio > 0:
     print(f'{rio:.0f} IOPS, {rbw:.1f} MB/s, avg={ravg:.0f}us, p99={rp99:.0f}us')
@@ -144,10 +148,8 @@ if wio > 0:
 " 2>&1
     }
 
-    # Laptop-safe: single numjobs for most tests
-    run_fio_test "randread_4k"   "4k"  "randread" 64
+    # Only run FIO tests that have AuraIO equivalents for comparison
     run_fio_test "randread_64k"  "64k" "randread" 64
-    run_fio_test "seqread_64k"   "64k" "read"     32
     run_fio_test "latency_4k"    "4k"  "randread" 1
     run_fio_test "mixed_rw_32k"  "32k" "randrw"   64
 }
@@ -195,12 +197,9 @@ run_auraio_tests() {
         fi
     done
 
-    # Also run strace for syscall efficiency metrics
-    if command -v strace &>/dev/null; then
-        echo ""
-        echo "--- Syscall Trace (3s) ---"
-        strace -fc "$perf_bench" syscall 3 2>&1 | grep -E "io_uring|total" | tee -a "$auraio_out"
-    fi
+    # NOTE: strace syscall tracing removed — ptrace deadlocks with io_uring
+    # on modern kernels.  The "syscall" benchmark in perf_bench already prints
+    # batching efficiency (ops per io_uring_enter) without ptrace overhead.
 }
 
 # ============================================================================
@@ -308,19 +307,73 @@ if uring_match:
         ops = int(sc_match.group(1))
         report.append(f"    Ops/syscall:   ~{ops // n}")
 
-# FIO comparison
-if fio_lines:
+# Parse FIO data into a dict for easy lookup
+fio_data = {}  # name -> {iops, mbps, avg, p99}
+for line in fio_lines:
+    parts = line.strip().split('|')
+    if len(parts) == 5:
+        name, iops, mbps, avg, p99 = parts
+        fio_data[name] = {
+            'iops': float(iops), 'mbps': float(mbps),
+            'avg': float(avg), 'p99': float(p99)
+        }
+
+# Side-by-side comparison table (FIO baseline on left, AuraIO on right)
+if fio_data:
     report.append("")
     report.append("-" * 70)
-    report.append("FIO BASELINE COMPARISON (io_uring engine)")
+    report.append("AURAIO vs FIO COMPARISON")
     report.append("-" * 70)
-    report.append(f"\n    {'Test':<20} {'IOPS':<10} {'MB/s':<10} {'Avg(us)':<10} {'P99(us)':<10}")
-    report.append(f"    {'----':<20} {'----':<10} {'----':<10} {'-------':<10} {'-------':<10}")
-    for line in fio_lines:
-        parts = line.strip().split('|')
-        if len(parts) == 5:
-            name, iops, mbps, avg, p99 = parts
-            report.append(f"    {name:<20} {iops:>8}  {mbps:>8}  {avg:>8}  {p99:>8}")
+
+    # Throughput comparison
+    report.append("")
+    report.append(f"  {'Test':<22} {'FIO Baseline':>20}    {'AuraIO':>20}    {'vs FIO':>7}")
+    report.append(f"  {'':<22} {'IOPS':>9} {'MB/s':>10}    {'IOPS':>9} {'MB/s':>10}    {'':>7}")
+    report.append(f"  {'-'*22} {'-'*9} {'-'*10}    {'-'*9} {'-'*10}    {'-'*7}")
+
+    rows = []
+
+    # 64K random read throughput
+    f = fio_data.get('randread_64k')
+    if tp_match and f:
+        a_iops = int(float(tp_match.group(2)))
+        a_mbps = float(tp_match.group(1))
+        pct = ((a_mbps - f['mbps']) / f['mbps'] * 100) if f['mbps'] > 0 else 0
+        rows.append(('64K randread', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
+
+    # 4K latency / serial read
+    f = fio_data.get('latency_4k')
+    if lat_match and f:
+        a_iops = int(float(lat_match.group(1)))
+        a_mbps = a_iops * 4 / 1024  # 4K blocks -> MB/s
+        pct = ((a_iops - f['iops']) / f['iops'] * 100) if f['iops'] > 0 else 0
+        rows.append(('4K serial read', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
+
+    # Mixed workload
+    f = fio_data.get('mixed_rw_32k')
+    if mix_match and f:
+        a_iops = int(float(mix_match.group(6)))
+        a_mbps = float(mix_match.group(5))
+        pct = ((a_mbps - f['mbps']) / f['mbps'] * 100) if f['mbps'] > 0 else 0
+        rows.append(('Mixed R/W (32K)', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
+
+    for name, f_iops, f_mbps, a_iops, a_mbps, pct in rows:
+        report.append(f"  {name:<22} {f_iops:>9,} {f_mbps:>9.1f}    {a_iops:>9,} {a_mbps:>9.1f}    {pct:>+6.0f}%")
+
+    # Latency comparison sub-table
+    f = fio_data.get('latency_4k')
+    if lat_match and f:
+        a_avg = float(lat_match.group(3))
+        a_p99 = int(lat_match.group(5))
+        f_avg = f['avg']
+        f_p99 = f['p99']
+        report.append("")
+        report.append(f"  {'Latency (4K, depth=1)':<22} {'FIO Baseline':>13}    {'AuraIO':>13}    {'vs FIO':>7}")
+        report.append(f"  {'-'*22} {'-'*13}    {'-'*13}    {'-'*7}")
+        avg_pct = ((a_avg - f_avg) / f_avg * 100) if f_avg > 0 else 0
+        p99_pct = ((a_p99 - f_p99) / f_p99 * 100) if f_p99 > 0 else 0
+        report.append(f"  {'  Avg latency (us)':<22} {f_avg:>13.0f}    {a_avg:>13.0f}    {avg_pct:>+6.0f}%")
+        report.append(f"  {'  P99 latency (us)':<22} {int(f_p99):>13,}    {a_p99:>13,}    {p99_pct:>+6.0f}%")
 
 # Key findings
 report.append("")
@@ -330,24 +383,25 @@ report.append("-" * 70)
 
 findings = []
 
-# Compare AuraIO latency vs FIO latency
-fio_lat = None
-for line in fio_lines:
-    if 'latency_4k' in line:
-        parts = line.strip().split('|')
-        if len(parts) == 5:
-            fio_lat = (float(parts[3]), float(parts[4]))
-
-if lat_match and fio_lat:
+# Latency overhead
+f_lat = fio_data.get('latency_4k')
+if lat_match and f_lat:
     a_avg = float(lat_match.group(3))
-    f_avg = fio_lat[0]
+    f_avg = f_lat['avg']
     if f_avg > 0:
         overhead = ((a_avg - f_avg) / f_avg) * 100
-        findings.append(f"  - Serial latency overhead vs FIO: {overhead:+.0f}% (AuraIO {a_avg:.0f}us vs FIO {f_avg:.0f}us avg)")
+        findings.append(f"  - Latency overhead vs FIO: {overhead:+.0f}% ({a_avg:.0f}us vs {f_avg:.0f}us avg)")
         if abs(overhead) < 30:
             findings.append(f"    => GOOD: Low abstraction overhead for adaptive tuning layer")
-        elif overhead > 0:
-            findings.append(f"    => NOTE: Overhead from AIMD controller + buffer pool management")
+
+# Throughput comparison
+f_64k = fio_data.get('randread_64k')
+if tp_match and f_64k and f_64k['mbps'] > 0:
+    a_tp = float(tp_match.group(1))
+    ratio = a_tp / f_64k['mbps']
+    findings.append(f"  - 64K throughput vs FIO: {ratio:.2f}x ({a_tp:.0f} vs {f_64k['mbps']:.0f} MB/s)")
+    if ratio > 1.1:
+        findings.append(f"    => Adaptive batching outperforms fixed-depth FIO")
 
 # Scalability analysis
 if scale_matches:
@@ -360,22 +414,10 @@ if scale_matches:
         scale_ratio = d128 / d4
         findings.append(f"  - Scaling ratio (depth 4->128): {scale_ratio:.2f}x")
 
-# Throughput finding
-if tp_match:
+# Throughput finding (standalone if no FIO)
+if tp_match and not f_64k:
     tp = float(tp_match.group(1))
     findings.append(f"  - Max throughput: {tp:.0f} MB/s (64K random reads)")
-
-# Compare AuraIO 64K throughput vs FIO 64K throughput
-fio_64k = None
-for line in fio_lines:
-    if 'randread_64k' in line:
-        parts = line.strip().split('|')
-        if len(parts) == 5:
-            fio_64k = float(parts[2])
-if tp_match and fio_64k and fio_64k > 0:
-    a_tp = float(tp_match.group(1))
-    ratio = a_tp / fio_64k
-    findings.append(f"  - AuraIO vs FIO 64K throughput: {ratio:.2f}x ({a_tp:.0f} vs {fio_64k:.0f} MB/s)")
 
 # Buffer pool finding
 if buf_match:

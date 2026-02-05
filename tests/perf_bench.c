@@ -99,15 +99,16 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
 // Test file management
 // ============================================================================
 
-#define TEST_DIR "/tmp/auraio_perf"
+#define DEFAULT_TEST_DIR "/tmp/auraio_perf"
 #define NUM_FILES 8
 #define FILE_SIZE (128 * 1024 * 1024)  // 128MB per file
 
+static const char *test_dir = DEFAULT_TEST_DIR;
 static int test_fds[NUM_FILES];
 static char *test_paths[NUM_FILES];
 
 static int setup_test_files(void) {
-    mkdir(TEST_DIR, 0755);
+    mkdir(test_dir, 0755);
 
     // Create random data buffer
     char *data = aligned_alloc(4096, 1024 * 1024);
@@ -119,7 +120,7 @@ static int setup_test_files(void) {
 
     for (int i = 0; i < NUM_FILES; i++) {
         char path[256];
-        snprintf(path, sizeof(path), TEST_DIR "/bench_%d.dat", i);
+        snprintf(path, sizeof(path), "%s/bench_%d.dat", test_dir, i);
         test_paths[i] = strdup(path);
 
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -165,7 +166,7 @@ static void cleanup_test_files(void) {
             free(test_paths[i]);
         }
     }
-    rmdir(TEST_DIR);
+    rmdir(test_dir);
 }
 
 // ============================================================================
@@ -889,6 +890,9 @@ int main(int argc, char **argv) {
         if (duration < 1) duration = 1;
         if (duration > 300) duration = 300;
     }
+
+    const char *env_dir = getenv("AURAIO_BENCH_DIR");
+    if (env_dir && env_dir[0]) test_dir = env_dir;
 
     printf("AuraIO Performance Benchmark\n");
     printf("============================\n");

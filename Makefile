@@ -319,6 +319,35 @@ test-sanitizers: all tsan asan
 	fi
 
 # =============================================================================
+# Performance benchmarks (use BENCH_DIR=/path to override test file location)
+# =============================================================================
+BENCH_DIR_FLAG = $(if $(BENCH_DIR),--dir $(BENCH_DIR))
+
+# Quick benchmark (3s per test)
+bench-quick: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_analysis.sh --quick $(BENCH_DIR_FLAG)
+
+# Standard benchmark with FIO comparison (5s per test)
+bench: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_analysis.sh --standard $(BENCH_DIR_FLAG)
+
+# Full benchmark (10s per test, more stable numbers)
+bench-full: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_analysis.sh --full $(BENCH_DIR_FLAG)
+
+# Benchmark without FIO baseline
+bench-no-fio: all
+	$(MAKE) -C tests perf_bench
+	cd tests && ./run_analysis.sh --skip-fio $(BENCH_DIR_FLAG)
+
+# Check benchmark dependencies (fio, perf, numactl, etc.)
+bench-deps: all
+	$(MAKE) -C tests check-deps
+
+# =============================================================================
 # Dependency management
 # =============================================================================
 
@@ -645,6 +674,14 @@ help:
 	@echo "  make test-asan      Run tests with AddressSanitizer"
 	@echo "  make test-sanitizers Run all sanitizer tests"
 	@echo ""
+	@echo "Benchmarks:"
+	@echo "  make bench          Performance analysis with FIO comparison (5s/test)"
+	@echo "  make bench-quick    Quick benchmark (3s/test)"
+	@echo "  make bench-full     Full benchmark (10s/test)"
+	@echo "  make bench-no-fio   Benchmark without FIO baseline"
+	@echo "  make bench-deps     Check benchmark dependencies"
+	@echo "  BENCH_DIR=/path     Override test file directory (default: /tmp/auraio_bench)"
+	@echo ""
 	@echo "Code quality:"
 	@echo "  make lint           Run cppcheck (errors + warnings)"
 	@echo "  make lint-strict    Run cppcheck with style checks"
@@ -659,4 +696,5 @@ help:
         cpp-test cpp-examples \
         rust rust-test rust-examples rust-clean \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
+        bench bench-quick bench-full bench-no-fio bench-deps \
         lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual
