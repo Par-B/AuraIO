@@ -143,6 +143,9 @@ public:
      * Awaiter for co_await on Task
      */
     auto operator co_await() {
+        if (!handle_) {
+            throw std::logic_error("co_await on empty Task");
+        }
         struct Awaiter {
             std::coroutine_handle<promise_type> handle;
 
@@ -235,6 +238,9 @@ public:
     }
 
     auto operator co_await() {
+        if (!handle_) {
+            throw std::logic_error("co_await on empty Task");
+        }
         struct Awaiter {
             std::coroutine_handle<promise_type> handle;
 

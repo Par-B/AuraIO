@@ -3,7 +3,7 @@
 CC = gcc
 CXX = g++
 CFLAGS = -Wall -Wextra -std=c11 -g -I../include -I../src
-CXXFLAGS = -Wall -Wextra -std=c++20 -g -I../include -fcoroutines
+CXXFLAGS = -Wall -Wextra -Wshadow -Wpedantic -std=c++20 -g -I../include -fcoroutines
 LDFLAGS = -L../lib -lauraio -luring -lpthread
 RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
 

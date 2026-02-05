@@ -210,12 +210,14 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	install -d $(DESTDIR)$(PREFIX)/include
+	install -d $(DESTDIR)$(PREFIX)/include/auraio
 	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
 	ln -sf $(notdir $(LIB_SHARED)) $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
 	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
 	install -m 644 include/auraio.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall
@@ -226,6 +228,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.a
 	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libauraio.pc
 	rm -f $(DESTDIR)$(PREFIX)/include/auraio.h
+	rm -rf $(DESTDIR)$(PREFIX)/include/auraio
 
 # Clean
 clean: rust-clean
