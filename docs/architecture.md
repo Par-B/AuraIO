@@ -1,4 +1,5 @@
 # AuraIO Architecture Guide
+Adaptive Uring Runtime Architecture
 
 ## System Overview
 
@@ -77,3 +78,127 @@ Static queue depths (e.g., `QD=128`) are often wrong.
 - **Too low**: Hardware is idle.
 - **Too high**: Bufferbloat occurs, latency spikes to hundreds of milliseconds.
 AIMD finds the "Knee of the Curve" dynamically, adjusting to noisy neighbors or changing workload patterns without human intervention.
+
+## Adoption Guide
+
+AuraIO is designed for **drop-in adoption** with minimal code changes. The library handles all the complexity of io_uring, adaptive tuning, and multi-core scheduling internally—your application just submits I/O and processes callbacks.
+
+### Integration Points
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Your Application                         │
+├─────────────────────────────────────────────────────────────┤
+│  Business Logic  │  Data Processing  │  Protocol Handling  │
+├──────────────────┴───────────────────┴─────────────────────┤
+│                      AuraIO API                             │
+│         read() / write() / wait() / callbacks              │
+├─────────────────────────────────────────────────────────────┤
+│                   AuraIO Internals                          │
+│  Ring Selection │ Adaptive Tuning │ Buffer Pools │ Batching│
+├─────────────────────────────────────────────────────────────┤
+│                     io_uring / Kernel                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Your code interacts only with the top API layer. Everything below—ring management, queue depth tuning, latency monitoring—is automatic.
+
+### C API: Systems Programming & Infrastructure
+
+The C API is ideal for databases, storage engines, proxies, and embedded systems where you need maximum control and zero abstraction overhead.
+
+**Before (POSIX blocking I/O):**
+```c
+// Blocking read - thread stalls until complete
+ssize_t n = pread(fd, buf, len, offset);
+if (n < 0) handle_error(errno);
+process_data(buf, n);
+```
+
+**After (AuraIO async I/O):**
+```c
+// Non-blocking submission - thread continues immediately
+auraio_read(engine, fd, auraio_buf(buf), len, offset,
+    my_callback, user_context);
+
+// Later: process completions (can batch hundreds)
+auraio_wait(engine, -1);
+
+void my_callback(auraio_request_t *req, ssize_t n, void *ctx) {
+    if (n < 0) handle_error(-n);
+    process_data(/* ... */);
+}
+```
+
+**Migration effort:** ~20 lines of boilerplate (engine create/destroy, callback wrapper), then mechanical transformation of each I/O call. No architectural changes required—you can adopt incrementally, one file at a time.
+
+### C++ API: Application Development
+
+The C++ bindings provide a modern, ergonomic interface with RAII, exceptions, lambdas, and coroutines. Ideal for services, data pipelines, and applications where developer productivity matters.
+
+**Before (POSIX with error handling):**
+```cpp
+void read_file(int fd, std::vector<char>& buf) {
+    ssize_t n = ::pread(fd, buf.data(), buf.size(), 0);
+    if (n < 0) {
+        throw std::system_error(errno, std::generic_category(), "read failed");
+    }
+    buf.resize(n);
+}
+```
+
+**After (AuraIO with lambdas):**
+```cpp
+void read_file_async(auraio::Engine& engine, int fd, std::vector<char>& buf) {
+    auto buffer = engine.allocate_buffer(buf.size());
+
+    engine.read(fd, buffer, buf.size(), 0, [&](auto& req, ssize_t n) {
+        if (n > 0) {
+            std::memcpy(buf.data(), buffer.data(), n);
+            buf.resize(n);
+        }
+    });
+
+    engine.wait();
+}
+```
+
+**After (AuraIO with coroutines - C++20):**
+```cpp
+auraio::Task<std::vector<char>> read_file_async(auraio::Engine& engine, int fd, size_t size) {
+    auto buf = engine.allocate_buffer(size);
+    ssize_t n = co_await engine.async_read(fd, buf, size, 0);
+    co_return std::vector<char>(static_cast<char*>(buf.data()),
+                                 static_cast<char*>(buf.data()) + n);
+}
+```
+
+**Migration effort:** Add `#include <auraio.hpp>`, create an `Engine`, replace blocking calls with async equivalents. The C++ compiler catches type errors, and RAII handles cleanup automatically.
+
+### Choosing C vs C++
+
+| Consideration | C API | C++ API |
+|---------------|-------|---------|
+| **Use case** | Storage engines, databases, OS components, embedded | Services, applications, data pipelines |
+| **Error handling** | Return codes + errno | Exceptions |
+| **Memory management** | Manual (or use buffer pool) | RAII (automatic) |
+| **Callback style** | Function pointers + void* | Lambdas with captures |
+| **Async pattern** | Callbacks only | Callbacks or coroutines |
+| **Dependencies** | libc, liburing | libc, liburing, C++20 stdlib |
+| **Binary size** | Minimal | Moderate (templates) |
+
+**Recommendation:**
+- Building infrastructure that other code depends on? → **C API**
+- Building an application or service? → **C++ API**
+- Uncertain? Start with C++. You can always call the C API directly if needed—the C++ `Engine::handle()` method exposes the underlying `auraio_engine_t*`.
+
+### Incremental Adoption Strategy
+
+You don't need to convert your entire codebase at once:
+
+1. **Week 1**: Identify I/O hot paths (profiling shows blocking in `read`/`write`/`fsync`)
+2. **Week 2**: Create one shared `Engine` instance, convert hot paths to async
+3. **Week 3**: Measure throughput/latency improvements, expand to more call sites
+4. **Ongoing**: New code uses AuraIO by default; old code migrates opportunistically
+
+The library is designed so that synchronous and asynchronous code can coexist—you can call `auraio_wait()` immediately after submission for synchronous-style semantics while still benefiting from io_uring's kernel efficiency.
