@@ -13,6 +13,10 @@ tests/test_cpp
 tests/test_*_tsan
 tests/test_*_asan
 tests/stress_test
+tests/perf_bench
+
+# Benchmark results (generated)
+tests/bench_results/
 
 # Example binaries (C)
 examples/C/simple_read
