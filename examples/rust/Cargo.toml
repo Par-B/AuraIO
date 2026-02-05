@@ -1,0 +1,34 @@
+[package]
+name = "auraio-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+auraio = { path = "../../bindings/rust/auraio", features = ["async"] }
+auraio-sys = { path = "../../bindings/rust/auraio-sys" }
+libc = "0.2"
+
+[[example]]
+name = "quickstart"
+path = "examples/quickstart.rs"
+
+[[example]]
+name = "simple_read"
+path = "examples/simple_read.rs"
+
+[[example]]
+name = "bulk_reader"
+path = "examples/bulk_reader.rs"
+
+[[example]]
+name = "write_modes"
+path = "examples/write_modes.rs"
+
+[[example]]
+name = "file_copy"
+path = "examples/file_copy.rs"
+
+[[example]]
+name = "async_copy"
+path = "examples/async_copy.rs"

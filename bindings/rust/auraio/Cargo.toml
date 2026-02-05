@@ -1,0 +1,24 @@
+[package]
+name = "auraio"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust bindings for AuraIO - self-tuning async I/O library"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/auraio"
+keywords = ["io_uring", "async", "io", "performance"]
+categories = ["asynchronous", "filesystem"]
+
+[dependencies]
+auraio-sys = { path = "../auraio-sys" }
+libc = "0.2"
+thiserror = "1.0"
+pin-project-lite = { version = "0.2", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
+[features]
+default = []
+# Enable async/await support (runtime-agnostic)
+async = ["pin-project-lite"]

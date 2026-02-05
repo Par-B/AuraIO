@@ -1,0 +1,57 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.so.*
+lib/
+
+# Test binaries
+tests/test_engine
+tests/test_buffer
+tests/test_ring
+tests/test_cpp
+tests/test_*_tsan
+tests/test_*_asan
+tests/stress_test
+
+# Example binaries (C)
+examples/C/simple_read
+examples/C/bulk_reader
+examples/C/write_modes
+examples/C/quickstart
+
+# Example binaries (C++)
+examples/cpp/quickstart
+examples/cpp/simple_read
+examples/cpp/bulk_reader
+examples/cpp/write_modes
+examples/cpp/coroutine_copy
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+compile_commands.json
+
+# Debug
+*.dSYM/
+core
+core.*
+
+# Temporary files
+*.tmp
+*.log
+
+# Rust build artifacts
+**/target/
+Cargo.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes

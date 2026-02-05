@@ -47,9 +47,12 @@ $(LIB_STATIC): $(OBJ) | lib
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Build tests
+# Build and run C tests
 test: all
 	$(MAKE) -C tests
+
+# Run all tests (C, C++, Rust)
+test-all: test cpp-test rust-test
 
 # Build examples
 examples: all
@@ -60,8 +63,37 @@ cpp-examples: all
 	$(MAKE) -C examples cpp-examples
 
 # Run C++ tests
-test-cpp: all
-	$(MAKE) -C tests test-cpp
+cpp-test: all
+	$(MAKE) -C tests cpp-test
+
+# =============================================================================
+# Rust Bindings
+# =============================================================================
+
+# Rust environment setup (source cargo if installed via rustup)
+CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
+RUST_LIB_PATH = $(CURDIR)/lib
+
+# Build Rust bindings
+rust: all
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path bindings/rust/Cargo.toml --release
+
+# Run Rust tests
+rust-test: all
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml
+
+# Build Rust examples
+rust-examples: rust
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path examples/rust/Cargo.toml --examples --release
+
+# Run a specific Rust example
+rust-run-%: rust-examples
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) run --manifest-path examples/rust/Cargo.toml --example $* --release
+
+# Clean Rust build artifacts
+rust-clean:
+	-$(CARGO) clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null || true
+	-$(CARGO) clean --manifest-path examples/rust/Cargo.toml 2>/dev/null || true
 
 # Install
 install: all
@@ -82,7 +114,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/include/auraio.h
 
 # Clean
-clean:
+clean: rust-clean
 	rm -f $(OBJ) $(TSAN_OBJ) $(ASAN_OBJ)
 	rm -f $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
 	rm -rf lib
@@ -219,11 +251,20 @@ help:
 	@echo "Build targets:"
 	@echo "  make / make all     Build libraries and pkg-config file"
 	@echo "  make debug          Build with debug symbols (-g -O0)"
-	@echo "  make test           Build and run unit tests"
-	@echo "  make test-cpp       Build and run C++ unit tests"
+	@echo "  make test           Build and run C unit tests"
+	@echo "  make test-all       Run all tests (C, C++, Rust)"
 	@echo "  make examples       Build C example programs"
-	@echo "  make cpp-examples   Build C++ example programs"
 	@echo "  make clean          Remove all build artifacts"
+	@echo ""
+	@echo "C++ bindings:"
+	@echo "  make cpp-test       Build and run C++ unit tests"
+	@echo "  make cpp-examples   Build C++ example programs"
+	@echo ""
+	@echo "Rust bindings:"
+	@echo "  make rust           Build Rust bindings"
+	@echo "  make rust-test      Run Rust tests"
+	@echo "  make rust-examples  Build Rust example programs"
+	@echo "  make rust-clean     Clean Rust build artifacts"
 	@echo ""
 	@echo "Installation:"
 	@echo "  make install        Install to $(PREFIX) (includes pkg-config)"
@@ -248,6 +289,8 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all test test-cpp examples cpp-examples install uninstall clean debug deps-check help \
+.PHONY: all test test-all examples install uninstall clean debug deps-check help \
+        cpp-test cpp-examples \
+        rust rust-test rust-examples rust-clean \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
         lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual
