@@ -273,22 +273,20 @@ static int cache_refill(buffer_pool_t *pool, thread_cache_t *cache, int class_id
 static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx, size_t bucket_size) {
     buffer_shard_t *shard = &pool->shards[cache->shard_id];
     int transferred = 0;
-    int freed = 0;
+
+    /* Collect buffers that need to be freed outside the lock.
+     * THREAD_CACHE_SIZE is the max we could ever need to free in one flush. */
+    void *to_free[THREAD_CACHE_SIZE];
+    int free_count = 0;
 
     pthread_mutex_lock(&shard->lock);
 
     while (transferred < THREAD_CACHE_BATCH_SIZE && cache->counts[class_idx] > 0) {
         /* Check high-water mark */
         if (shard->max_free_count > 0 && shard->free_count >= shard->max_free_count) {
-            /* Shard at capacity - free remaining buffers directly */
+            /* Shard at capacity - collect remaining buffers for deferred free */
             while (cache->counts[class_idx] > 0) {
-                void *buf = cache->buffers[class_idx][--cache->counts[class_idx]];
-                atomic_fetch_sub(&pool->total_allocated, bucket_size);
-                atomic_fetch_sub(&pool->total_buffers, 1);
-                pthread_mutex_unlock(&shard->lock);
-                free(buf);
-                pthread_mutex_lock(&shard->lock);
-                freed++;
+                to_free[free_count++] = cache->buffers[class_idx][--cache->counts[class_idx]];
             }
             break;
         }
@@ -296,14 +294,8 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
         /* Get a metadata slot */
         buffer_slot_t *slot = shard->free_slots;
         if (!slot) {
-            /* No slots - free the buffer directly */
-            void *buf = cache->buffers[class_idx][--cache->counts[class_idx]];
-            atomic_fetch_sub(&pool->total_allocated, bucket_size);
-            atomic_fetch_sub(&pool->total_buffers, 1);
-            pthread_mutex_unlock(&shard->lock);
-            free(buf);
-            pthread_mutex_lock(&shard->lock);
-            freed++;
+            /* No slots - collect for deferred free */
+            to_free[free_count++] = cache->buffers[class_idx][--cache->counts[class_idx]];
             continue;
         }
 
@@ -323,7 +315,17 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
     }
 
     pthread_mutex_unlock(&shard->lock);
-    return transferred > 0 ? transferred : -freed;
+
+    /* Free collected buffers outside the lock (no lock churn) */
+    if (free_count > 0) {
+        atomic_fetch_sub(&pool->total_allocated, bucket_size * free_count);
+        atomic_fetch_sub(&pool->total_buffers, free_count);
+        for (int i = 0; i < free_count; i++) {
+            free(to_free[i]);
+        }
+    }
+
+    return transferred > 0 ? transferred : -free_count;
 }
 
 /* ============================================================================

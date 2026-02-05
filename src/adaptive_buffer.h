@@ -21,8 +21,10 @@
 /** Maximum buffer size supported by the pool (128MB) */
 #define BUFFER_POOL_MAX_SIZE ((size_t)4096 << (BUFFER_SIZE_CLASSES - 1))
 
-/** Maximum buffers to keep in free list per shard (prevents unbounded memory growth) */
-#define BUFFER_POOL_DEFAULT_MAX_FREE_PER_SHARD 64
+/** Maximum buffers to keep in free list per shard (prevents unbounded memory growth).
+ *  With 4 shards this allows caching ~1024 buffers total (~4MB at 4K size class).
+ *  Increase from 64 to reduce alloc/free churn through posix_memalign. */
+#define BUFFER_POOL_DEFAULT_MAX_FREE_PER_SHARD 256
 
 /** Buffers per size class in thread-local cache (power of 2 for efficient batching) */
 #define THREAD_CACHE_SIZE 16
