@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Safe Rust bindings for AuraIO - self-tuning async I/O library"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/auraio"
+repository = "https://github.com/your-org/auraio"
 keywords = ["io_uring", "async", "io", "performance"]
 categories = ["asynchronous", "filesystem"]
 

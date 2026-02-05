@@ -128,7 +128,7 @@ public:
      * @throws Any exception that was thrown in the coroutine
      */
     T get() {
-        if (!handle_.done()) {
+        if (!handle_ || !handle_.done()) {
             throw std::logic_error("Task not complete");
         }
 
@@ -226,7 +226,7 @@ public:
     }
 
     void get() {
-        if (!handle_.done()) {
+        if (!handle_ || !handle_.done()) {
             throw std::logic_error("Task not complete");
         }
         if (handle_.promise().exception) {

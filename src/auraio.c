@@ -79,7 +79,8 @@ struct auraio_engine {
   atomic_llong total_ops;    /**< Total ops completed */
   atomic_llong total_bytes;  /**< Total bytes transferred */
 
-  /* Registered buffers and files */
+  /* Registered buffers and files (protected by reg_lock) */
+  pthread_rwlock_t reg_lock;         /**< Protects registered_buffers/files access */
   struct iovec *registered_buffers;  /**< Copy of registered buffer iovecs */
   int *registered_files;             /**< Copy of registered file descriptors */
   int registered_buffer_count;       /**< Number of registered buffers */
@@ -314,6 +315,9 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
   atomic_init(&engine->total_ops, 0);
   atomic_init(&engine->total_bytes, 0);
 
+  /* Initialize registration lock */
+  pthread_rwlock_init(&engine->reg_lock, NULL);
+
   /* Initialize buffer pool */
   if (buffer_pool_init(&engine->buffer_pool, engine->buffer_alignment) != 0) {
     goto cleanup_engine;
@@ -410,9 +414,9 @@ void auraio_destroy(auraio_engine_t *engine) {
   /* Signal shutdown - new submissions will be rejected */
   atomic_store_explicit(&engine->shutting_down, true, memory_order_release);
 
-  /* Stop tick thread */
-  if (engine->adaptive_enabled && atomic_load(&engine->tick_running)) {
-    atomic_store(&engine->tick_running, false);
+  /* Stop tick thread (atomic_exchange ensures only one thread joins) */
+  if (engine->adaptive_enabled &&
+      atomic_exchange(&engine->tick_running, false)) {
     pthread_join(engine->tick_thread, NULL);
   }
 
@@ -441,6 +445,7 @@ void auraio_destroy(auraio_engine_t *engine) {
   /* Destroy buffer pool */
   buffer_pool_destroy(&engine->buffer_pool);
 
+  pthread_rwlock_destroy(&engine->reg_lock);
   free(engine);
 }
 
@@ -457,18 +462,25 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
     return NULL;
   }
 
-  /* Validate buffer based on type */
+  /* Validate buffer based on type.
+   * Registered buffers require reg_lock to prevent use-after-free if another
+   * thread calls auraio_unregister_buffers() between validation and submission. */
+  bool hold_reg_lock = (buf.type == AURAIO_BUF_REGISTERED);
+
   if (buf.type == AURAIO_BUF_UNREGISTERED) {
     if (!buf.u.ptr) {
       errno = EINVAL;
       return NULL;
     }
-  } else if (buf.type == AURAIO_BUF_REGISTERED) {
+  } else if (hold_reg_lock) {
+    pthread_rwlock_rdlock(&engine->reg_lock);
     if (!engine->buffers_registered) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = ENOENT; /* No buffers registered */
       return NULL;
     }
     if (buf.u.fixed.index < 0 || buf.u.fixed.index >= engine->registered_buffer_count) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = EINVAL;
       return NULL;
     }
@@ -476,6 +488,7 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
     /* Overflow-safe bounds check: avoid offset + len which can wrap */
     if (buf.u.fixed.offset >= iov->iov_len ||
         len > iov->iov_len - buf.u.fixed.offset) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = EOVERFLOW;
       return NULL;
     }
@@ -486,6 +499,7 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
 
   submit_ctx_t ctx = submit_begin(engine);
   if (!ctx.req) {
+    if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
     return NULL;
   }
 
@@ -510,10 +524,12 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
 
   if (ret != 0) {
     submit_abort(&ctx);
+    if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
     return NULL;
   }
 
   submit_end(&ctx);
+  if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
   return ctx.req;
 }
 
@@ -525,18 +541,24 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
     return NULL;
   }
 
-  /* Validate buffer based on type */
+  /* Validate buffer based on type.
+   * See auraio_read() for reg_lock rationale. */
+  bool hold_reg_lock = (buf.type == AURAIO_BUF_REGISTERED);
+
   if (buf.type == AURAIO_BUF_UNREGISTERED) {
     if (!buf.u.ptr) {
       errno = EINVAL;
       return NULL;
     }
-  } else if (buf.type == AURAIO_BUF_REGISTERED) {
+  } else if (hold_reg_lock) {
+    pthread_rwlock_rdlock(&engine->reg_lock);
     if (!engine->buffers_registered) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = ENOENT; /* No buffers registered */
       return NULL;
     }
     if (buf.u.fixed.index < 0 || buf.u.fixed.index >= engine->registered_buffer_count) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = EINVAL;
       return NULL;
     }
@@ -544,6 +566,7 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
     /* Overflow-safe bounds check: avoid offset + len which can wrap */
     if (buf.u.fixed.offset >= iov->iov_len ||
         len > iov->iov_len - buf.u.fixed.offset) {
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = EOVERFLOW;
       return NULL;
     }
@@ -554,6 +577,7 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
 
   submit_ctx_t ctx = submit_begin(engine);
   if (!ctx.req) {
+    if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
     return NULL;
   }
 
@@ -578,10 +602,12 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
 
   if (ret != 0) {
     submit_abort(&ctx);
+    if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
     return NULL;
   }
 
   submit_end(&ctx);
+  if (hold_reg_lock) pthread_rwlock_unlock(&engine->reg_lock);
   return ctx.req;
 }
 
@@ -1000,7 +1026,10 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
     return (-1);
   }
 
+  pthread_rwlock_wrlock(&engine->reg_lock);
+
   if (engine->buffers_registered) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     errno = EBUSY;  /* Already registered - must unregister first */
     return (-1);
   }
@@ -1008,6 +1037,7 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
   /* Store a copy of the iovecs for later use in read/write_fixed */
   engine->registered_buffers = malloc(count * sizeof(struct iovec));
   if (!engine->registered_buffers) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     return (-1);
   }
   memcpy(engine->registered_buffers, iovs, count * sizeof(struct iovec));
@@ -1031,6 +1061,7 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
       free(engine->registered_buffers);
       engine->registered_buffers = NULL;
       engine->registered_buffer_count = 0;
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = -ret;
       return (-1);
     }
@@ -1039,6 +1070,7 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
   }
 
   engine->buffers_registered = true;
+  pthread_rwlock_unlock(&engine->reg_lock);
   return (0);
 }
 
@@ -1048,7 +1080,10 @@ int auraio_unregister_buffers(auraio_engine_t *engine) {
     return (-1);
   }
 
+  pthread_rwlock_wrlock(&engine->reg_lock);
+
   if (!engine->buffers_registered) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     return (0);  /* Nothing to unregister */
   }
 
@@ -1064,6 +1099,7 @@ int auraio_unregister_buffers(auraio_engine_t *engine) {
   engine->registered_buffer_count = 0;
   engine->buffers_registered = false;
 
+  pthread_rwlock_unlock(&engine->reg_lock);
   return (0);
 }
 
@@ -1078,7 +1114,10 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
     return (-1);
   }
 
+  pthread_rwlock_wrlock(&engine->reg_lock);
+
   if (engine->files_registered) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     errno = EBUSY;  /* Already registered - must unregister first */
     return (-1);
   }
@@ -1086,6 +1125,7 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
   /* Store a copy of the fds */
   engine->registered_files = malloc(count * sizeof(int));
   if (!engine->registered_files) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     return (-1);
   }
   memcpy(engine->registered_files, fds, count * sizeof(int));
@@ -1109,6 +1149,7 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
       free(engine->registered_files);
       engine->registered_files = NULL;
       engine->registered_file_count = 0;
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = -ret;
       return (-1);
     }
@@ -1117,6 +1158,7 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
   }
 
   engine->files_registered = true;
+  pthread_rwlock_unlock(&engine->reg_lock);
   return (0);
 }
 
@@ -1126,12 +1168,16 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
     return (-1);
   }
 
+  pthread_rwlock_wrlock(&engine->reg_lock);
+
   if (!engine->files_registered) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     errno = ENOENT;
     return (-1);
   }
 
   if (index >= engine->registered_file_count) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     errno = EINVAL;
     return (-1);
   }
@@ -1144,6 +1190,7 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
     int ret = io_uring_register_files_update(&ring->ring, index, &fd, 1);
     if (ret < 0) {
       pthread_mutex_unlock(&ring->lock);
+      pthread_rwlock_unlock(&engine->reg_lock);
       errno = -ret;
       return (-1);
     }
@@ -1153,6 +1200,7 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
 
   /* Update our copy */
   engine->registered_files[index] = fd;
+  pthread_rwlock_unlock(&engine->reg_lock);
   return (0);
 }
 
@@ -1162,7 +1210,10 @@ int auraio_unregister_files(auraio_engine_t *engine) {
     return (-1);
   }
 
+  pthread_rwlock_wrlock(&engine->reg_lock);
+
   if (!engine->files_registered) {
+    pthread_rwlock_unlock(&engine->reg_lock);
     return (0);  /* Nothing to unregister */
   }
 
@@ -1178,6 +1229,7 @@ int auraio_unregister_files(auraio_engine_t *engine) {
   engine->registered_file_count = 0;
   engine->files_registered = false;
 
+  pthread_rwlock_unlock(&engine->reg_lock);
   return (0);
 }
 

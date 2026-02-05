@@ -1,18 +1,24 @@
 # AuraIO Library Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -O2 -fPIC -Iinclude -Isrc
+CFLAGS = -Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations \
+         -std=c11 -O2 -fPIC -fvisibility=hidden -Iinclude -Isrc
 LDFLAGS = -luring -lpthread
 
 # Version (keep in sync with include/auraio.h)
-VERSION = 1.0.1
+VERSION_MAJOR = 1
+VERSION_MINOR = 0
+VERSION_PATCH = 1
+VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
 SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c
 OBJ = $(SRC:.c=.o)
 
-# Library names
-LIB_SHARED = lib/libauraio.so
+# Library names (SO versioning: libauraio.so -> libauraio.so.1 -> libauraio.so.1.0.1)
+LIB_SHARED = lib/libauraio.so.$(VERSION)
+LIB_SONAME = libauraio.so.$(VERSION_MAJOR)
+LIB_LINKNAME = libauraio.so
 LIB_STATIC = lib/libauraio.a
 
 # pkg-config file
@@ -35,17 +41,19 @@ $(PKGCONFIG): pkg/libauraio.pc.in | lib
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    $< > $@
 
-# Shared library
+# Shared library (with soname for ABI versioning)
 $(LIB_SHARED): $(OBJ) | lib
-	$(CC) -shared -o $@ $^ $(LDFLAGS)
+	$(CC) -shared -Wl,-soname,$(LIB_SONAME) -DAURAIO_SHARED_BUILD -o $@ $^ $(LDFLAGS)
+	ln -sf $(notdir $(LIB_SHARED)) lib/$(LIB_SONAME)
+	ln -sf $(LIB_SONAME) lib/$(LIB_LINKNAME)
 
 # Static library
 $(LIB_STATIC): $(OBJ) | lib
 	ar rcs $@ $^
 
-# Object files
+# Object files (AURAIO_SHARED_BUILD exports public symbols via AURAIO_API)
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -DAURAIO_SHARED_BUILD -c $< -o $@
 
 # Build and run C tests
 test: all
@@ -202,7 +210,9 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	install -d $(DESTDIR)$(PREFIX)/include
-	install -m 644 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
+	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
+	ln -sf $(notdir $(LIB_SHARED)) $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
+	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
 	install -m 644 include/auraio.h $(DESTDIR)$(PREFIX)/include/
@@ -210,7 +220,9 @@ install: all
 
 # Uninstall
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.so
+	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.so.$(VERSION)
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.a
 	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libauraio.pc
 	rm -f $(DESTDIR)$(PREFIX)/include/auraio.h
@@ -218,7 +230,7 @@ uninstall:
 # Clean
 clean: rust-clean
 	rm -f $(OBJ) $(TSAN_OBJ) $(ASAN_OBJ)
-	rm -f $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
+	rm -f $(LIB_SHARED) lib/$(LIB_SONAME) lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
 	rm -rf lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples clean 2>/dev/null || true

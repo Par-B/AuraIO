@@ -16,7 +16,7 @@ AuraIO is a drop-in async I/O library that automatically optimizes itself. Repla
 
 | Challenge | Traditional Approach | AuraIO Approach |
 |-----------|---------------------|-----------------|
-| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `auraio_read()` |
+| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `auraio_read()`/`auraio_write()` |
 | **Queue depth tuning** | Guess a number, benchmark, repeat | AIMD finds optimal depth automatically |
 | **Multi-core scaling** | Manual ring-per-core setup | Automatic per-CPU rings with CPU-aware routing |
 | **Buffer management** | Roll your own allocator | Built-in scalable pool with thread-local caching |
@@ -263,7 +263,7 @@ See [`examples/`](examples/) for more: bulk readers, write modes, coroutines, as
 ### C/C++ Library
 
 ```bash
-git clone https://github.com/yourusername/auraio.git
+git clone https://github.com/your-org/auraio.git
 cd auraio
 make
 sudo make install
@@ -356,10 +356,13 @@ Full API documentation: [`docs/`](docs/)
 ```
 
 **AIMD Self-Tuning:**
-1. Measures baseline latency at low concurrency
-2. Increases in-flight ops while throughput improves
-3. Backs off if latency spikes (multiplicative decrease)
-4. Converges to optimal without manual tuning
+1. Measures baseline P99 latency at low concurrency
+2. Probes: increases in-flight limit by +1 per tick while throughput improves
+3. Backs off: cuts limit by ×0.80 if P99 latency spikes past 10× baseline
+4. Converges to optimal depth without manual tuning
+
+Uses a gentler 20% decrease (vs TCP's 50%) because storage latency
+is more predictable than network RTT—fewer oscillations, faster convergence.
 
 **Result:** Adapts automatically to NVMe, HDD, network storage, or noisy neighbors.
 
@@ -394,7 +397,7 @@ Synchronous and async code coexist—call `auraio_wait()` immediately after subm
 2. Create a feature branch
 3. Submit a Pull Request
 
-For bugs and features: [open an issue](https://github.com/yourusername/auraio/issues)
+For bugs and features: [open an issue](https://github.com/your-org/auraio/issues)
 
 ## License
 
