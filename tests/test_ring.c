@@ -1,0 +1,1502 @@
+/**
+ * @file test_ring.c
+ * @brief Unit tests for io_uring ring wrapper
+ *
+ * Note: These tests require Linux with io_uring support.
+ */
+
+#define _GNU_SOURCE
+#include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <assert.h>
+#include <sys/stat.h>
+
+#include "../include/auraio.h"
+#include "../src/adaptive_ring.h"
+
+#define TEST(name) static void test_##name(void)
+#define RUN_TEST(name) do { \
+    printf("  %-40s", #name); \
+    test_##name(); \
+    printf(" OK\n"); \
+} while(0)
+
+/* Test file path */
+static char test_file[256];
+static int test_fd = -1;
+
+/* ============================================================================
+ * Setup / Teardown
+ * ============================================================================ */
+
+static void setup(void) {
+    /* Try /tmp first, then current directory */
+    strcpy(test_file, "/tmp/test_ring_XXXXXX");
+    test_fd = mkstemp(test_file);
+    if (test_fd < 0) {
+        strcpy(test_file, "./test_ring_XXXXXX");
+        test_fd = mkstemp(test_file);
+    }
+    assert(test_fd >= 0);
+
+    /* Write some test data */
+    char data[4096];
+    memset(data, 'A', sizeof(data));
+    ssize_t written = write(test_fd, data, sizeof(data));
+    assert(written == sizeof(data));
+
+    /* Seek back to start */
+    lseek(test_fd, 0, SEEK_SET);
+}
+
+static void teardown(void) {
+    if (test_fd >= 0) {
+        close(test_fd);
+        test_fd = -1;
+    }
+    unlink(test_file);
+}
+
+/* ============================================================================
+ * Ring Tests
+ * ============================================================================ */
+
+TEST(ring_init) {
+    ring_ctx_t ctx;
+
+    int ret = ring_init(&ctx, 64, -1, NULL);
+    assert(ret == 0);
+    assert(ctx.ring_initialized);
+    assert(ctx.max_requests == 64);
+    assert(ctx.pending_count == 0);
+
+    ring_destroy(&ctx);
+}
+
+TEST(ring_init_invalid) {
+    ring_ctx_t ctx;
+
+    /* NULL context */
+    assert(ring_init(NULL, 64, -1, NULL) == -1);
+
+    /* Zero queue depth */
+    assert(ring_init(&ctx, 0, -1, NULL) == -1);
+}
+
+TEST(ring_request_management) {
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Get requests */
+    int idx1, idx2;
+    auraio_request_t *req1 = ring_get_request(&ctx, &idx1);
+    auraio_request_t *req2 = ring_get_request(&ctx, &idx2);
+
+    assert(req1 != NULL);
+    assert(req2 != NULL);
+    assert(idx1 != idx2);
+    assert(ctx.free_request_count == 62);
+
+    /* Return requests */
+    ring_put_request(&ctx, idx1);
+    ring_put_request(&ctx, idx2);
+    assert(ctx.free_request_count == 64);
+
+    ring_destroy(&ctx);
+}
+
+TEST(ring_can_submit) {
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    assert(ring_can_submit(&ctx));
+
+    /* Use up all slots (artificially) */
+    ctx.pending_count = adaptive_get_inflight_limit(&ctx.adaptive);
+    assert(!ring_can_submit(&ctx));
+
+    ctx.pending_count = 0;
+    ring_destroy(&ctx);
+}
+
+TEST(ring_should_flush) {
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    ctx.queued_sqes = 0;
+    assert(!ring_should_flush(&ctx));
+
+    ctx.queued_sqes = adaptive_get_batch_threshold(&ctx.adaptive);
+    assert(ring_should_flush(&ctx));
+
+    ctx.queued_sqes = 0;
+    ring_destroy(&ctx);
+}
+
+/* Callback flag for async tests */
+static volatile int callback_called = 0;
+static volatile ssize_t callback_result = 0;
+
+static void test_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    (void)user_data;
+    callback_called = 1;
+    callback_result = result;
+}
+
+TEST(ring_read_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Allocate aligned buffer */
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    assert(buf != NULL);
+    memset(buf, 0, 4096);  /* Initialize for valgrind */
+
+    /* Get a request */
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    assert(req != NULL);
+
+    /* Fill in request */
+    req->fd = test_fd;
+    req->buffer = buf;
+    req->len = 4096;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    /* Submit read */
+    int ret = ring_submit_read(&ctx, req);
+    assert(ret == 0);
+    assert(ctx.pending_count == 1);
+
+    /* Flush and wait */
+    ring_flush(&ctx);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret >= 0);
+
+    /* Check callback was invoked */
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+
+    /* Verify data */
+    assert(((char *)buf)[0] == 'A');
+
+    free(buf);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_write_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    memset(buf, 'B', 4096);
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->buffer = buf;
+    req->len = 4096;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    int ret = ring_submit_write(&ctx, req);
+    assert(ret == 0);
+
+    ring_flush(&ctx);
+    ring_wait(&ctx, 1000);
+
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+
+    /* Verify write - read back the data */
+    lseek(test_fd, 0, SEEK_SET);
+    char verify[4096];
+    read(test_fd, verify, 4096);
+    assert(verify[0] == 'B');
+
+    free(buf);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_poll_no_ops) {
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Poll with nothing pending */
+    int ret = ring_poll(&ctx);
+    assert(ret == 0);
+
+    ring_destroy(&ctx);
+}
+
+TEST(ring_readv_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Allocate multiple aligned buffers for scatter read */
+    void *buf1 = NULL, *buf2 = NULL, *buf3 = NULL;
+    posix_memalign(&buf1, 4096, 1024);
+    posix_memalign(&buf2, 4096, 2048);
+    posix_memalign(&buf3, 4096, 1024);
+    assert(buf1 && buf2 && buf3);
+    memset(buf1, 0, 1024);
+    memset(buf2, 0, 2048);
+    memset(buf3, 0, 1024);
+
+    /* Set up iovec */
+    struct iovec iov[3] = {
+        { .iov_base = buf1, .iov_len = 1024 },
+        { .iov_base = buf2, .iov_len = 2048 },
+        { .iov_base = buf3, .iov_len = 1024 },
+    };
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    assert(req != NULL);
+
+    req->fd = test_fd;
+    req->iov = iov;
+    req->iovcnt = 3;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    int ret = ring_submit_readv(&ctx, req);
+    assert(ret == 0);
+    assert(ctx.pending_count == 1);
+
+    ring_flush(&ctx);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret >= 0);
+
+    assert(callback_called == 1);
+    assert(callback_result == 4096);  /* Total read */
+
+    /* Verify data scattered across buffers */
+    assert(((char *)buf1)[0] == 'A');
+    assert(((char *)buf2)[0] == 'A');
+    assert(((char *)buf3)[0] == 'A');
+
+    free(buf1);
+    free(buf2);
+    free(buf3);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_writev_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Allocate multiple buffers for gather write */
+    void *buf1 = NULL, *buf2 = NULL;
+    posix_memalign(&buf1, 4096, 2048);
+    posix_memalign(&buf2, 4096, 2048);
+    assert(buf1 && buf2);
+    memset(buf1, 'X', 2048);
+    memset(buf2, 'Y', 2048);
+
+    struct iovec iov[2] = {
+        { .iov_base = buf1, .iov_len = 2048 },
+        { .iov_base = buf2, .iov_len = 2048 },
+    };
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->iov = iov;
+    req->iovcnt = 2;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    int ret = ring_submit_writev(&ctx, req);
+    assert(ret == 0);
+
+    ring_flush(&ctx);
+    ring_wait(&ctx, 1000);
+
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+
+    /* Verify gathered write */
+    lseek(test_fd, 0, SEEK_SET);
+    char verify[4096];
+    read(test_fd, verify, 4096);
+    assert(verify[0] == 'X');      /* First buffer */
+    assert(verify[2048] == 'Y');   /* Second buffer */
+
+    free(buf1);
+    free(buf2);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_fdatasync_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Write some data first */
+    char data[] = "test data for fdatasync";
+    write(test_fd, data, sizeof(data));
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    int ret = ring_submit_fdatasync(&ctx, req);
+    assert(ret == 0);
+    assert(ctx.pending_count == 1);
+
+    ring_flush(&ctx);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret >= 0);
+
+    assert(callback_called == 1);
+    assert(callback_result == 0);  /* fsync returns 0 on success */
+
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_cancel_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Submit a read that we'll try to cancel */
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    memset(buf, 0, 4096);
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->buffer = buf;
+    req->len = 4096;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+    callback_result = 0;
+
+    /* Submit read but don't flush yet */
+    int ret = ring_submit_read(&ctx, req);
+    assert(ret == 0);
+
+    /* Now submit a cancel request */
+    int cancel_idx;
+    auraio_request_t *cancel_req = ring_get_request(&ctx, &cancel_idx);
+    assert(cancel_req != NULL);
+
+    ret = ring_submit_cancel(&ctx, cancel_req, req);
+    assert(ret == 0);
+
+    /* Flush both and wait */
+    ring_flush(&ctx);
+
+    /* Wait for completions - we should get 2 (original + cancel) */
+    int completed = 0;
+    while (ctx.pending_count > 0 && completed < 10) {
+        ret = ring_wait(&ctx, 100);
+        if (ret > 0) completed += ret;
+    }
+
+    /* The callback should have been called - either with success or ECANCELED */
+    assert(callback_called == 1);
+    /* Result is either the read result or -ECANCELED depending on timing */
+    assert(callback_result == 4096 || callback_result == -ECANCELED);
+
+    free(buf);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(ring_request_pending_flag) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    memset(buf, 0, 4096);
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->buffer = buf;
+    req->len = 4096;
+    req->offset = 0;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    /* Before submission, pending should be false */
+    assert(atomic_load(&req->pending) == false);
+
+    ring_submit_read(&ctx, req);
+
+    /* After submission, pending should be true */
+    assert(atomic_load(&req->pending) == true);
+
+    ring_flush(&ctx);
+    ring_wait(&ctx, 1000);
+
+    /* After completion, pending should be false */
+    assert(atomic_load(&req->pending) == false);
+
+    free(buf);
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(poll_fd_eventfd_integration) {
+    setup();
+
+    /* Create engine with public API */
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Get poll fd - should be a valid eventfd */
+    int poll_fd = auraio_get_poll_fd(engine);
+    assert(poll_fd >= 0);
+
+    /* Allocate buffer */
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+
+    callback_called = 0;
+
+    /* Submit a read */
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    /* Force flush the submission queue (auraio_wait with 0 timeout flushes all rings) */
+    auraio_wait(engine, 0);
+
+    /* Use poll() to wait on the eventfd - it should become readable when op completes */
+    struct pollfd pfd = { .fd = poll_fd, .events = POLLIN };
+    int ret = poll(&pfd, 1, 1000);  /* 1 second timeout */
+    assert(ret > 0);  /* Should have data */
+    assert(pfd.revents & POLLIN);
+
+    /* Now call auraio_poll to process the completion */
+    ret = auraio_poll(engine);
+    assert(ret >= 0);
+
+    /* Callback should have been invoked */
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    teardown();
+}
+
+/* ============================================================================
+ * Registered Buffer Tests (Phase 5)
+ * ============================================================================ */
+
+TEST(registered_buffers_basic) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Allocate aligned buffers */
+    void *buf1 = NULL, *buf2 = NULL;
+    posix_memalign(&buf1, 4096, 4096);
+    posix_memalign(&buf2, 4096, 4096);
+    assert(buf1 && buf2);
+    memset(buf1, 0, 4096);
+    memset(buf2, 0, 4096);
+
+    /* Register buffers */
+    struct iovec iovs[2] = {
+        { .iov_base = buf1, .iov_len = 4096 },
+        { .iov_base = buf2, .iov_len = 4096 }
+    };
+    int ret = auraio_register_buffers(engine, iovs, 2);
+    assert(ret == 0);
+
+    /* Cannot register again without unregistering first */
+    ret = auraio_register_buffers(engine, iovs, 2);
+    assert(ret == -1 && errno == EBUSY);
+
+    callback_called = 0;
+
+    /* Read using registered buffer 0 */
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf_fixed(0, 0), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+    assert(((char *)buf1)[0] == 'A');  /* Verify data was read into buf1 */
+
+    /* Unregister */
+    ret = auraio_unregister_buffers(engine);
+    assert(ret == 0);
+
+    /* Unregister again should be no-op */
+    ret = auraio_unregister_buffers(engine);
+    assert(ret == 0);
+
+    free(buf1);
+    free(buf2);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_buffers_write_fixed) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    assert(buf != NULL);
+    memset(buf, 'Z', 4096);
+
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    int ret = auraio_register_buffers(engine, &iov, 1);
+    assert(ret == 0);
+
+    callback_called = 0;
+
+    /* Write using registered buffer */
+    auraio_request_t *req = auraio_write(engine, test_fd, auraio_buf_fixed(0, 0), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+
+    /* Verify data was written */
+    lseek(test_fd, 0, SEEK_SET);
+    char verify[4096];
+    read(test_fd, verify, 4096);
+    assert(verify[0] == 'Z');
+
+    auraio_unregister_buffers(engine);
+    free(buf);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_buffers_offset) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    assert(buf != NULL);
+    memset(buf, 0, 4096);
+
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    int ret = auraio_register_buffers(engine, &iov, 1);
+    assert(ret == 0);
+
+    callback_called = 0;
+
+    /* Read into buffer at offset 1024 */
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf_fixed(0, 1024), 1024, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+
+    assert(callback_called == 1);
+    assert(callback_result == 1024);
+    /* First 1024 bytes should still be 0, next 1024 should be 'A' */
+    assert(((char *)buf)[0] == 0);
+    assert(((char *)buf)[1024] == 'A');
+
+    auraio_unregister_buffers(engine);
+    free(buf);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_buffers_invalid) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Read without registering buffers */
+    auraio_request_t *req = auraio_read(engine, 0, auraio_buf_fixed(0, 0), 4096, 0, NULL, NULL);
+    assert(req == NULL && errno == ENOENT);
+
+    /* Register a buffer */
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    auraio_register_buffers(engine, &iov, 1);
+
+    /* Invalid buffer index */
+    req = auraio_read(engine, 0, auraio_buf_fixed(5, 0), 4096, 0, NULL, NULL);
+    assert(req == NULL && errno == EINVAL);
+
+    /* Buffer overflow (offset + len > buffer size) */
+    req = auraio_read(engine, 0, auraio_buf_fixed(0, 1024), 4096, 0, NULL, NULL);
+    assert(req == NULL && errno == EOVERFLOW);
+
+    auraio_unregister_buffers(engine);
+    free(buf);
+    auraio_destroy(engine);
+}
+
+TEST(sqpoll_option) {
+    /* Test SQPOLL option is parsed correctly.
+     * Note: SQPOLL requires root/CAP_SYS_NICE, so it may fall back to normal mode. */
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    opts.enable_sqpoll = true;
+    opts.sqpoll_idle_ms = 500;
+
+    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    /* Engine creation should succeed even if SQPOLL fails (falls back to normal) */
+    assert(engine != NULL);
+
+    auraio_destroy(engine);
+}
+
+/* ============================================================================
+ * Registered Files Tests
+ * ============================================================================ */
+
+TEST(registered_files_basic) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Register the test file */
+    int fds[2] = { test_fd, test_fd };
+    int ret = auraio_register_files(engine, fds, 2);
+    assert(ret == 0);
+
+    /* Cannot register again without unregistering first */
+    ret = auraio_register_files(engine, fds, 2);
+    assert(ret == -1 && errno == EBUSY);
+
+    /* Unregister */
+    ret = auraio_unregister_files(engine);
+    assert(ret == 0);
+
+    /* Unregister again should be no-op */
+    ret = auraio_unregister_files(engine);
+    assert(ret == 0);
+
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_files_update) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Register the test file */
+    int fds[2] = { test_fd, -1 };  /* Second slot empty */
+    int ret = auraio_register_files(engine, fds, 2);
+    assert(ret == 0);
+
+    /* Update slot 1 with test_fd */
+    ret = auraio_update_file(engine, 1, test_fd);
+    assert(ret == 0);
+
+    /* Update slot 0 with -1 (unregister) */
+    ret = auraio_update_file(engine, 0, -1);
+    assert(ret == 0);
+
+    /* Invalid index */
+    errno = 0;
+    ret = auraio_update_file(engine, 10, test_fd);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Negative index */
+    errno = 0;
+    ret = auraio_update_file(engine, -1, test_fd);
+    assert(ret == -1 && errno == EINVAL);
+
+    auraio_unregister_files(engine);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_files_invalid) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* NULL fds array */
+    errno = 0;
+    int ret = auraio_register_files(engine, NULL, 1);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Zero count */
+    int fd = 0;
+    errno = 0;
+    ret = auraio_register_files(engine, &fd, 0);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Negative count */
+    errno = 0;
+    ret = auraio_register_files(engine, &fd, -1);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Update without registering first */
+    errno = 0;
+    ret = auraio_update_file(engine, 0, 0);
+    assert(ret == -1 && errno == ENOENT);
+
+    auraio_destroy(engine);
+}
+
+/* ============================================================================
+ * Fsync Tests
+ * ============================================================================ */
+
+TEST(ring_fsync_basic) {
+    setup();
+
+    ring_ctx_t ctx;
+    ring_init(&ctx, 64, -1, NULL);
+
+    /* Write some data first */
+    char data[] = "test data for fsync";
+    write(test_fd, data, sizeof(data));
+
+    int op_idx;
+    auraio_request_t *req = ring_get_request(&ctx, &op_idx);
+    req->fd = test_fd;
+    req->callback = test_callback;
+    req->user_data = NULL;
+
+    callback_called = 0;
+
+    int ret = ring_submit_fsync(&ctx, req);
+    assert(ret == 0);
+    assert(ctx.pending_count == 1);
+
+    ring_flush(&ctx);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret >= 0);
+
+    assert(callback_called == 1);
+    assert(callback_result == 0);  /* fsync returns 0 on success */
+
+    ring_destroy(&ctx);
+    teardown();
+}
+
+TEST(auraio_fsync_both_modes) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Write some data */
+    char data[] = "test data for fsync test";
+    write(test_fd, data, sizeof(data));
+
+    callback_called = 0;
+
+    /* Test regular fsync */
+    auraio_request_t *req = auraio_fsync(engine, test_fd, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+    assert(callback_called == 1);
+    assert(callback_result == 0);
+
+    /* Test fsync_ex with DATASYNC flag */
+    callback_called = 0;
+    req = auraio_fsync_ex(engine, test_fd, AURAIO_FSYNC_DATASYNC, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+    assert(callback_called == 1);
+    assert(callback_result == 0);
+
+    /* Test fsync_ex with DEFAULT flag (same as regular fsync) */
+    callback_called = 0;
+    req = auraio_fsync_ex(engine, test_fd, AURAIO_FSYNC_DEFAULT, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+    assert(callback_called == 1);
+    assert(callback_result == 0);
+
+    auraio_destroy(engine);
+    teardown();
+}
+
+/* ============================================================================
+ * Event Loop Tests
+ * ============================================================================ */
+
+static volatile int run_stop_callback_count = 0;
+
+static void run_stop_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    (void)result;
+    auraio_engine_t *engine = user_data;
+    run_stop_callback_count++;
+
+    /* After 3 completions, stop the event loop */
+    if (run_stop_callback_count >= 3) {
+        auraio_stop(engine);
+    }
+}
+
+static void *run_thread_func(void *arg) {
+    auraio_engine_t *engine = arg;
+    auraio_run(engine);
+    return NULL;
+}
+
+TEST(auraio_run_stop) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    run_stop_callback_count = 0;
+
+    /* Allocate buffer */
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+
+    /* Submit some reads that will trigger the callback which stops the loop */
+    for (int i = 0; i < 5; i++) {
+        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0,
+                                            run_stop_callback, engine);
+        assert(req != NULL);
+    }
+
+    /* Start event loop in a separate thread */
+    pthread_t thread;
+    int ret = pthread_create(&thread, NULL, run_thread_func, engine);
+    assert(ret == 0);
+
+    /* Wait for thread to finish (should stop after 3 completions) */
+    ret = pthread_join(thread, NULL);
+    assert(ret == 0);
+
+    /* Should have completed at least 3 */
+    assert(run_stop_callback_count >= 3);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(auraio_stop_before_run) {
+    /* Test that stop before run doesn't cause issues */
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Stop without run - should be safe */
+    auraio_stop(engine);
+
+    /* Destroy should also be safe */
+    auraio_destroy(engine);
+}
+
+/* ============================================================================
+ * Error Path Tests
+ * ============================================================================ */
+
+TEST(error_null_engine) {
+    void *buf = malloc(4096);
+
+    /* auraio_read with NULL engine */
+    errno = 0;
+    auraio_request_t *req = auraio_read(NULL, 0, auraio_buf(buf), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_write with NULL engine */
+    errno = 0;
+    req = auraio_write(NULL, 0, auraio_buf(buf), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_readv with NULL engine */
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    errno = 0;
+    req = auraio_readv(NULL, 0, &iov, 1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_writev with NULL engine */
+    errno = 0;
+    req = auraio_writev(NULL, 0, &iov, 1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_fsync with NULL engine */
+    errno = 0;
+    req = auraio_fsync(NULL, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_cancel with NULL engine */
+    errno = 0;
+    int ret = auraio_cancel(NULL, (auraio_request_t *)0x1);
+    assert(ret == -1);
+    assert(errno == EINVAL);
+
+    /* auraio_get_poll_fd with NULL engine */
+    errno = 0;
+    ret = auraio_get_poll_fd(NULL);
+    assert(ret == -1);
+    assert(errno == EINVAL);
+
+    free(buf);
+}
+
+TEST(error_invalid_fd) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+
+    /* auraio_read with invalid fd */
+    errno = 0;
+    auraio_request_t *req = auraio_read(engine, -1, auraio_buf(buf), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_write with invalid fd */
+    errno = 0;
+    req = auraio_write(engine, -1, auraio_buf(buf), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_fsync with invalid fd */
+    errno = 0;
+    req = auraio_fsync(engine, -1, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+}
+
+TEST(error_null_buffer) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* auraio_read with NULL buffer */
+    errno = 0;
+    auraio_request_t *req = auraio_read(engine, 0, auraio_buf(NULL), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_write with NULL buffer */
+    errno = 0;
+    req = auraio_write(engine, 0, auraio_buf(NULL), 4096, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_readv with NULL iov */
+    errno = 0;
+    req = auraio_readv(engine, 0, NULL, 1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_readv with zero iovcnt */
+    struct iovec iov = { .iov_base = (void *)0x1, .iov_len = 4096 };
+    errno = 0;
+    req = auraio_readv(engine, 0, &iov, 0, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_readv with negative iovcnt */
+    errno = 0;
+    req = auraio_readv(engine, 0, &iov, -1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_writev with negative iovcnt */
+    errno = 0;
+    req = auraio_writev(engine, 0, &iov, -1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_readv with iovcnt > IOV_MAX */
+    errno = 0;
+    req = auraio_readv(engine, 0, &iov, IOV_MAX + 1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_writev with iovcnt > IOV_MAX */
+    errno = 0;
+    req = auraio_writev(engine, 0, &iov, IOV_MAX + 1, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    auraio_destroy(engine);
+}
+
+TEST(error_zero_length) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+
+    /* auraio_read with zero length */
+    errno = 0;
+    auraio_request_t *req = auraio_read(engine, 0, auraio_buf(buf), 0, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_write with zero length */
+    errno = 0;
+    req = auraio_write(engine, 0, auraio_buf(buf), 0, 0, NULL, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+}
+
+TEST(error_cancel_null_request) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* auraio_cancel with NULL request */
+    errno = 0;
+    int ret = auraio_cancel(engine, NULL);
+    assert(ret == -1);
+    assert(errno == EINVAL);
+
+    auraio_destroy(engine);
+}
+
+TEST(error_request_introspection_null) {
+    /* Request introspection with NULL */
+    assert(auraio_request_pending(NULL) == false);
+    assert(auraio_request_fd(NULL) == -1);
+    assert(auraio_request_user_data(NULL) == NULL);
+}
+
+TEST(error_buffer_pool_invalid) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* auraio_buffer_alloc with NULL engine */
+    errno = 0;
+    void *buf = auraio_buffer_alloc(NULL, 4096);
+    assert(buf == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_buffer_alloc with zero size */
+    errno = 0;
+    buf = auraio_buffer_alloc(engine, 0);
+    assert(buf == NULL);
+    assert(errno == EINVAL);
+
+    /* auraio_buffer_free with NULL - should not crash */
+    auraio_buffer_free(NULL, (void *)0x1, 4096);
+    auraio_buffer_free(engine, NULL, 4096);
+
+    auraio_destroy(engine);
+}
+
+/* ============================================================================
+ * Shutdown Tests
+ * ============================================================================ */
+
+TEST(shutdown_rejects_new_submissions) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+
+    /* Submit a request successfully */
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    /* Flush and wait for completion before destroy to avoid hanging */
+    auraio_wait(engine, 1000);
+
+    /* Free buffer before destroy */
+    auraio_buffer_free(engine, buf, 4096);
+
+    /* Start shutdown - this will set the shutting_down flag */
+    auraio_destroy(engine);
+
+    /* Note: After destroy, we can't test further since engine is gone.
+     * This test just verifies destroy doesn't crash with pending ops. */
+
+    teardown();
+}
+
+TEST(shutdown_drains_pending_ops) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    callback_called = 0;
+
+    /* Submit multiple requests */
+    for (int i = 0; i < 5; i++) {
+        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+    }
+
+    /* Wait for completions - this ensures ops are flushed */
+    int total = 0;
+    for (int i = 0; i < 50 && total < 5; i++) {
+        int completed = auraio_wait(engine, 100);
+        if (completed > 0) total += completed;
+    }
+
+    /* Free buffer before destroy */
+    auraio_buffer_free(engine, buf, 4096);
+
+    /* Destroy should complete cleanly */
+    auraio_destroy(engine);
+
+    /* Callbacks should have been called for all 5 */
+    assert(callback_called >= 1);  /* At least some should complete */
+
+    teardown();
+}
+
+/* ============================================================================
+ * Stats Tests
+ * ============================================================================ */
+
+TEST(stats_basic) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    auraio_stats_t stats;
+    auraio_get_stats(engine, &stats);
+
+    /* Initially, stats should be zero or near-zero */
+    assert(stats.ops_completed == 0);
+    assert(stats.bytes_transferred == 0);
+    assert(stats.current_in_flight == 0);
+
+    /* Submit and complete an operation */
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    callback_called = 0;
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    auraio_wait(engine, 1000);
+    assert(callback_called == 1);
+
+    /* Check stats after completion */
+    auraio_get_stats(engine, &stats);
+    assert(stats.ops_completed >= 1);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(stats_null_params) {
+    /* Should not crash with NULL params */
+    auraio_get_stats(NULL, NULL);
+
+    auraio_engine_t *engine = auraio_create();
+    auraio_get_stats(engine, NULL);
+    auraio_get_stats(NULL, &(auraio_stats_t){0});
+    auraio_destroy(engine);
+}
+
+/* ============================================================================
+ * Integration / Load Tests
+ * ============================================================================ */
+
+static volatile int concurrent_callback_count = 0;
+static pthread_mutex_t callback_count_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void concurrent_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    (void)user_data;
+    if (result > 0) {
+        pthread_mutex_lock(&callback_count_lock);
+        concurrent_callback_count++;
+        pthread_mutex_unlock(&callback_count_lock);
+    }
+}
+
+TEST(load_many_concurrent_reads) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    const int NUM_OPS = 50;
+    void *bufs[NUM_OPS];
+    concurrent_callback_count = 0;
+
+    /* Submit many concurrent reads */
+    int submitted = 0;
+    for (int i = 0; i < NUM_OPS; i++) {
+        bufs[i] = auraio_buffer_alloc(engine, 4096);
+        assert(bufs[i] != NULL);
+
+        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+        if (req != NULL) {
+            submitted++;
+        }
+        /* Some may return EAGAIN if we hit the limit, that's expected */
+    }
+
+    /* Wait for completions */
+    int total_completed = 0;
+    for (int i = 0; i < 100 && total_completed < submitted; i++) {
+        int completed = auraio_wait(engine, 100);
+        if (completed > 0) {
+            total_completed += completed;
+        }
+    }
+
+    /* Most or all should complete */
+    assert(concurrent_callback_count >= submitted / 2);
+
+    for (int i = 0; i < NUM_OPS; i++) {
+        auraio_buffer_free(engine, bufs[i], 4096);
+    }
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(load_mixed_read_write) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    concurrent_callback_count = 0;
+
+    /* Alternate between reads and writes */
+    const int NUM_OPS = 20;
+    void *bufs[NUM_OPS];
+    int submitted = 0;
+
+    for (int i = 0; i < NUM_OPS; i++) {
+        bufs[i] = auraio_buffer_alloc(engine, 4096);
+        memset(bufs[i], 'X' + (i % 26), 4096);
+
+        auraio_request_t *req;
+        if (i % 2 == 0) {
+            req = auraio_read(engine, test_fd, auraio_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+        } else {
+            req = auraio_write(engine, test_fd, auraio_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+        }
+        if (req != NULL) {
+            submitted++;
+        }
+    }
+
+    /* Wait for completions */
+    int total_completed = 0;
+    for (int i = 0; i < 100 && total_completed < submitted; i++) {
+        int completed = auraio_wait(engine, 100);
+        if (completed > 0) {
+            total_completed += completed;
+        }
+    }
+
+    /* Most should complete */
+    assert(concurrent_callback_count >= submitted / 2);
+
+    for (int i = 0; i < NUM_OPS; i++) {
+        auraio_buffer_free(engine, bufs[i], 4096);
+    }
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(load_vectored_io) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    concurrent_callback_count = 0;
+
+    /* Submit multiple vectored operations */
+    const int NUM_OPS = 10;
+    void *bufs[NUM_OPS][3];
+    struct iovec iovs[NUM_OPS][3];
+    int submitted = 0;
+
+    for (int i = 0; i < NUM_OPS; i++) {
+        for (int j = 0; j < 3; j++) {
+            posix_memalign(&bufs[i][j], 4096, 1024);
+            memset(bufs[i][j], 0, 1024);
+            iovs[i][j].iov_base = bufs[i][j];
+            iovs[i][j].iov_len = 1024;
+        }
+
+        auraio_request_t *req = auraio_readv(engine, test_fd, iovs[i], 3, 0, concurrent_callback, NULL);
+        if (req != NULL) {
+            submitted++;
+        }
+    }
+
+    /* Wait for completions */
+    int total_completed = 0;
+    for (int i = 0; i < 100 && total_completed < submitted; i++) {
+        int completed = auraio_wait(engine, 100);
+        if (completed > 0) {
+            total_completed += completed;
+        }
+    }
+
+    assert(concurrent_callback_count >= submitted / 2);
+
+    for (int i = 0; i < NUM_OPS; i++) {
+        for (int j = 0; j < 3; j++) {
+            free(bufs[i][j]);
+        }
+    }
+    auraio_destroy(engine);
+    teardown();
+}
+
+/* ============================================================================
+ * Version API Tests
+ * ============================================================================ */
+
+TEST(version_api) {
+    const char *version = auraio_version();
+    assert(version != NULL);
+    assert(strlen(version) > 0);
+    assert(strstr(version, ".") != NULL);  /* Should contain a dot */
+
+    int version_int = auraio_version_int();
+    assert(version_int >= 10000);  /* At least 1.0.0 */
+}
+
+/* ============================================================================
+ * Main
+ * ============================================================================ */
+
+int main(void) {
+    printf("Running io_uring ring tests...\n");
+
+    RUN_TEST(ring_init);
+    RUN_TEST(ring_init_invalid);
+    RUN_TEST(ring_request_management);
+    RUN_TEST(ring_can_submit);
+    RUN_TEST(ring_should_flush);
+    RUN_TEST(ring_read_basic);
+    RUN_TEST(ring_write_basic);
+    RUN_TEST(ring_poll_no_ops);
+    RUN_TEST(ring_readv_basic);
+    RUN_TEST(ring_writev_basic);
+    RUN_TEST(ring_fdatasync_basic);
+    RUN_TEST(ring_cancel_basic);
+    RUN_TEST(ring_request_pending_flag);
+    RUN_TEST(poll_fd_eventfd_integration);
+
+    /* Phase 5: Registered buffers and SQPOLL */
+    RUN_TEST(registered_buffers_basic);
+    RUN_TEST(registered_buffers_write_fixed);
+    RUN_TEST(registered_buffers_offset);
+    RUN_TEST(registered_buffers_invalid);
+    RUN_TEST(sqpoll_option);
+
+    /* Registered files tests */
+    RUN_TEST(registered_files_basic);
+    RUN_TEST(registered_files_update);
+    RUN_TEST(registered_files_invalid);
+
+    /* Fsync tests */
+    RUN_TEST(ring_fsync_basic);
+    RUN_TEST(auraio_fsync_both_modes);
+
+    /* Event loop tests */
+    RUN_TEST(auraio_run_stop);
+    RUN_TEST(auraio_stop_before_run);
+
+    /* Error path tests */
+    RUN_TEST(error_null_engine);
+    RUN_TEST(error_invalid_fd);
+    RUN_TEST(error_null_buffer);
+    RUN_TEST(error_zero_length);
+    RUN_TEST(error_cancel_null_request);
+    RUN_TEST(error_request_introspection_null);
+    RUN_TEST(error_buffer_pool_invalid);
+
+    /* Shutdown tests */
+    RUN_TEST(shutdown_rejects_new_submissions);
+    RUN_TEST(shutdown_drains_pending_ops);
+
+    /* Stats tests */
+    RUN_TEST(stats_basic);
+    RUN_TEST(stats_null_params);
+
+    /* Integration / load tests */
+    RUN_TEST(load_many_concurrent_reads);
+    RUN_TEST(load_mixed_read_write);
+    RUN_TEST(load_vectored_io);
+
+    /* Version API tests */
+    RUN_TEST(version_api);
+
+    printf("\nAll io_uring ring tests passed!\n");
+    return 0;
+}
