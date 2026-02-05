@@ -1,0 +1,16 @@
+---
+# AuraIO clang-tidy configuration
+#
+# Suppressed checks:
+# - DeprecatedOrUnsafeBufferHandling: glibc does not implement C11 Annex K
+#   (memset_s/memcpy_s), and all our calls use compile-time-known or validated sizes.
+# - Padding: struct padding is intentional — adaptive_controller_t uses aligned(64)
+#   to prevent false sharing, ring_ctx_t layout follows cache-line grouping.
+
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-optin.performance.Padding
+
+HeaderFilterRegex: 'include/auraio/.*|src/.*'
