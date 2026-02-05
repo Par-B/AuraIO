@@ -174,11 +174,223 @@ test-asan: asan
 # Run all sanitizer tests
 test-sanitizers: test-valgrind test-tsan test-asan
 
-# Dependency checking
+# =============================================================================
+# Dependency management
+# =============================================================================
+
+# Install all required dependencies
+deps:
+	@echo "========================================"
+	@echo "AuraIO Dependency Installer"
+	@echo "========================================"
+	@echo ""
+	@# --- Kernel version check ---
+	@echo "--- Checking kernel version ---"
+	@KMAJOR=$$(uname -r | cut -d. -f1); \
+	if [ "$$KMAJOR" -lt 6 ] 2>/dev/null; then \
+		echo "  [FAIL] Kernel $$(uname -r) — AuraIO requires kernel >= 6.0"; \
+		echo "         io_uring features (registered buffers, SQPOLL) need v6+"; \
+		exit 1; \
+	else \
+		echo "  [OK] Kernel $$(uname -r)"; \
+	fi
+	@echo ""
+	@# --- Check sudo availability ---
+	@echo "--- Checking sudo access ---"
+	@if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then \
+		echo "  [OK] sudo available"; \
+	elif command -v sudo >/dev/null 2>&1; then \
+		echo "  [OK] sudo available (may prompt for password)"; \
+	else \
+		echo "  [WARN] sudo not available — cannot install packages"; \
+		echo "         Install manually: apt-get install gcc g++ make liburing-dev pkg-config python3"; \
+	fi
+	@echo ""
+	@# --- Mandatory packages (C, C++, liburing, python3) ---
+	@echo "--- Installing mandatory packages ---"
+	@if command -v sudo >/dev/null 2>&1; then \
+		echo "  Installing: gcc g++ make liburing-dev pkg-config python3..."; \
+		sudo apt-get install -y gcc g++ make liburing-dev pkg-config python3 \
+			&& echo "  [OK] Mandatory packages installed" \
+			|| { echo "  [FAIL] apt-get install failed"; exit 1; }; \
+	else \
+		echo "  [SKIP] No sudo — checking if packages are already present..."; \
+		MISSING=""; \
+		command -v gcc >/dev/null 2>&1 || MISSING="$$MISSING gcc"; \
+		command -v g++ >/dev/null 2>&1 || MISSING="$$MISSING g++"; \
+		command -v make >/dev/null 2>&1 || MISSING="$$MISSING make"; \
+		command -v pkg-config >/dev/null 2>&1 || MISSING="$$MISSING pkg-config"; \
+		command -v python3 >/dev/null 2>&1 || MISSING="$$MISSING python3"; \
+		pkg-config --exists liburing 2>/dev/null || MISSING="$$MISSING liburing-dev"; \
+		if [ -n "$$MISSING" ]; then \
+			echo "  [FAIL] Missing packages:$$MISSING"; \
+			echo "         Run: sudo apt-get install -y$$MISSING"; \
+			exit 1; \
+		else \
+			echo "  [OK] All mandatory packages already present"; \
+		fi; \
+	fi
+	@echo ""
+	@# --- Verify mandatory packages ---
+	@echo "--- Verifying mandatory packages ---"
+	@FAIL=0; \
+	command -v gcc >/dev/null 2>&1 \
+		&& echo "  [OK] gcc: $$(gcc --version | head -1)" \
+		|| { echo "  [FAIL] gcc not found"; FAIL=1; }; \
+	command -v g++ >/dev/null 2>&1 \
+		&& echo "  [OK] g++: $$(g++ --version | head -1)" \
+		|| { echo "  [FAIL] g++ not found"; FAIL=1; }; \
+	command -v make >/dev/null 2>&1 \
+		&& echo "  [OK] make: $$(make --version | head -1)" \
+		|| { echo "  [FAIL] make not found"; FAIL=1; }; \
+	command -v pkg-config >/dev/null 2>&1 \
+		&& echo "  [OK] pkg-config: $$(pkg-config --version)" \
+		|| { echo "  [FAIL] pkg-config not found"; FAIL=1; }; \
+	command -v python3 >/dev/null 2>&1 \
+		&& echo "  [OK] python3: $$(python3 --version 2>&1)" \
+		|| { echo "  [FAIL] python3 not found"; FAIL=1; }; \
+	pkg-config --exists liburing 2>/dev/null \
+		&& echo "  [OK] liburing: $$(pkg-config --modversion liburing)" \
+		|| { echo "  [FAIL] liburing-dev not found"; FAIL=1; }; \
+	if [ "$$FAIL" -ne 0 ]; then \
+		echo ""; \
+		echo "  Mandatory packages missing. Cannot continue."; \
+		exit 1; \
+	fi
+	@echo ""
+	@# --- Optional: Rust toolchain ---
+	@echo "--- Rust toolchain (optional — needed for: make rust, make rust-test) ---"
+	@if command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then \
+		echo "  [OK] rustc: $$(rustc --version)"; \
+		echo "  [OK] cargo: $$(cargo --version)"; \
+	else \
+		printf "  Install Rust toolchain? (y/N): "; \
+		read REPLY; \
+		case "$$REPLY" in \
+			[yY]|[yY][eE][sS]) \
+				echo "  Installing Rust..."; \
+				if command -v sudo >/dev/null 2>&1; then \
+					sudo apt-get install -y libclang-dev \
+						&& echo "  [OK] libclang-dev installed (needed by bindgen)" \
+						|| echo "  [WARN] Failed to install libclang-dev"; \
+				else \
+					echo "  [WARN] No sudo — skipping libclang-dev (install manually if needed)"; \
+				fi; \
+				if command -v curl >/dev/null 2>&1; then \
+					curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+						&& echo "  [OK] Rust installed — run: . $$HOME/.cargo/env" \
+						|| echo "  [FAIL] Rust installation failed"; \
+				else \
+					echo "  [FAIL] curl not found — install curl or visit https://rustup.rs"; \
+				fi; \
+				;; \
+			*) \
+				echo "  [SKIP] Rust not installed"; \
+				;; \
+		esac; \
+	fi
+	@echo ""
+	@# --- Optional tools status ---
+	@echo "--- Optional tools (install manually as needed) ---"
+	@command -v fio >/dev/null 2>&1 \
+		&& echo "  [OK] fio: $$(fio --version 2>&1)" \
+		|| echo "  [--] fio (apt-get install fio)"
+	@command -v valgrind >/dev/null 2>&1 \
+		&& echo "  [OK] valgrind: $$(valgrind --version 2>&1)" \
+		|| echo "  [--] valgrind (apt-get install valgrind)"
+	@command -v perf >/dev/null 2>&1 \
+		&& echo "  [OK] perf: $$(perf version 2>&1 | head -1)" \
+		|| echo "  [--] perf (apt-get install linux-tools-common linux-tools-$$(uname -r))"
+	@command -v strace >/dev/null 2>&1 \
+		&& echo "  [OK] strace: $$(strace --version 2>&1 | head -1)" \
+		|| echo "  [--] strace (apt-get install strace)"
+	@command -v numactl >/dev/null 2>&1 \
+		&& echo "  [OK] numactl" \
+		|| echo "  [--] numactl (apt-get install numactl)"
+	@command -v iostat >/dev/null 2>&1 \
+		&& echo "  [OK] iostat" \
+		|| echo "  [--] iostat (apt-get install sysstat)"
+	@command -v cppcheck >/dev/null 2>&1 \
+		&& echo "  [OK] cppcheck: $$(cppcheck --version 2>&1)" \
+		|| echo "  [--] cppcheck (apt-get install cppcheck)"
+	@command -v bear >/dev/null 2>&1 \
+		&& echo "  [OK] bear: $$(bear --version 2>&1 | head -1)" \
+		|| echo "  [--] bear (apt-get install bear)"
+	@echo ""
+	@echo "========================================"
+	@echo "Done!"
+	@echo "========================================"
+
+# Check dependencies without installing
 deps-check:
-	@echo "Checking dependencies..."
-	@pkg-config --exists liburing && echo "  liburing: OK" || echo "  liburing: MISSING (apt install liburing-dev)"
-	@echo "  pthread: OK (always available)"
+	@echo "========================================"
+	@echo "AuraIO Dependency Check"
+	@echo "========================================"
+	@echo ""
+	@FAIL=0; WARN=0; \
+	echo "--- Kernel ---"; \
+	KMAJOR=$$(uname -r | cut -d. -f1); \
+	if [ "$$KMAJOR" -lt 6 ] 2>/dev/null; then \
+		echo "  [FAIL] Kernel $$(uname -r) — requires >= 6.0"; FAIL=1; \
+	else \
+		echo "  [OK] Kernel $$(uname -r)"; \
+	fi; \
+	echo ""; \
+	echo "--- Mandatory (C/C++) ---"; \
+	command -v gcc >/dev/null 2>&1 \
+		&& echo "  [OK] gcc: $$(gcc --version | head -1)" \
+		|| { echo "  [FAIL] gcc"; FAIL=1; }; \
+	command -v g++ >/dev/null 2>&1 \
+		&& echo "  [OK] g++: $$(g++ --version | head -1)" \
+		|| { echo "  [FAIL] g++"; FAIL=1; }; \
+	command -v make >/dev/null 2>&1 \
+		&& echo "  [OK] make: $$(make --version | head -1)" \
+		|| { echo "  [FAIL] make"; FAIL=1; }; \
+	command -v pkg-config >/dev/null 2>&1 \
+		&& echo "  [OK] pkg-config: $$(pkg-config --version)" \
+		|| { echo "  [FAIL] pkg-config"; FAIL=1; }; \
+	command -v python3 >/dev/null 2>&1 \
+		&& echo "  [OK] python3: $$(python3 --version 2>&1)" \
+		|| { echo "  [FAIL] python3"; FAIL=1; }; \
+	pkg-config --exists liburing 2>/dev/null \
+		&& echo "  [OK] liburing: $$(pkg-config --modversion liburing)" \
+		|| { echo "  [FAIL] liburing-dev"; FAIL=1; }; \
+	echo "  [OK] pthread (always available)"; \
+	echo ""; \
+	echo "--- Rust (optional) ---"; \
+	command -v rustc >/dev/null 2>&1 \
+		&& echo "  [OK] rustc: $$(rustc --version)" \
+		|| { echo "  [--] rustc: not found"; WARN=1; }; \
+	command -v cargo >/dev/null 2>&1 \
+		&& echo "  [OK] cargo: $$(cargo --version)" \
+		|| { echo "  [--] cargo: not found"; WARN=1; }; \
+	echo ""; \
+	echo "--- Optional tools ---"; \
+	command -v fio >/dev/null 2>&1 \
+		&& echo "  [OK] fio" || echo "  [--] fio"; \
+	command -v valgrind >/dev/null 2>&1 \
+		&& echo "  [OK] valgrind" || echo "  [--] valgrind"; \
+	command -v perf >/dev/null 2>&1 \
+		&& echo "  [OK] perf" || echo "  [--] perf"; \
+	command -v strace >/dev/null 2>&1 \
+		&& echo "  [OK] strace" || echo "  [--] strace"; \
+	command -v numactl >/dev/null 2>&1 \
+		&& echo "  [OK] numactl" || echo "  [--] numactl"; \
+	command -v iostat >/dev/null 2>&1 \
+		&& echo "  [OK] iostat" || echo "  [--] iostat"; \
+	command -v cppcheck >/dev/null 2>&1 \
+		&& echo "  [OK] cppcheck" || echo "  [--] cppcheck"; \
+	command -v bear >/dev/null 2>&1 \
+		&& echo "  [OK] bear" || echo "  [--] bear"; \
+	echo ""; \
+	if [ "$$FAIL" -ne 0 ]; then \
+		echo "RESULT: FAIL — missing mandatory dependencies (run: make deps)"; \
+		exit 1; \
+	elif [ "$$WARN" -ne 0 ]; then \
+		echo "RESULT: OK (some optional tools missing)"; \
+	else \
+		echo "RESULT: ALL OK"; \
+	fi
 
 # =============================================================================
 # Linting and static analysis
@@ -278,7 +490,8 @@ help:
 	@echo "Installation:"
 	@echo "  make install        Install to $(PREFIX) (includes pkg-config)"
 	@echo "  make uninstall      Remove installed files"
-	@echo "  make deps-check     Verify required dependencies"
+	@echo "  make deps           Install required dependencies (sudo apt-get)"
+	@echo "  make deps-check     Check dependencies without installing"
 	@echo ""
 	@echo "Sanitizers:"
 	@echo "  make tsan           Build library with ThreadSanitizer"
@@ -298,7 +511,7 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all test test-all examples install uninstall clean debug deps-check help \
+.PHONY: all test test-all examples install uninstall clean debug deps deps-check help \
         cpp-test cpp-examples \
         rust rust-test rust-examples rust-clean \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
