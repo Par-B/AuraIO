@@ -53,13 +53,11 @@ struct auraio_request {
     void *buffer;                   /**< I/O buffer */
     size_t len;                     /**< I/O size */
 
-    /* Fixed buffer I/O (registered buffers) */
+    /* Fixed buffer + vectored I/O (packed to eliminate holes) */
     int buf_index;                  /**< Registered buffer index */
-    size_t buf_offset;              /**< Offset within registered buffer */
-
-    /* Vectored I/O */
-    const struct iovec *iov;        /**< iovec array for readv/writev */
     int iovcnt;                     /**< Number of iovecs */
+    size_t buf_offset;              /**< Offset within registered buffer */
+    const struct iovec *iov;        /**< iovec array for readv/writev */
 
     /* Callback */
     auraio_callback_t callback;     /**< Completion callback */
@@ -70,11 +68,9 @@ struct auraio_request {
     int ring_idx;                   /**< Which ring owns this request */
     int op_idx;                     /**< Index in ring's request array */
 
-    /* State flags */
+    /* State flags + cancel target (packed to eliminate trailing hole) */
     _Atomic bool pending;           /**< True if still in-flight */
     _Atomic bool cancel_requested;  /**< True if cancellation requested */
-
-    /* For cancel operations: target request */
     auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
 };
 
@@ -118,7 +114,18 @@ typedef struct {
 
     /* Batching state */
     int queued_sqes;                /**< SQEs queued but not submitted */
+
+    /* Latency sampling: only timestamp every Nth submission to reduce
+     * clock_gettime overhead. Non-sampled ops get submit_time_ns=0 and
+     * are skipped in process_completion's adaptive recording. */
+    int sample_counter;             /**< Submission counter for sampling */
 } ring_ctx_t;
+
+/** Sample 1 in N submissions for latency measurement.
+ *  Must be power of 2. With N=8 and 10K IOPS, gives ~1250 samples/sec
+ *  which is sufficient for P99 calculation (needs ~100 per 100ms window). */
+#define RING_LATENCY_SAMPLE_RATE  8
+#define RING_LATENCY_SAMPLE_MASK  (RING_LATENCY_SAMPLE_RATE - 1)
 
 /**
  * Initialize ring context

@@ -52,47 +52,41 @@
  * Contains one ring per CPU core plus shared state.
  */
 struct auraio_engine {
-  /* Ring management */
+  /* Hot path: ring selection (every I/O submission) */
   ring_ctx_t *rings;    /**< Array of ring contexts */
   int ring_count;       /**< Number of rings */
   atomic_int next_ring; /**< Round-robin ring selector */
 
-  /* Buffer pool */
-  buffer_pool_t buffer_pool; /**< Aligned buffer pool */
-
-  /* Event loop integration */
-  int event_fd;               /**< Unified eventfd for all rings */
-
-  /* Event loop control */
+  /* Hot path: shutdown check (every I/O submission) */
+  atomic_bool shutting_down;  /**< Shutdown in progress - reject new submissions */
   atomic_bool running;        /**< Event loop active flag */
   atomic_bool stop_requested; /**< Stop signal */
-  atomic_bool shutting_down;  /**< Shutdown in progress - reject new submissions */
+  atomic_bool tick_running;   /**< Tick thread active */
 
-  /* Adaptive tick thread */
-  pthread_t tick_thread;    /**< Tick thread handle */
-  atomic_bool tick_running; /**< Tick thread active */
+  /* Configuration (read-only after init, packs with bools above) */
+  int queue_depth;           /**< Queue depth per ring */
+  int event_fd;              /**< Unified eventfd for all rings */
+  bool adaptive_enabled;     /**< Adaptive tuning enabled */
+  bool buffers_registered;   /**< True if buffers are registered */
+  bool files_registered;     /**< True if files are registered */
+  bool sqpoll_enabled;       /**< True if SQPOLL is active on any ring */
+
+  /* 8-byte aligned fields */
+  size_t buffer_alignment;   /**< Buffer alignment */
+  pthread_t tick_thread;     /**< Tick thread handle */
 
   /* Aggregated statistics */
-  atomic_llong total_ops;   /**< Total ops completed */
-  atomic_llong total_bytes; /**< Total bytes transferred */
+  atomic_llong total_ops;    /**< Total ops completed */
+  atomic_llong total_bytes;  /**< Total bytes transferred */
 
-  /* Configuration */
-  int queue_depth;           /**< Queue depth per ring */
-  size_t buffer_alignment;   /**< Buffer alignment */
-  bool adaptive_enabled;     /**< Adaptive tuning enabled */
-
-  /* Registered buffers (Phase 5) */
+  /* Registered buffers and files */
   struct iovec *registered_buffers;  /**< Copy of registered buffer iovecs */
-  int registered_buffer_count;       /**< Number of registered buffers */
-  bool buffers_registered;           /**< True if buffers are registered */
-
-  /* Registered files (Phase 5) */
   int *registered_files;             /**< Copy of registered file descriptors */
+  int registered_buffer_count;       /**< Number of registered buffers */
   int registered_file_count;         /**< Number of registered files */
-  bool files_registered;             /**< True if files are registered */
 
-  /* SQPOLL state */
-  bool sqpoll_enabled;               /**< True if SQPOLL is active on any ring */
+  /* Buffer pool (largest member, placed last) */
+  buffer_pool_t buffer_pool; /**< Aligned buffer pool */
 };
 
 /* ============================================================================

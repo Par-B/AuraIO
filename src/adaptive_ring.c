@@ -204,7 +204,8 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -230,7 +231,8 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -256,7 +258,8 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READV;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -282,7 +285,8 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITEV;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -308,7 +312,8 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FSYNC;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -334,7 +339,8 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FDATASYNC;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -364,7 +370,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
 
     req->op_type = AURAIO_OP_CANCEL;
     req->cancel_target = target;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = 0;  /* Cancel ops skip latency tracking */
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -392,7 +398,8 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ_FIXED;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -418,7 +425,8 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE_FIXED;
-    req->submit_time_ns = get_time_ns();
+    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
+                          ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
@@ -465,9 +473,6 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
         return;
     }
 
-    int64_t now_ns = get_time_ns();
-    int64_t latency_ns = now_ns - req->submit_time_ns;
-
     /* Save callback info BEFORE any state changes.
      * The callback may submit new operations that reuse this request slot,
      * so we must capture everything we need before potential reuse. */
@@ -478,30 +483,32 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
     /* Mark as no longer pending */
     atomic_store_explicit(&req->pending, false, memory_order_release);
 
-    /* Record completion for adaptive controller (skip cancel ops) */
-    if (req->op_type != AURAIO_OP_CANCEL) {
+    /* Record completion for adaptive controller.
+     * Skip cancel ops and non-sampled ops (submit_time_ns == 0). */
+    if (req->submit_time_ns != 0) {
+        int64_t now_ns = get_time_ns();
+        int64_t latency_ns = now_ns - req->submit_time_ns;
         size_t bytes = (result > 0) ? (size_t)result : 0;
         adaptive_record_completion(&ctx->adaptive, latency_ns, bytes);
     }
 
-    /* Update counters under lock */
-    pthread_mutex_lock(&ctx->lock);
-    ctx->ops_completed++;
-    ctx->pending_count--;
-    pthread_mutex_unlock(&ctx->lock);
-
     /* Invoke callback WITHOUT holding lock to prevent deadlock.
      * If the callback calls auraio_read/write, it will try to acquire
-     * the lock, which would deadlock with non-recursive mutexes. */
+     * the lock, which would deadlock with non-recursive mutexes.
+     * The req pointer remains valid because ring_put_request hasn't
+     * been called yet. pending is already false (atomic release above). */
     if (callback) {
         callback((auraio_request_t *)req, result, user_data);
     }
 
-    /* Return request slot AFTER callback completes under lock.
-     * This ensures the req pointer passed to callback remains valid
-     * throughout callback execution, preventing use-after-free if
-     * another thread acquires and reuses the slot. */
+    /* After callback: update counters and return slot in one lock region.
+     * pending_count is momentarily inflated by 1 during callback execution,
+     * which may cause a spurious EAGAIN if the ring is exactly at capacity.
+     * This is acceptable: the caller handles EAGAIN gracefully, and the
+     * count is corrected immediately after callback returns. */
     pthread_mutex_lock(&ctx->lock);
+    ctx->ops_completed++;
+    ctx->pending_count--;
     ring_put_request(ctx, op_idx);
     pthread_mutex_unlock(&ctx->lock);
 }

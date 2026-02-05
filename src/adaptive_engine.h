@@ -240,8 +240,10 @@ typedef struct {
     _Atomic int submit_calls;       /**< Submit syscalls this period */
     _Atomic int sqes_submitted;     /**< SQEs submitted this period */
 
-    /* Double-buffered histogram for O(1) reset */
-    adaptive_histogram_pair_t hist_pair;
+    /* Double-buffered histogram for O(1) reset.
+     * Aligned to cacheline boundary to prevent false sharing with
+     * submit_calls/sqes_submitted (written by submit thread). */
+    adaptive_histogram_pair_t hist_pair __attribute__((aligned(64)));
 
     /* Sample period tracking - atomic for thread-safe access */
     _Atomic int64_t sample_start_ns; /**< Current sample start time */

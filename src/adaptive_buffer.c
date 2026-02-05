@@ -170,8 +170,18 @@ static void shard_destroy(buffer_shard_t *shard) {
  * Uses lock-free CAS to register the cache with the pool for cleanup.
  */
 static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
-    /* Safety check: if pool is destroyed, clear stale TLS and return NULL.
-     * This prevents use-after-free when a thread accesses a destroyed pool. */
+    thread_cache_t *cache = tls_cache;
+
+    /* Fast path: already have a valid cache for this pool (no fence needed).
+     * The pool was alive when this cache was created, and pool destruction
+     * is a lifecycle event — the caller must ensure no threads are using
+     * the pool during destruction (same contract as pthread_mutex_destroy). */
+    if (cache && cache->pool == pool) {
+        return cache;
+    }
+
+    /* Slow path: check if pool is destroyed (acquire fence is fine here).
+     * This only runs on first access per thread or pool mismatch. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         if (tls_cache && tls_cache->pool == pool) {
             tls_cache = NULL;
@@ -179,19 +189,8 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
         return NULL;
     }
 
-    thread_cache_t *cache = tls_cache;
-
-    /* Check if we already have a cache for this pool */
-    if (cache && cache->pool == pool) {
-        return cache;
-    }
-
-    /* Walk existing cache to see if it's for a different pool */
+    /* Different pool - bypass cache (rare: usually one pool per engine) */
     if (cache && cache->pool != pool) {
-        /* Thread is accessing a different pool - we need a new cache.
-         * This is rare (usually one pool per engine, one engine per app).
-         * For simplicity, we don't support multiple pools per thread well -
-         * just bypass the cache in this case. */
         return NULL;
     }
 

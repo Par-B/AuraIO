@@ -25,10 +25,10 @@
 #define BUFFER_POOL_DEFAULT_MAX_FREE_PER_SHARD 64
 
 /** Buffers per size class in thread-local cache (power of 2 for efficient batching) */
-#define THREAD_CACHE_SIZE 8
+#define THREAD_CACHE_SIZE 16
 
 /** Batch size when transferring between thread cache and global pool */
-#define THREAD_CACHE_BATCH_SIZE 4
+#define THREAD_CACHE_BATCH_SIZE 8
 
 /** Maximum pool shards (power of 2). Actual count determined at runtime. */
 #define BUFFER_POOL_MAX_SHARDS 64
