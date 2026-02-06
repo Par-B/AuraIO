@@ -171,9 +171,11 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine) {
 
   if (!ring_can_submit(ring)) {
     ring_flush(ring);
-    /* ring_poll() may invoke callbacks which can re-enter submission functions.
-     * process_completion() handles this by releasing the lock around callbacks. */
+    /* Release lock before polling: process_completion() re-acquires ring->lock
+     * to update counters, so holding it here would deadlock. */
+    pthread_mutex_unlock(&ring->lock);
     ring_poll(ring);
+    pthread_mutex_lock(&ring->lock);
 
     if (!ring_can_submit(ring)) {
       pthread_mutex_unlock(&ring->lock);
@@ -232,7 +234,7 @@ static void *tick_thread_func(void *arg) {
   while (atomic_load(&engine->tick_running)) {
     /* Calculate next tick time */
     next_tick.tv_nsec += TICK_INTERVAL_MS * 1000000LL;
-    if (next_tick.tv_nsec >= 1000000000LL) {
+    while (next_tick.tv_nsec >= 1000000000LL) {
       next_tick.tv_sec++;
       next_tick.tv_nsec -= 1000000000LL;
     }
@@ -1260,7 +1262,8 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
     return (-1);
   }
 
-  /* Update in all rings */
+  /* Update in all rings, rolling back on failure */
+  int old_fd = engine->registered_files[index];
   for (int i = 0; i < engine->ring_count; i++) {
     ring_ctx_t *ring = &engine->rings[i];
     pthread_mutex_lock(&ring->lock);
@@ -1268,6 +1271,13 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
     int ret = io_uring_register_files_update(&ring->ring, index, &fd, 1);
     if (ret < 0) {
       pthread_mutex_unlock(&ring->lock);
+      /* Roll back already-updated rings to old fd */
+      for (int j = 0; j < i; j++) {
+        ring_ctx_t *prev_ring = &engine->rings[j];
+        pthread_mutex_lock(&prev_ring->lock);
+        io_uring_register_files_update(&prev_ring->ring, index, &old_fd, 1);
+        pthread_mutex_unlock(&prev_ring->lock);
+      }
       pthread_rwlock_unlock(&engine->reg_lock);
       errno = -ret;
       return (-1);

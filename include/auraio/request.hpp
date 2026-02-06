@@ -68,7 +68,7 @@ public:
 private:
     friend class Engine;
 
-    auraio_request_t* handle_;
+    auraio_request_t* handle_ = nullptr;
 };
 
 } // namespace auraio

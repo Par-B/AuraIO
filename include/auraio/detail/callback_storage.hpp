@@ -145,7 +145,7 @@ private:
     // Must be called with shard.mutex held
     CallbackContext* grow_shard(Shard& shard, size_t shard_idx) {
         size_t old_size = shard.contexts.size();
-        size_t new_size = old_size * 2;
+        size_t new_size = (old_size == 0) ? 16 : old_size * 2;
         shard.contexts.resize(new_size);
 
         // Initialize new slots as a free list
@@ -187,16 +187,20 @@ private:
     std::array<Shard, kShardCount> shards_;
 };
 
+} // namespace auraio::detail
+
 /**
  * C callback trampoline function
  *
- * This function is passed to the C API and converts the callback
- * to the C++ callback stored in the context.
+ * extern "C" linkage is required because this function pointer is passed
+ * to the C API. Using C++ linkage as a C function pointer is technically UB.
  */
-inline void callback_trampoline(auraio_request_t* req, ssize_t result, void* user_data) {
-    auto* ctx = static_cast<CallbackContext*>(user_data);
+extern "C" inline void auraio_detail_callback_trampoline(
+    auraio_request_t* req, ssize_t result, void* user_data
+) {
+    auto* ctx = static_cast<auraio::detail::CallbackContext*>(user_data);
     if (ctx && ctx->callback) {
-        ctx->request = Request(req);
+        ctx->request = auraio::Request(req);
         ctx->callback(ctx->request, result);
     }
     // Release context immediately via on_complete (O(1) instead of polling)
@@ -204,7 +208,5 @@ inline void callback_trampoline(auraio_request_t* req, ssize_t result, void* use
         ctx->on_complete();
     }
 }
-
-} // namespace auraio::detail
 
 #endif // AURAIO_DETAIL_CALLBACK_STORAGE_HPP

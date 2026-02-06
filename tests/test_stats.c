@@ -56,7 +56,7 @@ static void io_teardown(void) {
     unlink(test_file);
 }
 
-static volatile int callback_called;
+static _Atomic int callback_called;
 
 static void test_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;

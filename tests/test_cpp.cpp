@@ -366,7 +366,7 @@ TEST(read_basic) {
     bool completed = false;
     ssize_t bytes_read = 0;
 
-    engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
         completed = true;
         bytes_read = result;
     });
@@ -391,7 +391,7 @@ TEST(read_with_capture) {
     std::string captured_message = "not set";
     int captured_value = 0;
 
-    engine.read(file.fd(), buffer, 4096, 0, [&captured_message, &captured_value](auraio::Request&, ssize_t result) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&captured_message, &captured_value](auraio::Request&, ssize_t result) {
         captured_message = "completed";
         captured_value = static_cast<int>(result);
     });
@@ -414,7 +414,7 @@ TEST(write_basic) {
     bool completed = false;
     ssize_t bytes_written = 0;
 
-    engine.write(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.write(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
         completed = true;
         bytes_written = result;
     });
@@ -431,7 +431,7 @@ TEST(fsync_basic) {
     auraio::Engine engine;
     bool completed = false;
 
-    engine.fsync(file.fd(), [&](auraio::Request&, ssize_t result) {
+    (void)engine.fsync(file.fd(), [&](auraio::Request&, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -447,7 +447,7 @@ TEST(fdatasync_basic) {
     auraio::Engine engine;
     bool completed = false;
 
-    engine.fdatasync(file.fd(), [&](auraio::Request&, ssize_t result) {
+    (void)engine.fdatasync(file.fd(), [&](auraio::Request&, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -472,7 +472,7 @@ TEST(readv_basic) {
     bool completed = false;
     ssize_t total_read = 0;
 
-    engine.readv(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.readv(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
         completed = true;
         total_read = result;
     });
@@ -501,7 +501,7 @@ TEST(writev_basic) {
     bool completed = false;
     ssize_t total_written = 0;
 
-    engine.writev(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.writev(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
         completed = true;
         total_written = result;
     });
@@ -523,12 +523,12 @@ TEST(poll_processes_completions) {
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
-    engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
         completed = true;
     });
 
-    // Poll until complete
-    while (!completed) {
+    // Poll until complete (bounded to prevent hang)
+    for (int i = 0; i < 5000 && !completed; i++) {
         engine.poll();
         usleep(1000);
     }
@@ -544,7 +544,7 @@ TEST(wait_blocks) {
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
-    engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
         completed = true;
     });
 
@@ -566,14 +566,14 @@ TEST(multiple_concurrent_ops) {
 
     int completed = 0;
 
-    engine.read(file.fd(), buf1, 4096, 0, [&](auraio::Request&, ssize_t) { completed++; });
-    engine.read(file.fd(), buf2, 4096, 4096, [&](auraio::Request&, ssize_t) { completed++; });
-    engine.read(file.fd(), buf3, 4096, 8192, [&](auraio::Request&, ssize_t) { completed++; });
-    engine.read(file.fd(), buf4, 4096, 12288, [&](auraio::Request&, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf1, 4096, 0, [&](auraio::Request&, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf2, 4096, 4096, [&](auraio::Request&, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf3, 4096, 8192, [&](auraio::Request&, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf4, 4096, 12288, [&](auraio::Request&, ssize_t) { completed++; });
 
-    // Wait for all
-    while (completed < 4) {
-        engine.wait();
+    // Wait for all (bounded to prevent hang)
+    for (int i = 0; i < 100 && completed < 4; i++) {
+        engine.wait(100);
     }
 
     ASSERT_EQ(completed, 4);

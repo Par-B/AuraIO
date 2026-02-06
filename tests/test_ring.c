@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 
 #include "../include/auraio.h"
@@ -145,8 +146,8 @@ TEST(ring_should_flush) {
 }
 
 /* Callback flag for async tests */
-static volatile int callback_called = 0;
-static volatile ssize_t callback_result = 0;
+static _Atomic int callback_called = 0;
+static _Atomic ssize_t callback_result = 0;
 
 static void test_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -883,7 +884,7 @@ TEST(auraio_fsync_both_modes) {
  * Event Loop Tests
  * ============================================================================ */
 
-static volatile int run_stop_callback_count = 0;
+static _Atomic int run_stop_callback_count = 0;
 
 static void run_stop_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -1213,8 +1214,8 @@ TEST(shutdown_drains_pending_ops) {
     /* Destroy should complete cleanly */
     auraio_destroy(engine);
 
-    /* Callbacks should have been called for all 5 */
-    assert(callback_called >= 1);  /* At least some should complete */
+    /* All 5 operations should have completed */
+    assert(total >= 5);
 
     teardown();
 }

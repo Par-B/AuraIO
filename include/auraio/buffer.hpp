@@ -9,7 +9,9 @@
 #include <auraio.h>
 #include <auraio/fwd.hpp>
 #include <span>
+#include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace auraio {
@@ -215,6 +217,8 @@ public:
      */
     template<typename T>
     [[nodiscard]] std::span<T> as() noexcept {
+        assert(reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) == 0 &&
+               "Buffer not aligned for requested type");
         return {static_cast<T*>(ptr_), size_ / sizeof(T)};
     }
 
@@ -225,6 +229,8 @@ public:
      */
     template<typename T>
     [[nodiscard]] std::span<const T> as() const noexcept {
+        assert(reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) == 0 &&
+               "Buffer not aligned for requested type");
         return {static_cast<const T*>(ptr_), size_ / sizeof(T)};
     }
 

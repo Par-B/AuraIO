@@ -178,6 +178,9 @@ public:
                 if (std::holds_alternative<std::exception_ptr>(result)) {
                     std::rethrow_exception(std::get<std::exception_ptr>(result));
                 }
+                if (!std::holds_alternative<T>(result)) {
+                    throw std::logic_error("Task result not available");
+                }
                 return std::move(std::get<T>(result));
             }
         };
@@ -263,7 +266,9 @@ public:
             throw std::logic_error("Task not complete");
         }
         if (handle_.promise().exception) {
-            std::rethrow_exception(handle_.promise().exception);
+            auto ex = handle_.promise().exception;
+            handle_.promise().exception = nullptr;
+            std::rethrow_exception(ex);
         }
     }
 
@@ -368,30 +373,40 @@ private:
 namespace auraio {
 
 inline void IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (is_write_) {
-        engine_.write(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
-            result_ = result;
-            handle.resume();
-        });
-    } else {
-        engine_.read(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
-            result_ = result;
-            handle.resume();
-        });
+    try {
+        if (is_write_) {
+            (void)engine_.write(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
+                result_ = result;
+                handle.resume();
+            });
+        } else {
+            (void)engine_.read(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
+                result_ = result;
+                handle.resume();
+            });
+        }
+    } catch (const Error& e) {
+        result_ = -e.code();
+        handle.resume();
     }
 }
 
 inline void FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
-    if (datasync_) {
-        engine_.fdatasync(fd_, [this, handle](Request&, ssize_t result) {
-            result_ = result;
-            handle.resume();
-        });
-    } else {
-        engine_.fsync(fd_, [this, handle](Request&, ssize_t result) {
-            result_ = result;
-            handle.resume();
-        });
+    try {
+        if (datasync_) {
+            (void)engine_.fdatasync(fd_, [this, handle](Request&, ssize_t result) {
+                result_ = result;
+                handle.resume();
+            });
+        } else {
+            (void)engine_.fsync(fd_, [this, handle](Request&, ssize_t result) {
+                result_ = result;
+                handle.resume();
+            });
+        }
+    } catch (const Error& e) {
+        result_ = -e.code();
+        handle.resume();
     }
 }
 

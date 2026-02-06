@@ -75,7 +75,13 @@ public:
         if (!handle_) {
             throw Error(errno, "auraio_create");
         }
-        pool_ = std::make_unique<detail::CallbackPool>(handle_);
+        try {
+            pool_ = std::make_unique<detail::CallbackPool>(handle_);
+        } catch (...) {
+            auraio_destroy(handle_);
+            handle_ = nullptr;
+            throw;
+        }
     }
 
     /**
@@ -88,7 +94,13 @@ public:
         if (!handle_) {
             throw Error(errno, "auraio_create_with_options");
         }
-        pool_ = std::make_unique<detail::CallbackPool>(handle_);
+        try {
+            pool_ = std::make_unique<detail::CallbackPool>(handle_);
+        } catch (...) {
+            auraio_destroy(handle_);
+            handle_ = nullptr;
+            throw;
+        }
     }
 
     /**
@@ -142,13 +154,13 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* read(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
+    [[nodiscard]] Request* read(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_read(
             handle_, fd, buf.c_buf(), len, offset,
-            detail::callback_trampoline, ctx
+            auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -157,8 +169,9 @@ public:
         }
 
         // Set up O(1) cleanup via on_complete callback
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
 
         ctx->request = Request(req);
@@ -178,13 +191,13 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* write(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
+    [[nodiscard]] Request* write(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_write(
             handle_, fd, buf.c_buf(), len, offset,
-            detail::callback_trampoline, ctx
+            auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -192,8 +205,9 @@ public:
             throw Error(errno, "auraio_write");
         }
 
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
         ctx->request = Request(req);
         return &ctx->request;
@@ -211,13 +225,13 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* readv(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
+    [[nodiscard]] Request* readv(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_readv(
             handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
-            detail::callback_trampoline, ctx
+            auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -225,8 +239,9 @@ public:
             throw Error(errno, "auraio_readv");
         }
 
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
         ctx->request = Request(req);
         return &ctx->request;
@@ -244,13 +259,13 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* writev(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
+    [[nodiscard]] Request* writev(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_writev(
             handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
-            detail::callback_trampoline, ctx
+            auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -258,8 +273,9 @@ public:
             throw Error(errno, "auraio_writev");
         }
 
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
         ctx->request = Request(req);
         return &ctx->request;
@@ -275,12 +291,12 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* fsync(int fd, F&& callback) {
+    [[nodiscard]] Request* fsync(int fd, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_fsync(
-            handle_, fd, detail::callback_trampoline, ctx
+            handle_, fd, auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -288,8 +304,9 @@ public:
             throw Error(errno, "auraio_fsync");
         }
 
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
         ctx->request = Request(req);
         return &ctx->request;
@@ -305,13 +322,13 @@ public:
      * @throws Error on submission failure
      */
     template<Callback F>
-    Request* fdatasync(int fd, F&& callback) {
+    [[nodiscard]] Request* fdatasync(int fd, F&& callback) {
         auto* ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auraio_request_t* req = auraio_fsync_ex(
             handle_, fd, AURAIO_FSYNC_DATASYNC,
-            detail::callback_trampoline, ctx
+            auraio_detail_callback_trampoline, ctx
         );
 
         if (!req) {
@@ -319,8 +336,9 @@ public:
             throw Error(errno, "auraio_fsync_ex");
         }
 
-        ctx->on_complete = [this, ctx]() {
-            pool_->release(ctx);
+        auto* pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() {
+            pool_ptr->release(ctx);
         };
         ctx->request = Request(req);
         return &ctx->request;
