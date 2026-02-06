@@ -446,6 +446,23 @@ public:
         auraio_stop(handle_);
     }
 
+    /**
+     * Drain all pending I/O operations
+     *
+     * Waits until all in-flight operations have completed.
+     *
+     * @param timeout_ms Maximum wait time (-1 = forever, 0 = non-blocking)
+     * @return Total completions processed
+     * @throws Error on timeout or failure
+     */
+    int drain(int timeout_ms = -1) {
+        int n = auraio_drain(handle_, timeout_ms);
+        if (n < 0) {
+            throw Error(errno, "auraio_drain");
+        }
+        return n;
+    }
+
     // =========================================================================
     // Buffer Management
     // =========================================================================

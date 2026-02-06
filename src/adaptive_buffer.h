@@ -12,6 +12,7 @@
 #define ADAPTIVE_BUFFER_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
 
@@ -62,6 +63,7 @@ struct buffer_pool;
  */
 typedef struct thread_cache {
     struct buffer_pool *pool;   /**< Parent pool (for slow path) */
+    uint64_t pool_id;           /**< Pool generation ID (detect stale cache) */
     int shard_id;               /**< Assigned shard for slow-path operations */
     void *buffers[BUFFER_SIZE_CLASSES][THREAD_CACHE_SIZE]; /**< Cached buffers */
     int counts[BUFFER_SIZE_CLASSES];  /**< Buffer count per size class */
@@ -105,6 +107,7 @@ typedef struct buffer_pool {
     buffer_shard_t *shards;                         /**< Dynamically allocated shards */
     int shard_count;                                /**< Number of shards (power of 2) */
     int shard_mask;                                 /**< shard_count - 1 for fast modulo */
+    uint64_t pool_id;                               /**< Unique generation ID (set once at init) */
     size_t alignment;                               /**< Buffer alignment (typically 4096) */
     _Atomic size_t total_allocated;                 /**< Total bytes allocated (atomic) */
     _Atomic size_t total_buffers;                   /**< Total buffer count (atomic) */

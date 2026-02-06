@@ -11,6 +11,7 @@
 #include "adaptive_buffer.h"
 #include "adaptive_engine.h"
 #include "adaptive_ring.h"
+#include "internal.h"
 
 #include <errno.h>
 #include <liburing.h>
@@ -237,9 +238,10 @@ static void *tick_thread_func(void *arg) {
     }
 
     /* Sleep until absolute time - immune to EINTR drift.
-     * TIMER_ABSTIME with valid timespec only fails with EINTR. */
+     * clock_nanosleep returns 0 on success or an error number (not -1).
+     * TIMER_ABSTIME with valid timespec only returns EINTR on signal. */
     while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
-                           &next_tick, NULL) == -1 && errno == EINTR) {
+                           &next_tick, NULL) == EINTR) {
       /* Interrupted by signal, retry */
     }
 
@@ -291,6 +293,21 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
   if (!options) {
     auraio_options_init(&default_opts);
     options = &default_opts;
+  }
+
+  /* Validate options */
+  if (options->queue_depth < 0 || options->queue_depth > 32768) {
+    errno = EINVAL;
+    return NULL;
+  }
+  if (options->buffer_alignment > 0 &&
+      (options->buffer_alignment & (options->buffer_alignment - 1)) != 0) {
+    errno = EINVAL;  /* Must be power of 2 */
+    return NULL;
+  }
+  if (options->ring_count < 0 || options->ring_count > 256) {
+    errno = EINVAL;
+    return NULL;
   }
 
   auraio_engine_t *engine = calloc(1, sizeof(*engine));
@@ -912,13 +929,25 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     pthread_mutex_unlock(&ring->lock);
   }
 
-  /* Find first ring with pending operations and wait on it.
-   * Note: ring_wait and ring_poll manage their own internal locking
-   * via process_completion, so we must NOT hold the lock when calling them. */
+  /* Non-blocking poll ALL rings first to harvest ready completions.
+   * This avoids starvation where only the first ring with pending ops
+   * gets serviced while later rings accumulate completions. */
+  int total = 0;
+  for (int i = 0; i < engine->ring_count; i++) {
+    int n = ring_poll(&engine->rings[i]);
+    if (n > 0) {
+      total += n;
+      atomic_fetch_add(&engine->total_ops, n);
+    }
+  }
+  if (total > 0) {
+    return total;
+  }
+
+  /* Nothing ready - find first ring with pending ops and block on it */
   for (int i = 0; i < engine->ring_count; i++) {
     ring_ctx_t *ring = &engine->rings[i];
 
-    /* Check pending_count under lock, but release before calling ring_wait */
     pthread_mutex_lock(&ring->lock);
     bool has_pending = (ring->pending_count > 0);
     pthread_mutex_unlock(&ring->lock);
@@ -929,11 +958,10 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
       if (completed > 0) {
         atomic_fetch_add(&engine->total_ops, completed);
 
-        /* Also poll other rings (no lock needed - ring_poll manages its own) */
-        for (int j = i + 1; j < engine->ring_count; j++) {
-          ring_ctx_t *other = &engine->rings[j];
-          int more = ring_poll(other);
-
+        /* Also poll all other rings */
+        for (int j = 0; j < engine->ring_count; j++) {
+          if (j == i) continue;
+          int more = ring_poll(&engine->rings[j]);
           if (more > 0) {
             completed += more;
             atomic_fetch_add(&engine->total_ops, more);
@@ -991,6 +1019,54 @@ void auraio_stop(auraio_engine_t *engine) {
     return;
   }
   atomic_store(&engine->stop_requested, true);
+}
+
+int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
+  if (!engine) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  int64_t deadline_ns = 0;
+  if (timeout_ms > 0) {
+    deadline_ns = get_time_ns() + (int64_t)timeout_ms * 1000000LL;
+  }
+
+  int total = 0;
+  for (;;) {
+    /* Check if all rings are drained */
+    bool has_pending = false;
+    for (int i = 0; i < engine->ring_count; i++) {
+      ring_ctx_t *ring = &engine->rings[i];
+      pthread_mutex_lock(&ring->lock);
+      if (ring->pending_count > 0) has_pending = true;
+      pthread_mutex_unlock(&ring->lock);
+      if (has_pending) break;
+    }
+    if (!has_pending) return total;
+
+    /* Calculate remaining timeout for this iteration */
+    int wait_ms;
+    if (timeout_ms < 0) {
+      wait_ms = 100;  /* Poll in 100ms intervals when no deadline */
+    } else if (timeout_ms == 0) {
+      /* Non-blocking: just poll once */
+      int n = auraio_poll(engine);
+      return n > 0 ? total + n : total;
+    } else {
+      int64_t remaining_ns = deadline_ns - get_time_ns();
+      if (remaining_ns <= 0) {
+        errno = ETIMEDOUT;
+        return -1;
+      }
+      wait_ms = (int)(remaining_ns / 1000000LL);
+      if (wait_ms <= 0) wait_ms = 1;
+      if (wait_ms > 100) wait_ms = 100;  /* Cap per-iteration wait */
+    }
+
+    int n = auraio_wait(engine, wait_ms);
+    if (n > 0) total += n;
+  }
 }
 
 /* ============================================================================
@@ -1257,7 +1333,7 @@ void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
   int total_in_flight = 0;
   int total_optimal_inflight = 0;
   int total_batch_size = 0;
-  double max_throughput = 0.0;
+  double total_throughput = 0.0;
   double max_p99 = 0.0;
 
   for (int i = 0; i < engine->ring_count; i++) {
@@ -1268,7 +1344,7 @@ void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
     pthread_mutex_lock(&ring->lock);
 
     stats->ops_completed += ring->ops_completed;
-    stats->bytes_transferred += ring->bytes_submitted;
+    stats->bytes_transferred += ring->bytes_completed;
     total_in_flight += ring->pending_count;
 
     /* Get adaptive controller values */
@@ -1280,9 +1356,7 @@ void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
      * ensuring consistent reads on ARM/PowerPC with weak memory ordering. */
     double throughput = atomic_load_explicit(&ctrl->current_throughput_bps, memory_order_acquire);
     double p99 = atomic_load_explicit(&ctrl->current_p99_ms, memory_order_acquire);
-    if (throughput > max_throughput) {
-      max_throughput = throughput;
-    }
+    total_throughput += throughput;
     if (p99 > max_p99) {
       max_p99 = p99;
     }
@@ -1296,7 +1370,7 @@ void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
   stats->optimal_batch_size = engine->ring_count > 0
                                   ? total_batch_size / engine->ring_count
                                   : 0;
-  stats->current_throughput_bps = max_throughput * engine->ring_count;
+  stats->current_throughput_bps = total_throughput;
   stats->p99_latency_ms = max_p99;
 }
 
@@ -1337,7 +1411,7 @@ int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
   pthread_mutex_lock(&ring->lock);
 
   stats->ops_completed    = ring->ops_completed;
-  stats->bytes_transferred = ring->bytes_submitted;
+  stats->bytes_transferred = ring->bytes_completed;
   stats->pending_count    = ring->pending_count;
   stats->queue_depth      = ring->max_requests;
 

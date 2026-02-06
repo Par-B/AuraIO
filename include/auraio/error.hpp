@@ -9,7 +9,7 @@
 #include <exception>
 #include <string>
 #include <string_view>
-#include <cstring>
+#include <system_error>
 
 namespace auraio {
 
@@ -29,10 +29,13 @@ public:
     explicit Error(int err, std::string_view context = {})
         : code_(err)
     {
+        // Use std::generic_category().message() instead of strerror()
+        // for thread-safety (strerror may use a static buffer)
+        std::string errmsg = std::generic_category().message(err);
         if (context.empty()) {
-            message_ = std::strerror(err);
+            message_ = std::move(errmsg);
         } else {
-            message_ = std::string(context) + ": " + std::strerror(err);
+            message_ = std::string(context) + ": " + errmsg;
         }
     }
 

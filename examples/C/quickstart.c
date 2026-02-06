@@ -89,7 +89,7 @@ int main(void) {
 
     /* Verify result */
     if (read_result > 0) {
-        printf("Data read: %s", (char *)buf);
+        printf("Data read: %.*s", (int)read_result, (char *)buf);
     }
 
     /* Cleanup */

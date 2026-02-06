@@ -290,7 +290,7 @@ typedef struct {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf(void *ptr) {
-  auraio_buf_t buf;
+  auraio_buf_t buf = {0};
   buf.type = AURAIO_BUF_UNREGISTERED;
   buf.u.ptr = ptr;
   return buf;
@@ -306,7 +306,7 @@ static inline auraio_buf_t auraio_buf(void *ptr) {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
-  auraio_buf_t buf;
+  auraio_buf_t buf = {0};
   buf.type = AURAIO_BUF_REGISTERED;
   buf.u.fixed.index = index;
   buf.u.fixed.offset = offset;
@@ -643,6 +643,20 @@ AURAIO_API void auraio_run(auraio_engine_t *engine);
  * @param engine Engine handle
  */
 AURAIO_API void auraio_stop(auraio_engine_t *engine);
+
+/**
+ * Drain all pending I/O operations
+ *
+ * Waits until all in-flight operations across all rings have completed.
+ * Useful for graceful shutdown or synchronization points.
+ *
+ * @param engine     Engine handle
+ * @param timeout_ms Maximum wait time in milliseconds (-1 = wait forever,
+ *                   0 = non-blocking poll)
+ * @return Total number of completions processed, or -1 on error/timeout
+ *         (errno = ETIMEDOUT if deadline exceeded, EINVAL if engine is NULL)
+ */
+AURAIO_API int auraio_drain(auraio_engine_t *engine, int timeout_ms);
 
 /* ============================================================================
  * Managed Buffers (Optional)

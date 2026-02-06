@@ -121,11 +121,15 @@ void ring_destroy(ring_ctx_t *ctx) {
         return;
     }
 
-    /* Wait for pending operations to complete.
+    /* Wait for pending operations to complete with a timeout.
      * Benign race: pending_count read without lock. Worst case is one extra
-     * ring_wait() iteration, which is acceptable during shutdown. */
-    while (ctx->pending_count > 0) {
+     * ring_wait() iteration, which is acceptable during shutdown.
+     * Timeout after 10 seconds to avoid infinite hang on stuck ops
+     * (e.g., hung NFS mount, stuck SCSI device). */
+    int drain_attempts = 0;
+    while (ctx->pending_count > 0 && drain_attempts < 100) {
         ring_wait(ctx, 100);
+        drain_attempts++;
     }
 
     adaptive_destroy(&ctx->adaptive);
@@ -509,6 +513,9 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
     pthread_mutex_lock(&ctx->lock);
     ctx->ops_completed++;
     ctx->pending_count--;
+    if (result > 0) {
+        ctx->bytes_completed += result;
+    }
     ring_put_request(ctx, op_idx);
     pthread_mutex_unlock(&ctx->lock);
 }

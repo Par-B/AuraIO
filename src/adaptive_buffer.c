@@ -32,6 +32,9 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
+/* Global pool generation counter for unique IDs */
+static _Atomic uint64_t pool_generation_counter = 0;
+
 /* Thread-local cache pointer */
 static __thread thread_cache_t *tls_cache = NULL;
 
@@ -172,11 +175,10 @@ static void shard_destroy(buffer_shard_t *shard) {
 static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     thread_cache_t *cache = tls_cache;
 
-    /* Fast path: already have a valid cache for this pool (no fence needed).
-     * The pool was alive when this cache was created, and pool destruction
-     * is a lifecycle event — the caller must ensure no threads are using
-     * the pool during destruction (same contract as pthread_mutex_destroy). */
-    if (cache && cache->pool == pool) {
+    /* Fast path: already have a valid cache for this pool.
+     * Check both pointer and generation ID to detect stale caches from
+     * a previous pool that happened to occupy the same address. */
+    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id) {
         return cache;
     }
 
@@ -201,6 +203,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     }
 
     cache->pool = pool;
+    cache->pool_id = pool->pool_id;
 
     /* Assign shard via round-robin for load balancing */
     cache->shard_id = atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask;
@@ -381,6 +384,7 @@ int buffer_pool_init(buffer_pool_t *pool, size_t alignment) {
     pool->shard_mask = pool->shard_count - 1;
 
     pool->alignment = alignment;
+    pool->pool_id = atomic_fetch_add(&pool_generation_counter, 1);
     atomic_init(&pool->total_allocated, 0);
     atomic_init(&pool->total_buffers, 0);
     atomic_init(&pool->thread_caches, NULL);

@@ -109,7 +109,8 @@ typedef struct {
     adaptive_controller_t adaptive; /**< AIMD controller */
 
     /* Statistics */
-    int64_t bytes_submitted;        /**< Total bytes submitted */
+    int64_t bytes_submitted;        /**< Total bytes requested at submission */
+    int64_t bytes_completed;        /**< Total bytes actually transferred (from CQE results) */
     int64_t ops_completed;          /**< Total ops completed */
 
     /* Batching state */
