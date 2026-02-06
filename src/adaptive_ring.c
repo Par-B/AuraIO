@@ -162,11 +162,12 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     int idx = ctx->free_request_stack[--ctx->free_request_count];
     auraio_request_t *req = &ctx->requests[idx];
 
-    /* Clear previous state but preserve op_idx.
-     * memset(0) is valid for _Atomic bool = false per C11. */
+    /* Clear previous state but preserve op_idx. */
     int saved_idx = req->op_idx;
     memset(req, 0, sizeof(*req));
     req->op_idx = saved_idx;
+    atomic_init(&req->pending, false);
+    atomic_init(&req->cancel_requested, false);
 
     if (op_idx) {
         *op_idx = idx;

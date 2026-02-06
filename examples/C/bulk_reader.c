@@ -44,6 +44,10 @@ typedef struct {
 
 /**
  * Callback invoked when a file read completes.
+ *
+ * Thread-safety: auraio invokes callbacks sequentially from the polling
+ * thread (auraio_wait/auraio_run), so no synchronization is needed for
+ * ctx->bytes_read and other bulk_ctx fields.
  */
 void on_file_read(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;

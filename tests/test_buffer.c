@@ -254,6 +254,7 @@ static const size_t stress_sizes[STRESS_SIZES_COUNT] = {4096, 8192, 16384, 65536
 static void *stress_thread_func(void *arg) {
     int thread_id = *(int *)arg;
     void *buffers[10];
+    size_t buf_sizes[10];  /* Track allocation size for correct free */
     int buf_count = 0;
 
     for (int i = 0; i < STRESS_ITERATIONS; i++) {
@@ -266,23 +267,23 @@ static void *stress_thread_func(void *arg) {
             if (buf) {
                 /* Write to verify it's valid memory */
                 memset(buf, (unsigned char)(thread_id + i), size < 256 ? size : 256);
-                buffers[buf_count++] = buf;
+                buffers[buf_count] = buf;
+                buf_sizes[buf_count] = size;
+                buf_count++;
             }
         }
 
         /* Randomly free some */
         if (buf_count > 5 || (i % 3 == 0 && buf_count > 0)) {
             buf_count--;
-            buffer_pool_free(stress_pool, buffers[buf_count],
-                             stress_sizes[(thread_id + buf_count) % STRESS_SIZES_COUNT]);
+            buffer_pool_free(stress_pool, buffers[buf_count], buf_sizes[buf_count]);
         }
     }
 
     /* Free remaining */
     while (buf_count > 0) {
         buf_count--;
-        buffer_pool_free(stress_pool, buffers[buf_count],
-                         stress_sizes[(thread_id + buf_count) % STRESS_SIZES_COUNT]);
+        buffer_pool_free(stress_pool, buffers[buf_count], buf_sizes[buf_count]);
     }
 
     return NULL;

@@ -27,6 +27,7 @@
 #define AURAIO_H
 
 #include <stdbool.h>
+#include <string.h>
 
 /* ============================================================================
  * Version Information
@@ -218,6 +219,7 @@ typedef struct {
  * Initialize with auraio_options_init() before modifying.
  */
 typedef struct {
+  size_t struct_size;        /**< Set by auraio_options_init(); for ABI forward-compatibility */
   int queue_depth;           /**< Queue depth per ring (default: 256) */
   int ring_count;            /**< Number of rings, 0 = auto (one per CPU) */
   int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4) */
@@ -290,7 +292,8 @@ typedef struct {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf(void *ptr) {
-  auraio_buf_t buf = {0};
+  auraio_buf_t buf;
+  memset(&buf, 0, sizeof(buf));
   buf.type = AURAIO_BUF_UNREGISTERED;
   buf.u.ptr = ptr;
   return buf;
@@ -306,7 +309,12 @@ static inline auraio_buf_t auraio_buf(void *ptr) {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
-  auraio_buf_t buf = {0};
+  auraio_buf_t buf;
+  memset(&buf, 0, sizeof(buf));
+  if (index < 0) {
+    /* Return unregistered null buffer as sentinel for invalid index */
+    return buf;
+  }
   buf.type = AURAIO_BUF_REGISTERED;
   buf.u.fixed.index = index;
   buf.u.fixed.offset = offset;

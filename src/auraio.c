@@ -265,6 +265,7 @@ void auraio_options_init(auraio_options_t *options) {
   }
 
   memset(options, 0, sizeof(*options));
+  options->struct_size = sizeof(auraio_options_t);
   options->queue_depth = DEFAULT_QUEUE_DEPTH;
   options->ring_count = 0;  /* Auto-detect */
   options->initial_in_flight = 0;  /* Auto: queue_depth / 4 */
@@ -419,6 +420,7 @@ cleanup_rings:
 cleanup_buffer_pool:
   buffer_pool_destroy(&engine->buffer_pool);
 cleanup_engine:
+  pthread_rwlock_destroy(&engine->reg_lock);
   free(engine);
   return NULL;
 }
@@ -1111,12 +1113,12 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
   }
 
   /* Store a copy of the iovecs for later use in read/write_fixed */
-  engine->registered_buffers = malloc(count * sizeof(struct iovec));
+  engine->registered_buffers = malloc((size_t)count * sizeof(struct iovec));
   if (!engine->registered_buffers) {
     pthread_rwlock_unlock(&engine->reg_lock);
     return (-1);
   }
-  memcpy(engine->registered_buffers, iovs, count * sizeof(struct iovec));
+  memcpy(engine->registered_buffers, iovs, (size_t)count * sizeof(struct iovec));
   engine->registered_buffer_count = count;
 
   /* Register with all rings - they share the registration */
@@ -1199,12 +1201,12 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
   }
 
   /* Store a copy of the fds */
-  engine->registered_files = malloc(count * sizeof(int));
+  engine->registered_files = malloc((size_t)count * sizeof(int));
   if (!engine->registered_files) {
     pthread_rwlock_unlock(&engine->reg_lock);
     return (-1);
   }
-  memcpy(engine->registered_files, fds, count * sizeof(int));
+  memcpy(engine->registered_files, fds, (size_t)count * sizeof(int));
   engine->registered_file_count = count;
 
   /* Register with all rings */

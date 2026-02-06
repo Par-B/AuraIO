@@ -32,10 +32,14 @@ public:
     BufferRef(void* ptr) noexcept : buf_(auraio_buf(ptr)) {}
 
     /**
-     * Construct from const raw pointer (unregistered buffer)
-     * @param ptr Buffer pointer
+     * Construct from const raw pointer (for write operations only)
+     *
+     * Explicit to prevent accidental use with read operations, which
+     * would write into the buffer and cause undefined behavior.
+     *
+     * @param ptr Buffer pointer (must not be used with read operations)
      */
-    BufferRef(const void* ptr) noexcept
+    explicit BufferRef(const void* ptr) noexcept
         : buf_(auraio_buf(const_cast<void*>(ptr))) {}
 
     /**
@@ -254,20 +258,30 @@ public:
     [[nodiscard]] bool owned() const noexcept { return owned_; }
 
     /**
+     * Result of releasing buffer ownership
+     */
+    struct ReleasedBuffer {
+        void* data;               /**< Buffer pointer */
+        size_t size;              /**< Buffer size in bytes */
+        auraio_engine_t* engine;  /**< Engine that owns the pool (nullptr if not pool-allocated) */
+    };
+
+    /**
      * Release ownership of buffer
      *
      * After calling release(), the Buffer will not free the memory
-     * on destruction. Caller becomes responsible for freeing.
+     * on destruction. Caller becomes responsible for freeing via
+     * auraio_buffer_free(released.engine, released.data, released.size).
      *
-     * @return Pointer to buffer data
+     * @return ReleasedBuffer with pointer, size, and engine needed for freeing
      */
-    [[nodiscard]] void* release() noexcept {
-        void* p = ptr_;
+    [[nodiscard]] ReleasedBuffer release() noexcept {
+        ReleasedBuffer released{ptr_, size_, engine_};
         ptr_ = nullptr;
         size_ = 0;
         owned_ = false;
         engine_ = nullptr;
-        return p;
+        return released;
     }
 
 private:

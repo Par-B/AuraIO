@@ -123,6 +123,10 @@ private:
 
     void init_shard(size_t shard_idx, size_t initial_size) {
         Shard& shard = shards_[shard_idx];
+        if (initial_size == 0) {
+            shard.free_head = -1;
+            return;
+        }
         shard.contexts.resize(initial_size);
         shard.free_head = 0;
 
@@ -192,8 +196,8 @@ private:
 inline void callback_trampoline(auraio_request_t* req, ssize_t result, void* user_data) {
     auto* ctx = static_cast<CallbackContext*>(user_data);
     if (ctx && ctx->callback) {
-        Request cpp_req(req);
-        ctx->callback(cpp_req, result);
+        ctx->request = Request(req);
+        ctx->callback(ctx->request, result);
     }
     // Release context immediately via on_complete (O(1) instead of polling)
     if (ctx && ctx->on_complete) {

@@ -1314,8 +1314,8 @@ TEST(load_many_concurrent_reads) {
         }
     }
 
-    /* Most or all should complete */
-    assert(concurrent_callback_count >= submitted / 2);
+    /* All submitted ops should complete */
+    assert(concurrent_callback_count >= submitted - 1);
 
     for (int i = 0; i < NUM_OPS; i++) {
         auraio_buffer_free(engine, bufs[i], 4096);
@@ -1361,8 +1361,8 @@ TEST(load_mixed_read_write) {
         }
     }
 
-    /* Most should complete */
-    assert(concurrent_callback_count >= submitted / 2);
+    /* All submitted ops should complete */
+    assert(concurrent_callback_count >= submitted - 1);
 
     for (int i = 0; i < NUM_OPS; i++) {
         auraio_buffer_free(engine, bufs[i], 4096);
@@ -1408,7 +1408,7 @@ TEST(load_vectored_io) {
         }
     }
 
-    assert(concurrent_callback_count >= submitted / 2);
+    assert(concurrent_callback_count >= submitted - 1);
 
     for (int i = 0; i < NUM_OPS; i++) {
         for (int j = 0; j < 3; j++) {
@@ -1417,6 +1417,81 @@ TEST(load_vectored_io) {
     }
     auraio_destroy(engine);
     teardown();
+}
+
+/* ============================================================================
+ * Drain Tests
+ * ============================================================================ */
+
+static int drain_callback_count = 0;
+
+static void drain_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)req; (void)result; (void)user_data;
+    drain_callback_count++;
+}
+
+TEST(drain_basic) {
+    setup();
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    drain_callback_count = 0;
+
+    /* Submit some reads */
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, drain_callback, NULL);
+    assert(req != NULL);
+
+    /* Drain with generous timeout - should complete */
+    int n = auraio_drain(engine, 5000);
+    assert(n >= 0);
+    assert(drain_callback_count == 1);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(drain_already_empty) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Drain with no pending ops should return 0 immediately */
+    int n = auraio_drain(engine, 1000);
+    assert(n == 0);
+
+    auraio_destroy(engine);
+}
+
+TEST(drain_nonblocking) {
+    setup();
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    drain_callback_count = 0;
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+    auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, drain_callback, NULL);
+
+    /* Non-blocking drain (timeout=0) - may or may not complete */
+    int n = auraio_drain(engine, 0);
+    assert(n >= 0);  /* Should not return error */
+
+    /* Drain remaining with timeout */
+    auraio_drain(engine, 5000);
+    assert(drain_callback_count == 1);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(drain_null_engine) {
+    int n = auraio_drain(NULL, 1000);
+    assert(n == -1);
+    assert(errno == EINVAL);
 }
 
 /* ============================================================================
@@ -1496,6 +1571,12 @@ int main(void) {
     RUN_TEST(load_many_concurrent_reads);
     RUN_TEST(load_mixed_read_write);
     RUN_TEST(load_vectored_io);
+
+    /* Drain tests */
+    RUN_TEST(drain_basic);
+    RUN_TEST(drain_already_empty);
+    RUN_TEST(drain_nonblocking);
+    RUN_TEST(drain_null_engine);
 
     /* Version API tests */
     RUN_TEST(version_api);

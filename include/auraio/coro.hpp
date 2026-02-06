@@ -62,13 +62,25 @@ class Task {
 public:
     struct promise_type {
         std::variant<std::monostate, T, std::exception_ptr> result;
+        std::coroutine_handle<> continuation_;  /**< Caller to resume on completion */
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         std::suspend_always initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+
+        struct FinalAwaiter {
+            bool await_ready() const noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                if (h.promise().continuation_) {
+                    return h.promise().continuation_;
+                }
+                return std::noop_coroutine();
+            }
+            void await_resume() noexcept {}
+        };
+        FinalAwaiter final_suspend() noexcept { return {}; }
 
         void return_value(T value) {
             result = std::move(value);
@@ -136,7 +148,12 @@ public:
         if (std::holds_alternative<std::exception_ptr>(result)) {
             std::rethrow_exception(std::get<std::exception_ptr>(result));
         }
-        return std::move(std::get<T>(result));
+        if (!std::holds_alternative<T>(result)) {
+            throw std::logic_error("Task result already consumed");
+        }
+        T value = std::move(std::get<T>(result));
+        result = std::monostate{};
+        return value;
     }
 
     /**
@@ -151,7 +168,8 @@ public:
 
             bool await_ready() const noexcept { return handle.done(); }
 
-            std::coroutine_handle<> await_suspend([[maybe_unused]] std::coroutine_handle<> caller) noexcept {
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+                handle.promise().continuation_ = caller;
                 return handle;
             }
 
@@ -178,13 +196,25 @@ class Task<void> {
 public:
     struct promise_type {
         std::exception_ptr exception;
+        std::coroutine_handle<> continuation_;  /**< Caller to resume on completion */
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         std::suspend_always initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+
+        struct FinalAwaiter {
+            bool await_ready() const noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                if (h.promise().continuation_) {
+                    return h.promise().continuation_;
+                }
+                return std::noop_coroutine();
+            }
+            void await_resume() noexcept {}
+        };
+        FinalAwaiter final_suspend() noexcept { return {}; }
 
         void return_void() {}
 
@@ -246,7 +276,8 @@ public:
 
             bool await_ready() const noexcept { return handle.done(); }
 
-            std::coroutine_handle<> await_suspend([[maybe_unused]] std::coroutine_handle<> caller) noexcept {
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+                handle.promise().continuation_ = caller;
                 return handle;
             }
 

@@ -409,7 +409,11 @@ public:
      * @return Number of completions processed
      */
     int poll() {
-        return auraio_poll(handle_);
+        int n = auraio_poll(handle_);
+        if (n < 0) {
+            throw Error(errno, "auraio_poll");
+        }
+        return n;
     }
 
     /**
