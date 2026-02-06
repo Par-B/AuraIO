@@ -34,7 +34,7 @@
 #define THREAD_CACHE_BATCH_SIZE 8
 
 /** Maximum pool shards (power of 2). Actual count determined at runtime. */
-#define BUFFER_POOL_MAX_SHARDS 64
+#define BUFFER_POOL_MAX_SHARDS 256
 
 /** Minimum pool shards (even on single-core systems) */
 #define BUFFER_POOL_MIN_SHARDS 2
@@ -78,7 +78,7 @@ typedef struct thread_cache {
  * Pool shard
  *
  * Each shard has its own lock and bucket list to reduce contention.
- * With 64 shards, even 500 cores only have ~8 threads per shard on average.
+ * With 256 shards, even 1000+ cores only have ~4 threads per shard on average.
  */
 typedef struct {
     pthread_mutex_t lock;                           /**< Shard lock */
@@ -105,7 +105,8 @@ typedef struct {
  * - 4 cores  → 2 shards  (minimal overhead)
  * - 16 cores → 4 shards
  * - 64 cores → 16 shards
- * - 256 cores → 64 shards (max)
+ * - 256 cores → 64 shards
+ * - 1024 cores → 256 shards (max)
  */
 typedef struct buffer_pool {
     buffer_shard_t *shards;                         /**< Dynamically allocated shards */

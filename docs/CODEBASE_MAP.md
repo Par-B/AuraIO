@@ -436,7 +436,7 @@ posix_memalign (slow path)
 
 **Size Classes**: 16 classes from 4KB to 128MB (power-of-2)
 
-**Auto-Scaling Shards**: 2-64 shards based on core count
+**Auto-Scaling Shards**: 2-256 shards based on core count
 
 **Patterns**:
 - `__builtin_clzl()` for O(1) size-to-class mapping

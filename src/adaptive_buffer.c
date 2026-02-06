@@ -13,7 +13,8 @@
  * 2. Sharded global pool: Shard count scales with CPU count.
  *    - 4 cores: 2 shards (~3KB overhead)
  *    - 64 cores: 16 shards (~25KB overhead)
- *    - 500 cores: 64 shards (~100KB overhead)
+ *    - 500 cores: 128 shards (~200KB overhead)
+ *    - 1024 cores: 256 shards (~400KB overhead)
  *
  * 3. Lock-free cache registration: Thread caches are registered via
  *    atomic CAS operations, avoiding a registration bottleneck at startup.
@@ -348,7 +349,9 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
  *   17-32 cores → 8 shards
  *   33-64 cores → 16 shards
  *   65-128 cores → 32 shards
- *   129+ cores  → 64 shards (max)
+ *   129-256 cores → 64 shards
+ *   257-512 cores → 128 shards
+ *   513+ cores    → 256 shards (max)
  */
 static int calculate_shard_count(void) {
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
