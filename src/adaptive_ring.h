@@ -67,11 +67,11 @@ struct auraio_request {
     int64_t submit_time_ns;         /**< Submission timestamp */
     int ring_idx;                   /**< Which ring owns this request */
     int op_idx;                     /**< Index in ring's request array */
+    auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
 
-    /* State flags + cancel target (packed to eliminate trailing hole) */
+    /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending;           /**< True if still in-flight */
     _Atomic bool cancel_requested;  /**< True if cancellation requested */
-    auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
 };
 
 /**

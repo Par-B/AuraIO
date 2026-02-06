@@ -201,53 +201,46 @@ typedef struct {
  * AIMD state machine for tuning I/O parameters.
  */
 typedef struct {
-    /* Current parameters - atomic for thread-safe access from submission threads */
+    /* === Cache line 0: Hot atomics for submit + completion paths ===
+     * All fields accessed per-op are packed here so both the submission
+     * thread (reads limits) and completion thread (updates counters)
+     * only need to fetch a single cache line. */
     _Atomic int current_in_flight_limit;    /**< Current max concurrent ops */
     _Atomic int current_batch_threshold;    /**< Current batch size before submit */
+    _Atomic int submit_calls;               /**< Submit syscalls this period */
+    _Atomic int sqes_submitted;             /**< SQEs submitted this period */
+    _Atomic int64_t sample_start_ns;        /**< Current sample start time */
+    _Atomic int64_t sample_bytes;           /**< Bytes completed this sample */
+    _Atomic double current_p99_ms;          /**< Current sample P99 */
+    _Atomic double current_throughput_bps;  /**< Current throughput */
+    _Atomic adaptive_phase_t phase;         /**< Current phase */
+    int max_queue_depth;                    /**< Upper bound on in-flight */
+    int min_in_flight;                      /**< Lower bound on in-flight */
+    int prev_in_flight_limit;              /**< Previous limit for efficiency ratio */
 
-    /* Bounds */
-    int max_queue_depth;            /**< Upper bound on in-flight */
-    int min_in_flight;              /**< Lower bound on in-flight */
-
-    /* Sliding windows */
-    double p99_window[ADAPTIVE_P99_WINDOW];
-    double throughput_window[ADAPTIVE_THROUGHPUT_WINDOW];
-    double baseline_window[ADAPTIVE_BASELINE_WINDOW];
+    /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
+    double baseline_p99_ms;             /**< Minimum observed P99 */
+    double latency_rise_threshold;      /**< Threshold for latency backoff */
+    double max_p99_ms;                  /**< Hard ceiling on P99 (0 = none) */
+    double prev_throughput_bps;         /**< Previous throughput for efficiency ratio */
+    int warmup_count;                   /**< Samples collected in warmup */
+    int plateau_count;                  /**< Consecutive plateau samples */
+    int steady_count;                   /**< Time in STEADY phase */
+    int spike_count;                    /**< Consecutive latency spikes */
+    int settling_timer;                 /**< Time in SETTLING phase */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;
 
-    /* Computed values - atomic for thread-safe access from stats reader */
-    double baseline_p99_ms;             /**< Minimum observed P99 */
-    _Atomic double current_p99_ms;      /**< Current sample P99 */
-    _Atomic double current_throughput_bps; /**< Current throughput */
-    double latency_rise_threshold;      /**< Threshold for latency backoff */
-    double max_p99_ms;                  /**< Hard ceiling on P99 (0 = none) */
-
-    /* AIMD state — phase is atomic for thread-safe stats reads */
-    _Atomic adaptive_phase_t phase; /**< Current phase */
-    int warmup_count;               /**< Samples collected in warmup */
-    int plateau_count;              /**< Consecutive plateau samples */
-    int steady_count;               /**< Time in STEADY phase */
-    int spike_count;                /**< Consecutive latency spikes */
-    int settling_timer;             /**< Time in SETTLING phase */
-
-    /* Previous values for efficiency ratio */
-    double prev_throughput_bps;
-    int prev_in_flight_limit;
-
-    /* Batch optimization - atomic for thread-safe access */
-    _Atomic int submit_calls;       /**< Submit syscalls this period */
-    _Atomic int sqes_submitted;     /**< SQEs submitted this period */
+    /* Sliding windows (cold, only accessed during tick) */
+    double p99_window[ADAPTIVE_P99_WINDOW];
+    double throughput_window[ADAPTIVE_THROUGHPUT_WINDOW];
+    double baseline_window[ADAPTIVE_BASELINE_WINDOW];
 
     /* Double-buffered histogram for O(1) reset.
      * Aligned to cacheline boundary to prevent false sharing with
-     * submit_calls/sqes_submitted (written by submit thread). */
+     * the sliding windows above. */
     adaptive_histogram_pair_t hist_pair __attribute__((aligned(64)));
-
-    /* Sample period tracking - atomic for thread-safe access */
-    _Atomic int64_t sample_start_ns; /**< Current sample start time */
-    _Atomic int64_t sample_bytes;    /**< Bytes completed this sample */
 } adaptive_controller_t;
 
 /* ============================================================================
@@ -305,18 +298,26 @@ void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count);
 /**
  * Get current in-flight limit
  *
+ * Inlined: called on every submission in ring_can_submit().
+ *
  * @param ctrl Controller
  * @return Current limit
  */
-int adaptive_get_inflight_limit(adaptive_controller_t *ctrl);
+static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
+    return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+}
 
 /**
  * Get current batch threshold
  *
+ * Inlined: called on every submission in ring_should_flush().
+ *
  * @param ctrl Controller
  * @return Current threshold
  */
-int adaptive_get_batch_threshold(adaptive_controller_t *ctrl);
+static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
+    return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
+}
 
 /**
  * Get current phase name

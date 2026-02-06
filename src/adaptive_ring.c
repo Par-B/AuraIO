@@ -521,6 +521,10 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
     pthread_mutex_unlock(&ctx->lock);
 }
 
+/** Max CQEs to extract per lock acquisition in ring_poll().
+ *  Keeps lock hold time bounded while amortizing lock overhead. */
+#define RING_POLL_BATCH 32
+
 int ring_poll(ring_ctx_t *ctx) {
     if (!ctx || !ctx->ring_initialized) {
         return (0);
@@ -528,28 +532,41 @@ int ring_poll(ring_ctx_t *ctx) {
 
     int completed = 0;
 
-    /* Process all available completions without blocking.
-     * CQ access is serialized via cq_lock to prevent races when multiple
-     * threads call poll/wait on the same ring. */
-    while (1) {
-        struct io_uring_cqe *cqe;
+    /* Batch-extract CQEs under a single lock hold, then process
+     * completions outside the lock. This amortizes mutex overhead
+     * from O(completions) to O(completions / RING_POLL_BATCH).
+     * Callbacks are invoked outside the lock to prevent deadlock
+     * (callbacks may re-enter auraio_read/write). */
+    struct {
         auraio_request_t *req;
         ssize_t result;
+    } batch[RING_POLL_BATCH];
 
-        /* Lock CQ, peek, extract data, mark seen, unlock */
+    while (1) {
+        int n = 0;
+
         pthread_mutex_lock(&ctx->cq_lock);
-        if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
-            pthread_mutex_unlock(&ctx->cq_lock);
-            break;
+        while (n < RING_POLL_BATCH) {
+            struct io_uring_cqe *cqe;
+            if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
+                break;
+            }
+            batch[n].req = io_uring_cqe_get_data(cqe);
+            batch[n].result = cqe->res;
+            io_uring_cqe_seen(&ctx->ring, cqe);
+            n++;
         }
-        req = io_uring_cqe_get_data(cqe);
-        result = cqe->res;
-        io_uring_cqe_seen(&ctx->ring, cqe);
         pthread_mutex_unlock(&ctx->cq_lock);
 
-        /* Process completion without holding cq_lock */
-        process_completion(ctx, req, result);
-        completed++;
+        if (n == 0) {
+            break;
+        }
+
+        /* Process completions without holding cq_lock */
+        for (int i = 0; i < n; i++) {
+            process_completion(ctx, batch[i].req, batch[i].result);
+        }
+        completed += n;
     }
 
     return completed;
@@ -565,45 +582,67 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         return (0);
     }
 
+    /* Batch buffer shared by all paths. Both the initial peek/wait and
+     * any additional available CQEs are extracted in a single lock hold,
+     * eliminating the previous separate drain loop. */
+    struct {
+        auraio_request_t *req;
+        ssize_t result;
+    } batch[RING_POLL_BATCH];
     int completed = 0;
-    struct io_uring_cqe *cqe;
-    auraio_request_t *req;
-    ssize_t result;
-
-    /* For blocking waits, we first try a non-blocking peek under lock.
-     * If nothing available, we release the lock, do a blocking wait,
-     * then re-acquire and peek again. This ensures CQ access is serialized
-     * while still allowing the blocking wait to proceed. */
 
     if (timeout_ms == 0) {
-        /* Non-blocking: just peek under lock */
+        /* Non-blocking: batch-extract all available CQEs in one lock hold */
+        int n = 0;
         pthread_mutex_lock(&ctx->cq_lock);
-        if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
-            pthread_mutex_unlock(&ctx->cq_lock);
-            return (0);
+        while (n < RING_POLL_BATCH) {
+            struct io_uring_cqe *cqe;
+            if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
+                break;
+            }
+            batch[n].req = io_uring_cqe_get_data(cqe);
+            batch[n].result = cqe->res;
+            io_uring_cqe_seen(&ctx->ring, cqe);
+            n++;
         }
-        req = io_uring_cqe_get_data(cqe);
-        result = cqe->res;
-        io_uring_cqe_seen(&ctx->ring, cqe);
         pthread_mutex_unlock(&ctx->cq_lock);
 
-        process_completion(ctx, req, result);
-        completed = 1;
+        for (int i = 0; i < n; i++) {
+            process_completion(ctx, batch[i].req, batch[i].result);
+        }
+        completed = n;
     } else {
-        /* Blocking wait: try peek first, then wait if needed */
-        pthread_mutex_lock(&ctx->cq_lock);
-        int ret = io_uring_peek_cqe(&ctx->ring, &cqe);
+        /* Blocking wait: try non-blocking peek first, then block if needed.
+         * In both cases, batch-extract all available CQEs under a single
+         * cq_lock hold to merge the initial extraction with the drain. */
+        struct io_uring_cqe *cqe;
+        int n;
 
-        if (ret == 0) {
-            /* Got one immediately */
-            req = io_uring_cqe_get_data(cqe);
-            result = cqe->res;
+        pthread_mutex_lock(&ctx->cq_lock);
+        if (io_uring_peek_cqe(&ctx->ring, &cqe) == 0) {
+            /* CQE available immediately - batch extract all available */
+            batch[0].req = io_uring_cqe_get_data(cqe);
+            batch[0].result = cqe->res;
             io_uring_cqe_seen(&ctx->ring, cqe);
+            n = 1;
+            while (n < RING_POLL_BATCH) {
+                if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
+                    break;
+                }
+                batch[n].req = io_uring_cqe_get_data(cqe);
+                batch[n].result = cqe->res;
+                io_uring_cqe_seen(&ctx->ring, cqe);
+                n++;
+            }
             pthread_mutex_unlock(&ctx->cq_lock);
-            process_completion(ctx, req, result);
-            completed = 1;
+
+            for (int i = 0; i < n; i++) {
+                process_completion(ctx, batch[i].req, batch[i].result);
+            }
+            completed = n;
         } else {
-            /* Nothing available - release lock and wait */
+            /* Nothing available - release lock and do blocking wait */
+            int ret;
             pthread_mutex_unlock(&ctx->cq_lock);
 
             if (timeout_ms < 0) {
@@ -617,43 +656,33 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
 
             if (ret < 0) {
                 if (ret == -ETIME || ret == -EAGAIN) {
-                    return (0);  /* Timeout - not an error */
+                    return (0);
                 }
                 errno = -ret;
                 return (-1);
             }
 
-            /* Wait returned - re-acquire lock and peek to get CQE properly.
-             * Another thread might have consumed it, which is fine. */
+            /* Wait returned - batch extract all available CQEs.
+             * Another thread might have consumed the CQE that woke us;
+             * n==0 is handled gracefully. */
+            n = 0;
             pthread_mutex_lock(&ctx->cq_lock);
-            if (io_uring_peek_cqe(&ctx->ring, &cqe) == 0) {
-                req = io_uring_cqe_get_data(cqe);
-                result = cqe->res;
+            while (n < RING_POLL_BATCH) {
+                if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
+                    break;
+                }
+                batch[n].req = io_uring_cqe_get_data(cqe);
+                batch[n].result = cqe->res;
                 io_uring_cqe_seen(&ctx->ring, cqe);
-                pthread_mutex_unlock(&ctx->cq_lock);
-                process_completion(ctx, req, result);
-                completed = 1;
-            } else {
-                /* Another thread got it - that's fine */
-                pthread_mutex_unlock(&ctx->cq_lock);
+                n++;
             }
-        }
-    }
-
-    /* Process any additional available completions */
-    while (1) {
-        pthread_mutex_lock(&ctx->cq_lock);
-        if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
             pthread_mutex_unlock(&ctx->cq_lock);
-            break;
-        }
-        req = io_uring_cqe_get_data(cqe);
-        result = cqe->res;
-        io_uring_cqe_seen(&ctx->ring, cqe);
-        pthread_mutex_unlock(&ctx->cq_lock);
 
-        process_completion(ctx, req, result);
-        completed++;
+            for (int i = 0; i < n; i++) {
+                process_completion(ctx, batch[i].req, batch[i].result);
+            }
+            completed = n;
+        }
     }
 
     return completed;

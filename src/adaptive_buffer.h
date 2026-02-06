@@ -62,12 +62,16 @@ struct buffer_pool;
  * Operations on the thread cache are lock-free.
  */
 typedef struct thread_cache {
+    /* Hot fields: all in cache line 0 for fast-path alloc/free.
+     * pool+pool_id validated on every access, counts checked immediately after. */
     struct buffer_pool *pool;   /**< Parent pool (for slow path) */
     uint64_t pool_id;           /**< Pool generation ID (detect stale cache) */
-    int shard_id;               /**< Assigned shard for slow-path operations */
-    void *buffers[BUFFER_SIZE_CLASSES][THREAD_CACHE_SIZE]; /**< Cached buffers */
-    int counts[BUFFER_SIZE_CLASSES];  /**< Buffer count per size class */
     struct thread_cache *next;  /**< Next in pool's cache list (for cleanup) */
+    int shard_id;               /**< Assigned shard for slow-path operations */
+    int counts[BUFFER_SIZE_CLASSES];  /**< Buffer count per size class */
+
+    /* Cold: large array accessed only after counts check passes */
+    void *buffers[BUFFER_SIZE_CLASSES][THREAD_CACHE_SIZE]; /**< Cached buffers */
 } thread_cache_t;
 
 /**

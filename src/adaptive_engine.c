@@ -173,13 +173,9 @@ void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count) {
     atomic_fetch_add_explicit(&ctrl->sqes_submitted, sqe_count, memory_order_relaxed);
 }
 
-int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
-    return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
-}
-
-int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
-    return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
-}
+/* adaptive_get_inflight_limit() and adaptive_get_batch_threshold() are
+ * static inline in adaptive_engine.h for zero-overhead access on the
+ * per-submission hot path (ring_can_submit / ring_should_flush). */
 
 const char *adaptive_phase_name(adaptive_phase_t phase) {
     switch (phase) {

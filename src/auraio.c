@@ -927,11 +927,14 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     /* Intentionally ignored - see comment above */
   }
 
-  /* Flush all rings (with locks) */
+  /* Flush all rings and snapshot pending state under a single lock hold
+   * per ring. This halves the ring->lock acquisitions vs separate loops. */
+  bool ring_has_pending[AURAIO_MAX_RINGS];
   for (int i = 0; i < engine->ring_count; i++) {
     ring_ctx_t *ring = &engine->rings[i];
     pthread_mutex_lock(&ring->lock);
     ring_flush(ring);
+    ring_has_pending[i] = (ring->pending_count > 0);
     pthread_mutex_unlock(&ring->lock);
   }
 
@@ -950,16 +953,15 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     return total;
   }
 
-  /* Nothing ready - find first ring with pending ops and block on it */
+  /* Nothing ready - find first ring with pending ops and block on it.
+   * Uses pending state captured during flush to avoid re-locking. */
   for (int i = 0; i < engine->ring_count; i++) {
-    ring_ctx_t *ring = &engine->rings[i];
+    if (!ring_has_pending[i]) {
+      continue;
+    }
 
-    pthread_mutex_lock(&ring->lock);
-    bool has_pending = (ring->pending_count > 0);
-    pthread_mutex_unlock(&ring->lock);
-
-    if (has_pending) {
-      int completed = ring_wait(ring, timeout_ms);
+    {
+      int completed = ring_wait(&engine->rings[i], timeout_ms);
 
       if (completed > 0) {
         atomic_fetch_add(&engine->total_ops, completed);

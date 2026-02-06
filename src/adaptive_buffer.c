@@ -50,33 +50,32 @@ static __thread thread_cache_t *tls_cache = NULL;
  *   Class 1: <= 8KB
  *   Class 2: <= 16KB
  *   ...
- *   Class 15: <= 64MB (and overflow)
+ *   Class 15: <= 128MB (and overflow)
+ *
+ * Uses a fast-path cascade for the 7 most common I/O sizes (<=256KB)
+ * to avoid __builtin_clzl overhead. Falls back to clzl for rare large sizes.
  *
  * @param size Buffer size in bytes
  * @return Size class index (0 to BUFFER_SIZE_CLASSES-1)
  */
 static inline int size_to_class(size_t size) {
-    if (size <= 4096) {
-        return 0;
-    }
+    /* Fast path: cascade covers classes 0-6 (4KB to 256KB).
+     * These are the typical I/O buffer sizes. Ordered by expected
+     * frequency: 4K (most common), then 64K, 8K, etc. */
+    if (size <= 4096)   return 0;
+    if (size <= 8192)   return 1;
+    if (size <= 16384)  return 2;
+    if (size <= 32768)  return 3;
+    if (size <= 65536)  return 4;
+    if (size <= 131072) return 5;
+    if (size <= 262144) return 6;
 
-    /* Find the position of the highest set bit.
-     * __builtin_clzl returns leading zeros in unsigned long.
-     * For size=8192 (2^13), clzl returns 64-14=50 on 64-bit.
-     * We want class 1 for 8KB, class 2 for 16KB, etc.
-     *
-     * Safety: size > 4096 here (guarded above), so (size - 1) >= 4096 > 0,
-     * avoiding __builtin_clzl(0) which has undefined behavior.
-     */
+    /* Slow path: rare large buffers (>256KB). Use __builtin_clzl.
+     * Safety: size > 262144 here, so (size - 1) > 0. */
     int leading_zeros = __builtin_clzl(size - 1);
-    int highest_bit = (sizeof(unsigned long) * 8) - leading_zeros;
-
-    /* Subtract 12 (log2 of 4096) to get class index */
+    int highest_bit = (int)(sizeof(unsigned long) * 8) - leading_zeros;
     int class_idx = highest_bit - 12;
 
-    if (class_idx < 0) {
-        return 0;
-    }
     if (class_idx >= BUFFER_SIZE_CLASSES) {
         return BUFFER_SIZE_CLASSES - 1;
     }
