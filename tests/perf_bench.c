@@ -31,6 +31,28 @@
 #include <signal.h>
 
 // ============================================================================
+// Fast thread-local PRNG (xorshift64)
+// ============================================================================
+
+static __thread uint64_t rng_state;
+
+static void rng_seed(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    rng_state = (uint64_t)ts.tv_nsec ^ ((uint64_t)gettid() * 2654435761ULL);
+    if (rng_state == 0) rng_state = 1;
+}
+
+static inline uint64_t fast_rand(void) {
+    uint64_t x = rng_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    rng_state = x;
+    return x;
+}
+
+// ============================================================================
 // Timing utilities
 // ============================================================================
 
@@ -108,6 +130,7 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
 static const char *test_dir = DEFAULT_TEST_DIR;
 static int test_fds[NUM_FILES];
 static char *test_paths[NUM_FILES];
+static int apples_mode = 0;  // When set, force ring_count=1 for FIO-comparable runs
 
 static int setup_test_files(void) {
     mkdir(test_dir, 0755);
@@ -117,7 +140,7 @@ static int setup_test_files(void) {
     if (!data) return -1;
 
     for (int i = 0; i < 1024 * 1024; i++) {
-        data[i] = (char)(rand() & 0xFF);
+        data[i] = (char)(fast_rand() & 0xFF);
     }
 
     for (int i = 0; i < NUM_FILES; i++) {
@@ -218,7 +241,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
     auraio_options_t opts;
     auraio_options_init(&opts);
     opts.queue_depth = 1024;
-    opts.ring_count = 0;  // Auto
+    opts.ring_count = apples_mode ? 1 : 0;
 
     auraio_engine_t *engine = auraio_create_with_options(&opts);
     if (!engine) {
@@ -238,9 +261,9 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
         void *buf = auraio_buffer_alloc(engine, buf_size);
         if (!buf) break;
 
-        int fd_idx = rand() % NUM_FILES;
+        int fd_idx = fast_rand() % NUM_FILES;
         off_t max_off = FILE_SIZE - buf_size;
-        off_t offset = ((rand() % (max_off / 4096)) * 4096);
+        off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
         request_ctx_t *ctx = malloc(sizeof(*ctx));
         ctx->stats = &stats;
@@ -276,9 +299,9 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
             void *buf = auraio_buffer_alloc(engine, buf_size);
             if (!buf) break;
 
-            int fd_idx = rand() % NUM_FILES;
+            int fd_idx = fast_rand() % NUM_FILES;
             off_t max_off = FILE_SIZE - buf_size;
-            off_t offset = ((rand() % (max_off / 4096)) * 4096);
+            off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
             request_ctx_t *ctx = malloc(sizeof(*ctx));
             ctx->stats = &stats;
@@ -369,9 +392,9 @@ static void bench_latency(int duration_sec, size_t buf_size) {
     uint64_t count = 0;
 
     while (now_ns() < end_time) {
-        int fd_idx = rand() % NUM_FILES;
+        int fd_idx = fast_rand() % NUM_FILES;
         off_t max_off = FILE_SIZE - buf_size;
-        off_t offset = ((rand() % (max_off / 4096)) * 4096);
+        off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
         uint64_t op_start = now_ns();
 
@@ -432,6 +455,7 @@ typedef struct {
 
 static void *buffer_thread_fn(void *arg) {
     buffer_thread_data_t *td = arg;
+    rng_seed();  // Each thread gets unique TLS seed
     size_t sizes[] = {4096, 8192, 16384, 32768, 65536, 131072};
     int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
 
@@ -446,7 +470,7 @@ static void *buffer_thread_fn(void *arg) {
     while (atomic_load(td->running)) {
         // Allocate
         if (buf_count < 32) {
-            size_t size = sizes[rand() % num_sizes];
+            size_t size = sizes[fast_rand() % num_sizes];
             void *buf = auraio_buffer_alloc(td->engine, size);
             if (buf) {
                 buffers[buf_count].ptr = buf;
@@ -457,7 +481,7 @@ static void *buffer_thread_fn(void *arg) {
         }
 
         // Free some (50% chance)
-        if (buf_count > 0 && (rand() % 2)) {
+        if (buf_count > 0 && (fast_rand() % 2)) {
             buf_count--;
             auraio_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
             atomic_fetch_add(td->frees, 1);
@@ -578,9 +602,9 @@ static void bench_scalability(int duration_sec) {
                 void *buf = auraio_buffer_alloc(engine, buf_size);
                 if (!buf) break;
 
-                int fd_idx = rand() % NUM_FILES;
+                int fd_idx = fast_rand() % NUM_FILES;
                 off_t max_off = FILE_SIZE - buf_size;
-                off_t offset = ((rand() % (max_off / 4096)) * 4096);
+                off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
                 request_ctx_t *ctx = malloc(sizeof(*ctx));
                 ctx->stats = &stats;
@@ -662,9 +686,9 @@ static void bench_syscall_batching(int duration_sec) {
             void *buf = auraio_buffer_alloc(engine, buf_size);
             if (!buf) break;
 
-            int fd_idx = rand() % NUM_FILES;
+            int fd_idx = fast_rand() % NUM_FILES;
             off_t max_off = FILE_SIZE - buf_size;
-            off_t offset = ((rand() % (max_off / 4096)) * 4096);
+            off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
             request_ctx_t *ctx = malloc(sizeof(*ctx));
             ctx->stats = &stats;
@@ -740,16 +764,19 @@ static void bench_mixed_workload(int duration_sec) {
     printf("\n=== Mixed Workload Benchmark ===\n");
     printf("70%% reads, 25%% writes, 5%% fsync\n");
 
-    // Need writable files
+    // Need writable files (O_DIRECT for fair comparison with FIO --direct=1)
     int write_fds[NUM_FILES];
     for (int i = 0; i < NUM_FILES; i++) {
-        write_fds[i] = open(test_paths[i], O_RDWR);
+        write_fds[i] = open(test_paths[i], O_RDWR | O_DIRECT);
+        if (write_fds[i] < 0) {
+            write_fds[i] = open(test_paths[i], O_RDWR);
+        }
     }
 
     auraio_options_t opts;
     auraio_options_init(&opts);
     opts.queue_depth = 512;
-    opts.ring_count = 0;
+    opts.ring_count = apples_mode ? 1 : 0;
 
     auraio_engine_t *engine = auraio_create_with_options(&opts);
     if (!engine) {
@@ -778,8 +805,8 @@ static void bench_mixed_workload(int duration_sec) {
         }
 
         while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
-            int op = rand() % 100;
-            int fd_idx = rand() % NUM_FILES;
+            int op = fast_rand() % 100;
+            int fd_idx = fast_rand() % NUM_FILES;
 
             if (op < 70) {
                 // Read
@@ -787,7 +814,7 @@ static void bench_mixed_workload(int duration_sec) {
                 if (!buf) break;
 
                 off_t max_off = FILE_SIZE - buf_size;
-                off_t offset = ((rand() % (max_off / 4096)) * 4096);
+                off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
                 request_ctx_t *ctx = malloc(sizeof(*ctx));
                 ctx->stats = &stats;
@@ -813,7 +840,7 @@ static void bench_mixed_workload(int duration_sec) {
 
                 memset(buf, 'W', buf_size);
                 off_t max_off = FILE_SIZE - buf_size;
-                off_t offset = ((rand() % (max_off / 4096)) * 4096);
+                off_t offset = ((fast_rand() % (max_off / 4096)) * 4096);
 
                 request_ctx_t *ctx = malloc(sizeof(*ctx));
                 ctx->stats = &stats;
@@ -919,11 +946,14 @@ int main(int argc, char **argv) {
     const char *env_dir = getenv("AURAIO_BENCH_DIR");
     if (env_dir && env_dir[0]) test_dir = env_dir;
 
+    const char *env_apples = getenv("AURAIO_BENCH_APPLES");
+    apples_mode = (env_apples && env_apples[0] == '1');
+
     printf("AuraIO Performance Benchmark\n");
     printf("============================\n");
     printf("CPUs: %d, Duration: %d seconds\n", get_nprocs(), duration);
 
-    srand(time(NULL));
+    rng_seed();
 
     if (setup_test_files() < 0) {
         fprintf(stderr, "Failed to setup test files\n");
