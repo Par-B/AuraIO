@@ -176,12 +176,16 @@ public:
             T await_resume() {
                 auto& result = handle.promise().result;
                 if (std::holds_alternative<std::exception_ptr>(result)) {
-                    std::rethrow_exception(std::get<std::exception_ptr>(result));
+                    auto ex = std::get<std::exception_ptr>(result);
+                    result = std::monostate{};
+                    std::rethrow_exception(ex);
                 }
                 if (!std::holds_alternative<T>(result)) {
                     throw std::logic_error("Task result not available");
                 }
-                return std::move(std::get<T>(result));
+                T value = std::move(std::get<T>(result));
+                result = std::monostate{};
+                return value;
             }
         };
         return Awaiter{handle_};
@@ -288,7 +292,9 @@ public:
 
             void await_resume() {
                 if (handle.promise().exception) {
-                    std::rethrow_exception(handle.promise().exception);
+                    auto ex = handle.promise().exception;
+                    handle.promise().exception = nullptr;
+                    std::rethrow_exception(ex);
                 }
             }
         };

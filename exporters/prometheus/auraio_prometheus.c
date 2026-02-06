@@ -204,8 +204,8 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
                 if (cumulative > 0) {
                     double le = (double)(b + 1) * hist.bucket_width_us / 1e6;
                     PROM_APPEND(
-                        "auraio_latency_seconds_bucket{ring=\"%d\",le=\"%.6f\"} %llu\n",
-                        i, le, (unsigned long long)cumulative);
+                        "auraio_latency_seconds_bucket{ring=\"%d\",le=\"%.6f\"} %" PRIu64 "\n",
+                        i, le, cumulative);
                 }
             }
 
@@ -214,16 +214,16 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
             sum_estimate += hist.overflow * (hist.max_tracked_us / 1e6);
 
             PROM_APPEND(
-                "auraio_latency_seconds_bucket{ring=\"%d\",le=\"+Inf\"} %llu\n",
-                i, (unsigned long long)cumulative);
+                "auraio_latency_seconds_bucket{ring=\"%d\",le=\"+Inf\"} %" PRIu64 "\n",
+                i, cumulative);
             PROM_APPEND(
                 "auraio_latency_seconds_sum{ring=\"%d\"} %.6f\n",
                 i, sum_estimate);
             /* Use cumulative (computed from buckets + overflow) as _count
              * to guarantee _count == le="+Inf" per Prometheus spec. */
             PROM_APPEND(
-                "auraio_latency_seconds_count{ring=\"%d\"} %llu\n",
-                i, (unsigned long long)cumulative);
+                "auraio_latency_seconds_count{ring=\"%d\"} %" PRIu64 "\n",
+                i, cumulative);
         }
         PROM_APPEND("\n");
     }

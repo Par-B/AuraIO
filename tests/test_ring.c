@@ -191,7 +191,7 @@ TEST(ring_read_basic) {
     /* Flush and wait */
     ring_flush(&ctx);
     ret = ring_wait(&ctx, 1000);
-    assert(ret >= 0);
+    assert(ret > 0);
 
     /* Check callback was invoked */
     assert(callback_called == 1);
@@ -230,7 +230,8 @@ TEST(ring_write_basic) {
     assert(ret == 0);
 
     ring_flush(&ctx);
-    ring_wait(&ctx, 1000);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret > 0);
 
     assert(callback_called == 1);
     assert(callback_result == 4096);
@@ -299,7 +300,7 @@ TEST(ring_readv_basic) {
 
     ring_flush(&ctx);
     ret = ring_wait(&ctx, 1000);
-    assert(ret >= 0);
+    assert(ret > 0);
 
     assert(callback_called == 1);
     assert(callback_result == 4096);  /* Total read */
@@ -350,7 +351,8 @@ TEST(ring_writev_basic) {
     assert(ret == 0);
 
     ring_flush(&ctx);
-    ring_wait(&ctx, 1000);
+    ret = ring_wait(&ctx, 1000);
+    assert(ret > 0);
 
     assert(callback_called == 1);
     assert(callback_result == 4096);
@@ -392,7 +394,7 @@ TEST(ring_fdatasync_basic) {
 
     ring_flush(&ctx);
     ret = ring_wait(&ctx, 1000);
-    assert(ret >= 0);
+    assert(ret > 0);
 
     assert(callback_called == 1);
     assert(callback_result == 0);  /* fsync returns 0 on success */
@@ -829,7 +831,7 @@ TEST(ring_fsync_basic) {
 
     ring_flush(&ctx);
     ret = ring_wait(&ctx, 1000);
-    assert(ret >= 0);
+    assert(ret > 0);
 
     assert(callback_called == 1);
     assert(callback_result == 0);  /* fsync returns 0 on success */

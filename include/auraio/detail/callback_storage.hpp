@@ -11,6 +11,7 @@
 #include <auraio.h>
 #include <auraio/request.hpp>
 #include <array>
+#include <cassert>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -107,6 +108,7 @@ public:
         Shard& shard = shards_[ctx->shard_index];
         std::lock_guard<std::mutex> lock(shard.mutex);
 
+        assert(ctx->next_free == -1 && "double-release of CallbackContext");
         ctx->callback = nullptr;
         ctx->on_complete = nullptr;
         // Push to free list head

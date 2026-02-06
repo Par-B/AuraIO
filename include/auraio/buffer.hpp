@@ -8,6 +8,7 @@
 
 #include <auraio.h>
 #include <auraio/fwd.hpp>
+#include <auraio/error.hpp>
 #include <span>
 #include <cassert>
 #include <cstddef>
@@ -216,9 +217,10 @@ public:
      * @return std::span of T elements
      */
     template<typename T>
-    [[nodiscard]] std::span<T> as() noexcept {
-        assert(reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) == 0 &&
-               "Buffer not aligned for requested type");
+    [[nodiscard]] std::span<T> as() {
+        if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
+            throw Error(EINVAL, "Buffer not aligned for requested type");
+        }
         return {static_cast<T*>(ptr_), size_ / sizeof(T)};
     }
 
@@ -226,11 +228,13 @@ public:
      * Get buffer as const span of specific type
      * @tparam T Element type
      * @return std::span of const T elements
+     * @throws Error if buffer is not properly aligned for T
      */
     template<typename T>
-    [[nodiscard]] std::span<const T> as() const noexcept {
-        assert(reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) == 0 &&
-               "Buffer not aligned for requested type");
+    [[nodiscard]] std::span<const T> as() const {
+        if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
+            throw Error(EINVAL, "Buffer not aligned for requested type");
+        }
         return {static_cast<const T*>(ptr_), size_ / sizeof(T)};
     }
 

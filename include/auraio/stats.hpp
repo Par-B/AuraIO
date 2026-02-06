@@ -77,7 +77,8 @@ public:
      * Get underlying C stats struct
      * @return Reference to auraio_stats_t
      */
-    [[nodiscard]] const auraio_stats_t& c_stats() const noexcept { return stats_; }
+    [[nodiscard]] const auraio_stats_t& c_stats() const& noexcept { return stats_; }
+    [[nodiscard]] auraio_stats_t c_stats() const&& noexcept { return stats_; }
 
 private:
     friend class Engine;
@@ -103,7 +104,8 @@ public:
     }
     [[nodiscard]] int queue_depth() const noexcept { return stats_.queue_depth; }
     [[nodiscard]] int ring_index() const noexcept { return ring_idx_; }
-    [[nodiscard]] const auraio_ring_stats_t& c_stats() const noexcept { return stats_; }
+    [[nodiscard]] const auraio_ring_stats_t& c_stats() const& noexcept { return stats_; }
+    [[nodiscard]] auraio_ring_stats_t c_stats() const&& noexcept { return stats_; }
 
 private:
     friend class Engine;
@@ -136,7 +138,8 @@ public:
         return (idx + 1) * hist_.bucket_width_us;
     }
 
-    [[nodiscard]] const auraio_histogram_t& c_histogram() const noexcept { return hist_; }
+    [[nodiscard]] const auraio_histogram_t& c_histogram() const& noexcept { return hist_; }
+    [[nodiscard]] auraio_histogram_t c_histogram() const&& noexcept { return hist_; }
 
 private:
     friend class Engine;
@@ -153,7 +156,8 @@ public:
     }
     [[nodiscard]] size_t total_buffers() const noexcept { return stats_.total_buffers; }
     [[nodiscard]] int shard_count() const noexcept { return stats_.shard_count; }
-    [[nodiscard]] const auraio_buffer_stats_t& c_stats() const noexcept { return stats_; }
+    [[nodiscard]] const auraio_buffer_stats_t& c_stats() const& noexcept { return stats_; }
+    [[nodiscard]] auraio_buffer_stats_t c_stats() const&& noexcept { return stats_; }
 
 private:
     friend class Engine;
