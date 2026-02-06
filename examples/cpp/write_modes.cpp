@@ -79,7 +79,7 @@ int run_write_test(const char* filename, bool use_direct) {
 
         for (int i = 0; i < NUM_WRITES; i++) {
             off_t offset = i * static_cast<off_t>(WRITE_SIZE);
-            engine.write(fd, auraio::buf(buf), WRITE_SIZE, offset,
+            (void)engine.write(fd, auraio::buf(buf), WRITE_SIZE, offset,
                 [&completed, &end_time](auraio::Request&, ssize_t result) {
                     if (result < 0) {
                         std::cerr << "Write failed: " << strerror(static_cast<int>(-result)) << "\n";

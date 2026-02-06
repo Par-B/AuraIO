@@ -4,10 +4,8 @@ Self-tuning async I/O library for Linux using io_uring with AIMD congestion cont
 
 ## Build Environment
 
-**All commands must run in the Linux container:**
-```bash
-orb -m Caliente-dev bash -c "<command>"
-```
+- **Linux**: Run commands directly
+- **macOS**: Run commands in the Linux container: `orb -m Caliente-dev bash -c "<command>"`
 
 ## Quick Reference
 

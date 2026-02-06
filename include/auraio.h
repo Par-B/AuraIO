@@ -45,6 +45,11 @@
 /** Version as a string */
 #define AURAIO_VERSION_STRING "1.0.1"
 
+/* Ensure version components stay within packed integer limits */
+#if AURAIO_VERSION_MINOR > 99 || AURAIO_VERSION_PATCH > 99
+#  error "Version minor/patch must be 0-99 for packed AURAIO_VERSION integer"
+#endif
+
 /* ============================================================================
  * Symbol Visibility
  * ============================================================================
@@ -59,6 +64,18 @@
 #  define AURAIO_API
 #else
 #  define AURAIO_API
+#endif
+
+/**
+ * Warn if return value is ignored
+ *
+ * Applied to functions that return error codes or allocated resources.
+ * Ignoring these return values is almost always a bug.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  define AURAIO_WARN_UNUSED __attribute__((warn_unused_result))
+#else
+#  define AURAIO_WARN_UNUSED
 #endif
 
 #include <stddef.h>
@@ -312,7 +329,8 @@ static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
   auraio_buf_t buf;
   memset(&buf, 0, sizeof(buf));
   if (index < 0) {
-    /* Return unregistered null buffer as sentinel for invalid index */
+    /* Return zeroed AURAIO_BUF_UNREGISTERED buffer with ptr=NULL.
+     * Submitting this to an I/O function will fail with EINVAL. */
     return buf;
   }
   buf.type = AURAIO_BUF_REGISTERED;
@@ -360,7 +378,7 @@ AURAIO_API void auraio_options_init(auraio_options_t *options);
  *
  * @return Engine handle, or NULL on failure (errno set)
  */
-AURAIO_API auraio_engine_t *auraio_create(void);
+AURAIO_API AURAIO_WARN_UNUSED auraio_engine_t *auraio_create(void);
 
 /**
  * Create a new async I/O engine with custom options
@@ -368,7 +386,7 @@ AURAIO_API auraio_engine_t *auraio_create(void);
  * @param options Configuration options (initialize with auraio_options_init first)
  * @return Engine handle, or NULL on failure (errno set)
  */
-AURAIO_API auraio_engine_t *auraio_create_with_options(const auraio_options_t *options);
+AURAIO_API AURAIO_WARN_UNUSED auraio_engine_t *auraio_create_with_options(const auraio_options_t *options);
 
 /**
  * Destroy an async I/O engine
@@ -392,6 +410,9 @@ AURAIO_API auraio_engine_t *auraio_create_with_options(const auraio_options_t *o
  * performance, use one auraio_engine_t per application. If multiple engines
  * are created, only the first engine's buffer pool will benefit from per-thread
  * caching within each thread.
+ *
+ * Passing NULL is safe (no-op). Passing an already-destroyed engine is
+ * undefined behavior.
  *
  * @param engine Engine to destroy (may be NULL)
  */
@@ -430,7 +451,7 @@ AURAIO_API void auraio_destroy(auraio_engine_t *engine);
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
                                size_t len, off_t offset,
                                auraio_callback_t callback, void *user_data);
 
@@ -459,7 +480,7 @@ AURAIO_API auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf,
                                 size_t len, off_t offset,
                                 auraio_callback_t callback, void *user_data);
 
@@ -475,7 +496,7 @@ AURAIO_API auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, aurai
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
                                 auraio_callback_t callback, void *user_data);
 
 /**
@@ -489,7 +510,7 @@ AURAIO_API auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd,
                                    auraio_fsync_flags_t flags,
                                    auraio_callback_t callback, void *user_data);
 
@@ -514,7 +535,7 @@ AURAIO_API auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd,
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd,
                                 const struct iovec *iov, int iovcnt,
                                 off_t offset, auraio_callback_t callback,
                                 void *user_data);
@@ -535,7 +556,7 @@ AURAIO_API auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd,
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd,
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd,
                                  const struct iovec *iov, int iovcnt,
                                  off_t offset, auraio_callback_t callback,
                                  void *user_data);
@@ -560,7 +581,7 @@ AURAIO_API auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd,
  *         EALREADY, ESHUTDOWN, or ENOMEM)
  *         Note: 0 does not guarantee the operation will be cancelled
  */
-AURAIO_API int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req);
 
 /* ============================================================================
  * Request Introspection
@@ -602,7 +623,10 @@ AURAIO_API void *auraio_request_user_data(const auraio_request_t *req);
  * Returns a file descriptor that becomes readable when completions are
  * available. Use this for integration with event loops (epoll, kqueue, etc).
  *
- * When the fd is readable, call auraio_poll() to process completions.
+ * The fd uses level-triggered semantics: it remains readable as long as
+ * unprocessed completions exist. Call auraio_poll() to process completions
+ * and clear the readable state. Compatible with epoll (EPOLLIN),
+ * poll (POLLIN), and select.
  *
  * @param engine Engine handle
  * @return Pollable fd, or -1 on error (errno set)
@@ -658,6 +682,12 @@ AURAIO_API void auraio_stop(auraio_engine_t *engine);
  * Waits until all in-flight operations across all rings have completed.
  * Useful for graceful shutdown or synchronization points.
  *
+ * New submissions are NOT blocked during drain; if other threads submit
+ * operations concurrently, drain will process those as well.
+ *
+ * On timeout, returns -1 with errno=ETIMEDOUT. Operations that completed
+ * before the timeout are still processed (callbacks invoked).
+ *
  * @param engine     Engine handle
  * @param timeout_ms Maximum wait time in milliseconds (-1 = wait forever,
  *                   0 = non-blocking poll)
@@ -677,17 +707,23 @@ AURAIO_API int auraio_drain(auraio_engine_t *engine, int timeout_ms);
  * Returns page-aligned memory suitable for O_DIRECT I/O. More efficient
  * than posix_memalign() for repeated allocations.
  *
+ * Thread-safe: may be called from any thread. Uses per-thread caching
+ * for fast allocation. A buffer allocated by one thread may be freed
+ * by another.
+ *
  * @param engine Engine handle
  * @param size   Buffer size in bytes
  * @return Aligned buffer, or NULL on failure
  */
-AURAIO_API void *auraio_buffer_alloc(auraio_engine_t *engine, size_t size);
+AURAIO_API AURAIO_WARN_UNUSED void *auraio_buffer_alloc(auraio_engine_t *engine, size_t size);
 
 /**
  * Return a buffer to the engine's pool
  *
  * The buffer must have been allocated by auraio_buffer_alloc() on the same
  * engine. The size must match the original allocation size.
+ *
+ * Thread-safe: may be called from any thread.
  *
  * @param engine Engine handle
  * @param buf    Buffer to free (may be NULL)
@@ -736,7 +772,7 @@ AURAIO_API void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t si
  * @param count  Number of buffers
  * @return 0 on success, -1 on error (errno set)
  */
-AURAIO_API int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, int count);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, int count);
 
 /**
  * Unregister previously registered buffers
@@ -770,7 +806,7 @@ AURAIO_API int auraio_unregister_buffers(auraio_engine_t *engine);
  * @param count  Number of file descriptors
  * @return 0 on success, -1 on error (errno set)
  */
-AURAIO_API int auraio_register_files(auraio_engine_t *engine, const int *fds, int count);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_register_files(auraio_engine_t *engine, const int *fds, int count);
 
 /**
  * Update a registered file descriptor
@@ -788,7 +824,7 @@ AURAIO_API int auraio_register_files(auraio_engine_t *engine, const int *fds, in
  * @param fd     New file descriptor (-1 to unregister slot)
  * @return 0 on success, -1 on error (errno set; state may be inconsistent)
  */
-AURAIO_API int auraio_update_file(auraio_engine_t *engine, int index, int fd);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_update_file(auraio_engine_t *engine, int index, int fd);
 
 /**
  * Unregister previously registered files
@@ -807,11 +843,14 @@ AURAIO_API int auraio_unregister_files(auraio_engine_t *engine);
  * Get current engine statistics
  *
  * Retrieves throughput, latency, and tuning parameters for monitoring.
+ * If engine or stats is NULL, returns without modifying stats.
  *
- * @param engine Engine handle
- * @param stats  Output statistics structure
+ * Thread-safe: reads atomic counters and locks each ring briefly.
+ *
+ * @param engine Engine handle (may be NULL)
+ * @param stats  Output statistics structure (may be NULL)
  */
-AURAIO_API void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats);
+AURAIO_API void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats);
 
 /**
  * Get the number of io_uring rings in the engine

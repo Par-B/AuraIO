@@ -32,6 +32,17 @@ static int test_count = 0;
 static char test_file[256];
 static int test_fd = -1;
 
+/* Ensure temp files are cleaned up even on crash/abort */
+static void cleanup_atexit(void) {
+    if (test_fd >= 0) {
+        close(test_fd);
+        test_fd = -1;
+    }
+    if (test_file[0]) {
+        unlink(test_file);
+    }
+}
+
 static void io_setup(void) {
     strcpy(test_file, "/tmp/test_stats_XXXXXX");
     test_fd = mkstemp(test_file);
@@ -611,6 +622,7 @@ TEST(concurrent_stats_and_io) {
  * ============================================================================ */
 
 int main(void) {
+    atexit(cleanup_atexit);
     printf("\n=== Enhanced Stats API Tests ===\n\n");
 
     /* Ring count */

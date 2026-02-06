@@ -142,7 +142,7 @@ test-all: all
 
 # Build metrics exporters (Prometheus)
 exporters: all
-	$(CC) -Wall -Wextra -std=c11 -O2 -Iinclude -Iexporters/prometheus \
+	$(CC) $(CFLAGS) -Iexporters/prometheus \
 		exporters/prometheus/example.c exporters/prometheus/auraio_prometheus.c \
 		-o exporters/prometheus/prometheus_example \
 		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'

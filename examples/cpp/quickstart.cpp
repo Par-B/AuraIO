@@ -49,7 +49,7 @@ int main() {
         ssize_t bytes_read = 0;
 
         // Submit async read with lambda callback
-        engine.read(fd, buffer, BUF_SIZE, 0, [&](auraio::Request&, ssize_t result) {
+        (void)engine.read(fd, buffer, BUF_SIZE, 0, [&](auraio::Request&, ssize_t result) {
             std::cout << "Read completed: " << result << " bytes\n";
             bytes_read = result;
             done = true;

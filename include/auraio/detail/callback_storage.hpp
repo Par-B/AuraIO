@@ -108,7 +108,9 @@ public:
         Shard& shard = shards_[ctx->shard_index];
         std::lock_guard<std::mutex> lock(shard.mutex);
 
-        assert(ctx->next_free == -1 && "double-release of CallbackContext");
+        if (ctx->next_free != -1) {
+            return;  // Already released; silently ignore double-release
+        }
         ctx->callback = nullptr;
         ctx->on_complete = nullptr;
         // Push to free list head

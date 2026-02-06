@@ -37,6 +37,17 @@ static int test_count = 0;
 static char test_file[256];
 static int test_fd = -1;
 
+/* Ensure temp files are cleaned up even on crash/abort */
+static void cleanup_atexit(void) {
+    if (test_fd >= 0) {
+        close(test_fd);
+        test_fd = -1;
+    }
+    if (test_file[0]) {
+        unlink(test_file);
+    }
+}
+
 /* ============================================================================
  * Setup / Teardown
  * ============================================================================ */
@@ -680,7 +691,8 @@ TEST(registered_buffers_invalid) {
     void *buf = NULL;
     posix_memalign(&buf, 4096, 4096);
     struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
-    auraio_register_buffers(engine, &iov, 1);
+    int reg_ret = auraio_register_buffers(engine, &iov, 1);
+    assert(reg_ret == 0);
 
     /* Invalid buffer index */
     req = auraio_read(engine, 0, auraio_buf_fixed(5, 0), 4096, 0, NULL, NULL);
@@ -1318,7 +1330,7 @@ TEST(load_many_concurrent_reads) {
     }
 
     /* All submitted ops should complete */
-    assert(concurrent_callback_count >= submitted - 1);
+    assert(concurrent_callback_count == submitted);
 
     for (int i = 0; i < NUM_OPS; i++) {
         auraio_buffer_free(engine, bufs[i], 4096);
@@ -1365,7 +1377,7 @@ TEST(load_mixed_read_write) {
     }
 
     /* All submitted ops should complete */
-    assert(concurrent_callback_count >= submitted - 1);
+    assert(concurrent_callback_count == submitted);
 
     for (int i = 0; i < NUM_OPS; i++) {
         auraio_buffer_free(engine, bufs[i], 4096);
@@ -1411,7 +1423,7 @@ TEST(load_vectored_io) {
         }
     }
 
-    assert(concurrent_callback_count >= submitted - 1);
+    assert(concurrent_callback_count == submitted);
 
     for (int i = 0; i < NUM_OPS; i++) {
         for (int j = 0; j < 3; j++) {
@@ -1476,7 +1488,8 @@ TEST(drain_nonblocking) {
 
     void *buf = auraio_buffer_alloc(engine, 4096);
     assert(buf != NULL);
-    auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, drain_callback, NULL);
+    auraio_request_t *drain_req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, drain_callback, NULL);
+    assert(drain_req != NULL);
 
     /* Non-blocking drain (timeout=0) - may or may not complete */
     int n = auraio_drain(engine, 0);
@@ -1516,6 +1529,7 @@ TEST(version_api) {
  * ============================================================================ */
 
 int main(void) {
+    atexit(cleanup_atexit);
     printf("Running io_uring ring tests...\n");
 
     RUN_TEST(ring_init);

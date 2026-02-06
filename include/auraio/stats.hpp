@@ -121,6 +121,11 @@ public:
     static constexpr int bucket_count = AURAIO_HISTOGRAM_BUCKETS;
     static constexpr int bucket_width_us = AURAIO_HISTOGRAM_BUCKET_WIDTH_US;
 
+    /**
+     * Get sample count for a specific bucket
+     * @param idx Bucket index (0 to bucket_count-1)
+     * @return Sample count, or 0 if idx is out of range
+     */
     [[nodiscard]] uint32_t bucket(int idx) const noexcept {
         if (idx < 0 || idx >= bucket_count) return 0;
         return hist_.buckets[idx];

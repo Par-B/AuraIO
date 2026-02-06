@@ -8,7 +8,7 @@ LDFLAGS = -L../lib -lauraio -luring -lpthread
 RPATH = -Wl,-rpath,'$$ORIGIN/../../lib'
 
 # C examples
-C_EXAMPLES = C/quickstart C/simple_read C/bulk_reader C/write_modes
+C_EXAMPLES = C/quickstart C/simple_read C/bulk_reader C/write_modes C/cancel_request
 
 # C++ examples
 CPP_EXAMPLES = cpp/quickstart cpp/simple_read cpp/bulk_reader cpp/write_modes cpp/coroutine_copy
@@ -29,6 +29,9 @@ C/bulk_reader: C/bulk_reader.c ../lib/libauraio.so
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(RPATH)
 
 C/write_modes: C/write_modes.c ../lib/libauraio.so
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(RPATH)
+
+C/cancel_request: C/cancel_request.c ../lib/libauraio.so
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(RPATH)
 
 # C++ examples

@@ -33,13 +33,13 @@ int main(int argc, char** argv) {
 
         // Open file with O_DIRECT for best async I/O performance
         int fd = open(filename, O_RDONLY | O_DIRECT);
-        if (fd < 0) {
-            // Fall back to non-direct if O_DIRECT not supported
+        if (fd < 0 && errno == EINVAL) {
+            // O_DIRECT not supported on this filesystem - fall back
             fd = open(filename, O_RDONLY);
-            if (fd < 0) {
-                throw auraio::Error(errno, filename);
-            }
             std::cout << "Note: O_DIRECT not available, using buffered I/O\n";
+        }
+        if (fd < 0) {
+            throw auraio::Error(errno, filename);
         }
 
         // Allocate aligned buffer from engine's pool (RAII)
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
 
         // Submit async read
         std::cout << "Submitting async read of " << READ_SIZE << " bytes...\n";
-        engine.read(fd, buffer, READ_SIZE, 0, [&](auraio::Request&, ssize_t res) {
+        (void)engine.read(fd, buffer, READ_SIZE, 0, [&](auraio::Request&, ssize_t res) {
             if (res < 0) {
                 std::cerr << "Read failed: " << strerror(static_cast<int>(-res)) << "\n";
             } else {

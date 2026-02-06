@@ -23,7 +23,9 @@
  */
 static inline int64_t get_time_ns(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;  /* Should never happen for CLOCK_MONOTONIC on Linux */
+    }
     return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 

@@ -61,15 +61,15 @@ int main(int argc, char **argv) {
 
     /* Open file with O_DIRECT for best async I/O performance */
     int fd = open(filename, O_RDONLY | O_DIRECT);
-    if (fd < 0) {
-        /* Fall back to non-direct if O_DIRECT not supported */
+    if (fd < 0 && errno == EINVAL) {
+        /* O_DIRECT not supported on this filesystem - fall back */
         fd = open(filename, O_RDONLY);
-        if (fd < 0) {
-            fprintf(stderr, "Failed to open '%s': %s\n", filename, strerror(errno));
-            auraio_destroy(engine);
-            return 1;
-        }
         printf("Note: O_DIRECT not available, using buffered I/O\n");
+    }
+    if (fd < 0) {
+        fprintf(stderr, "Failed to open '%s': %s\n", filename, strerror(errno));
+        auraio_destroy(engine);
+        return 1;
     }
 
     /* Allocate aligned buffer from engine's pool */

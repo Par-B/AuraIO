@@ -95,11 +95,11 @@ int main(int argc, char** argv) {
 
             // Open file with O_DIRECT for best performance
             int fd = open(path.c_str(), O_RDONLY | O_DIRECT);
-            if (fd < 0) {
-                // Try without O_DIRECT
+            if (fd < 0 && errno == EINVAL) {
+                // O_DIRECT not supported on this filesystem - fall back
                 fd = open(path.c_str(), O_RDONLY);
-                if (fd < 0) continue;  // Skip files we can't open
             }
+            if (fd < 0) continue;  // Skip files we can't open
 
             // Allocate buffer (RAII)
             auraio::Buffer buffer;
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
 
             // Submit async read with lambda callback
             try {
-                engine.read(fctx_ptr->fd, fctx_ptr->buffer, READ_SIZE, 0,
+                (void)engine.read(fctx_ptr->fd, fctx_ptr->buffer, READ_SIZE, 0,
                     [fctx_ptr, &ctx, &engine](auraio::Request&, ssize_t result) {
                         if (result > 0) {
                             ctx.bytes_read += result;

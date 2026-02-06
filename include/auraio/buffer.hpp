@@ -221,6 +221,7 @@ public:
         if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
             throw Error(EINVAL, "Buffer not aligned for requested type");
         }
+        // Truncates: a 4097-byte buffer as<uint32_t>() returns 1024 elements
         return {static_cast<T*>(ptr_), size_ / sizeof(T)};
     }
 
@@ -229,6 +230,7 @@ public:
      * @tparam T Element type
      * @return std::span of const T elements
      * @throws Error if buffer is not properly aligned for T
+     * @note Trailing bytes smaller than sizeof(T) are excluded from the span
      */
     template<typename T>
     [[nodiscard]] std::span<const T> as() const {

@@ -1334,7 +1334,7 @@ int auraio_version_int(void) {
   return AURAIO_VERSION;
 }
 
-void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
+void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
   if (!engine || !stats) {
     return;
   }
