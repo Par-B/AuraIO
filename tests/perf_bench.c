@@ -27,6 +27,8 @@
 #include <sched.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 // ============================================================================
 // Timing utilities
@@ -229,6 +231,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
+    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
 
     // Submit initial batch
     while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
@@ -258,6 +261,13 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     // Main loop: process completions and submit new requests
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
+        if (now_ns() > drain_deadline) {
+            int stuck = atomic_load(&stats.inflight);
+            if (stuck > 0)
+                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            break;
+        }
+
         // Process completions
         auraio_wait(engine, 1);
 
@@ -553,14 +563,13 @@ static void bench_scalability(int duration_sec) {
         size_t buf_size = 64 * 1024;
         uint64_t start = now_ns();
         uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
-        int iter = 0;
-
         // Run benchmark at this depth
+        uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
         while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
-            iter++;
-            // Safety: don't spin forever waiting for completions
-            if (now_ns() > end_time && iter > 10000) {
-                // Force drain - something is stuck
+            if (now_ns() > drain_deadline) {
+                int stuck = atomic_load(&stats.inflight);
+                if (stuck > 0)
+                    fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
                 break;
             }
 
@@ -636,8 +645,16 @@ static void bench_syscall_batching(int duration_sec) {
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
+    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
 
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
+        if (now_ns() > drain_deadline) {
+            int stuck = atomic_load(&stats.inflight);
+            if (stuck > 0)
+                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            break;
+        }
+
         // Submit batch
         int submitted = 0;
         while (atomic_load(&stats.inflight) < max_inflight &&
@@ -750,8 +767,16 @@ static void bench_mixed_workload(int duration_sec) {
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
+    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
 
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
+        if (now_ns() > drain_deadline) {
+            int stuck = atomic_load(&stats.inflight);
+            if (stuck > 0)
+                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            break;
+        }
+
         while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
             int op = rand() % 100;
             int fd_idx = rand() % NUM_FILES;
@@ -905,6 +930,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Flush before potential fork() so children don't re-emit buffered output
+    fflush(stdout);
+
     if (strcmp(test, "throughput") == 0) {
         bench_throughput(duration, 256, 64 * 1024);
     } else if (strcmp(test, "latency") == 0) {
@@ -918,12 +946,83 @@ int main(int argc, char **argv) {
     } else if (strcmp(test, "mixed") == 0) {
         bench_mixed_workload(duration);
     } else if (strcmp(test, "all") == 0) {
-        bench_throughput(duration, 256, 64 * 1024);
-        bench_latency(duration, 4 * 1024);
-        bench_buffer_pool(duration, 4);
-        bench_scalability(duration / 2);  // Shorter for scalability since it runs multiple configs
-        bench_syscall_batching(duration);
-        bench_mixed_workload(duration);
+        // Fork each benchmark into its own process to avoid state
+        // contamination between sequential benchmarks (io_uring kernel
+        // state, library globals, etc.)
+        struct {
+            const char *name;
+            int dur;
+        } benchmarks[] = {
+            {"throughput",  duration},
+            {"latency",     duration},
+            {"buffer",      duration},
+            {"scalability", duration / 2},
+            {"syscall",     duration},
+            {"mixed",       duration},
+        };
+        int num_benchmarks = (int)(sizeof(benchmarks) / sizeof(benchmarks[0]));
+        int all_ok = 1;
+
+        for (int i = 0; i < num_benchmarks; i++) {
+            pid_t pid = fork();
+            if (pid < 0) {
+                perror("fork");
+                all_ok = 0;
+                continue;
+            }
+            if (pid == 0) {
+                // Child: run single benchmark and exit
+                if (strcmp(benchmarks[i].name, "throughput") == 0)
+                    bench_throughput(benchmarks[i].dur, 256, 64 * 1024);
+                else if (strcmp(benchmarks[i].name, "latency") == 0)
+                    bench_latency(benchmarks[i].dur, 4 * 1024);
+                else if (strcmp(benchmarks[i].name, "buffer") == 0)
+                    bench_buffer_pool(benchmarks[i].dur, 4);
+                else if (strcmp(benchmarks[i].name, "scalability") == 0)
+                    bench_scalability(benchmarks[i].dur);
+                else if (strcmp(benchmarks[i].name, "syscall") == 0)
+                    bench_syscall_batching(benchmarks[i].dur);
+                else if (strcmp(benchmarks[i].name, "mixed") == 0)
+                    bench_mixed_workload(benchmarks[i].dur);
+                fflush(stdout);
+                fflush(stderr);
+                // Don't cleanup_test_files() — parent owns them
+                _exit(0);
+            }
+
+            // Parent: wait with timeout.  Scalability runs 6 sub-tests
+            // sequentially, so needs dur * #depths + drain headroom.
+            // Use dur*8+10 for all benchmarks (generous, simple).
+            int timeout_sec = benchmarks[i].dur * 8 + 10;
+            int status;
+            pid_t ret = 0;
+            for (int t = 0; t < timeout_sec * 10; t++) {
+                ret = waitpid(pid, &status, WNOHANG);
+                if (ret != 0) break;
+                usleep(100000);  // 100ms poll
+            }
+            if (ret == 0) {
+                fprintf(stderr, "\n  [warn] %s timed out after %ds, killing\n",
+                        benchmarks[i].name, timeout_sec);
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                all_ok = 0;
+            } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+                fprintf(stderr, "\n  [warn] %s exited with status %d\n",
+                        benchmarks[i].name, WEXITSTATUS(status));
+                all_ok = 0;
+            } else if (WIFSIGNALED(status)) {
+                fprintf(stderr, "\n  [warn] %s killed by signal %d\n",
+                        benchmarks[i].name, WTERMSIG(status));
+                all_ok = 0;
+            }
+        }
+
+        if (!all_ok) {
+            cleanup_test_files();
+            printf("\nBenchmark complete (with warnings).\n");
+            return 1;
+        }
     } else {
         fprintf(stderr, "Unknown benchmark: %s\n", test);
         print_usage(argv[0]);
