@@ -41,6 +41,10 @@ examples/cpp/coroutine_copy
 .idea/
 compile_commands.json
 
+# Perf data
+perf.data
+perf.data.*
+
 # Debug
 *.dSYM/
 core
