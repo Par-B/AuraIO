@@ -395,7 +395,9 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
 
   /* Register eventfd with each ring */
   for (int i = 0; i < engine->ring_count; i++) {
-    if (io_uring_register_eventfd(&engine->rings[i].ring, engine->event_fd) != 0) {
+    int ret = io_uring_register_eventfd(&engine->rings[i].ring, engine->event_fd);
+    if (ret != 0) {
+      errno = -ret;
       goto cleanup_eventfd;
     }
   }
@@ -1101,7 +1103,8 @@ void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t size) {
  */
 
 int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, int count) {
-  if (!engine || !iovs || count <= 0) {
+  if (!engine || !iovs || count <= 0 ||
+      (size_t)count > SIZE_MAX / sizeof(struct iovec)) {
     errno = EINVAL;
     return (-1);
   }
@@ -1189,7 +1192,8 @@ int auraio_unregister_buffers(auraio_engine_t *engine) {
  */
 
 int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
-  if (!engine || !fds || count <= 0) {
+  if (!engine || !fds || count <= 0 ||
+      (size_t)count > SIZE_MAX / sizeof(int)) {
     errno = EINVAL;
     return (-1);
   }

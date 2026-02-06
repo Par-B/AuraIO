@@ -815,6 +815,61 @@ TEST(registered_files_invalid) {
     auraio_destroy(engine);
 }
 
+TEST(register_buffers_overflow_count) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+
+    /* Negative count should fail with EINVAL (overflow guard) */
+    errno = 0;
+    int ret = auraio_register_buffers(engine, &iov, -1);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Large count: allocate a proper array so memcpy is safe.
+     * The kernel may accept or reject large registrations depending
+     * on limits, so we just verify it doesn't crash.  Unregister
+     * if it succeeded. */
+    int large_count = 100000;
+    struct iovec *large_iovs = calloc((size_t)large_count, sizeof(struct iovec));
+    assert(large_iovs != NULL);
+    ret = auraio_register_buffers(engine, large_iovs, large_count);
+    if (ret == 0) {
+        auraio_unregister_buffers(engine);
+    }
+    free(large_iovs);
+
+    free(buf);
+    auraio_destroy(engine);
+}
+
+TEST(register_files_overflow_count) {
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    /* Negative count should fail with EINVAL (overflow guard) */
+    int fd = 0;
+    errno = 0;
+    int ret = auraio_register_files(engine, &fd, -1);
+    assert(ret == -1 && errno == EINVAL);
+
+    /* Large count: allocate a proper array so memcpy is safe.
+     * The kernel may accept large file registrations, so we just
+     * verify it doesn't crash.  Unregister if it succeeded. */
+    int large_count = 100000;
+    int *large_fds = calloc((size_t)large_count, sizeof(int));
+    assert(large_fds != NULL);
+    ret = auraio_register_files(engine, large_fds, large_count);
+    if (ret == 0) {
+        auraio_unregister_files(engine);
+    }
+    free(large_fds);
+
+    auraio_destroy(engine);
+}
+
 /* ============================================================================
  * Fsync Tests
  * ============================================================================ */
@@ -1558,6 +1613,8 @@ int main(void) {
     RUN_TEST(registered_files_basic);
     RUN_TEST(registered_files_update);
     RUN_TEST(registered_files_invalid);
+    RUN_TEST(register_buffers_overflow_count);
+    RUN_TEST(register_files_overflow_count);
 
     /* Fsync tests */
     RUN_TEST(ring_fsync_basic);
