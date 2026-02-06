@@ -203,7 +203,16 @@ extern "C" inline void auraio_detail_callback_trampoline(
     auto* ctx = static_cast<auraio::detail::CallbackContext*>(user_data);
     if (ctx && ctx->callback) {
         ctx->request = auraio::Request(req);
-        ctx->callback(ctx->request, result);
+        try {
+            ctx->callback(ctx->request, result);
+        } catch (...) {
+            // Release context before terminating to avoid pool leak
+            if (ctx->on_complete) {
+                ctx->on_complete();
+            }
+            // Exceptions cannot propagate through extern "C" (UB)
+            std::terminate();
+        }
     }
     // Release context immediately via on_complete (O(1) instead of polling)
     if (ctx && ctx->on_complete) {

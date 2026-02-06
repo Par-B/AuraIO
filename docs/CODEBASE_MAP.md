@@ -1,7 +1,7 @@
 ---
-last_mapped: 2026-02-05T00:00:00Z
-total_files: 44
-total_tokens: 99732
+last_mapped: 2026-02-05T12:00:00Z
+total_files: 79
+total_tokens: 196345
 ---
 
 # AuraIO Codebase Map
@@ -10,19 +10,30 @@ total_tokens: 99732
 
 ## System Overview
 
-AuraIO (Adaptive Uring Runtime Architecture) is a self-tuning asynchronous I/O library for Linux built on io_uring. It uses AIMD (Additive Increase Multiplicative Decrease) congestion control to automatically optimize I/O parameters for throughput and latency.
+AuraIO (Adaptive Uring Runtime Architecture) is a self-tuning asynchronous I/O library for Linux built on io_uring. It uses AIMD (Additive Increase Multiplicative Decrease) congestion control to automatically optimize I/O parameters for throughput and latency. The library provides C11, C++20, and Rust APIs.
 
 ```mermaid
 graph TB
-    subgraph "Public API"
+    subgraph "Public APIs"
         CAPI[auraio.h<br/>C API]
         CPPAPI[auraio.hpp<br/>C++ API]
+        RustAPI[auraio crate<br/>Rust API]
     end
 
     subgraph "C++ Bindings"
         Engine[engine.hpp<br/>Engine class]
         Coro[coro.hpp<br/>Coroutines]
-        Buffer[buffer.hpp<br/>RAII buffers]
+        CppBuf[buffer.hpp<br/>RAII buffers]
+    end
+
+    subgraph "Rust Bindings"
+        RustSafe[auraio crate<br/>Safe wrapper]
+        RustAsync[async_io.rs<br/>Futures]
+        RustSys[auraio-sys<br/>FFI bindings]
+    end
+
+    subgraph "Exporters"
+        Prom[prometheus<br/>Metrics formatter]
     end
 
     subgraph "Core C Library"
@@ -39,8 +50,13 @@ graph TB
 
     CPPAPI --> Engine
     Engine --> Coro
-    Engine --> Buffer
+    Engine --> CppBuf
     Engine --> CAPI
+    RustAPI --> RustSafe
+    RustSafe --> RustAsync
+    RustSafe --> RustSys
+    RustSys --> CAPI
+    Prom --> CAPI
     CAPI --> Impl
     Impl --> Ring
     Impl --> Adaptive
@@ -77,6 +93,28 @@ AuraIO/
 │   ├── adaptive_buffer.c     # Thread-safe aligned buffer pool with sharding
 │   ├── adaptive_buffer.h     # Buffer pool interface
 │   └── internal.h            # Shared utilities (timing, iovec helpers)
+├── bindings/
+│   └── rust/
+│       ├── Cargo.toml        # Workspace: auraio-sys + auraio
+│       ├── auraio-sys/       # Raw FFI bindings (bindgen-generated)
+│       │   ├── build.rs      # Library detection + bindgen codegen
+│       │   └── src/lib.rs    # Re-exports generated bindings
+│       └── auraio/           # Safe Rust wrapper
+│           └── src/
+│               ├── lib.rs        # Public API re-exports, integration tests
+│               ├── engine.rs     # Engine RAII wrapper, I/O methods
+│               ├── buffer.rs     # Buffer (RAII) + BufferRef (Copy)
+│               ├── callback.rs   # Type-erased FFI trampoline
+│               ├── async_io.rs   # AsyncEngine trait, IoFuture
+│               ├── options.rs    # Builder-pattern config
+│               ├── request.rs    # RequestHandle (pending op)
+│               ├── error.rs      # Error enum (thiserror)
+│               └── stats.rs      # Stats snapshot
+├── exporters/
+│   └── prometheus/
+│       ├── auraio_prometheus.h   # Prometheus formatter API
+│       ├── auraio_prometheus.c   # Text exposition format implementation
+│       └── example.c             # Minimal HTTP server on :9091/metrics
 ├── examples/
 │   ├── C/
 │   │   ├── quickstart.c      # Minimal read example
@@ -89,21 +127,38 @@ AuraIO/
 │   │   ├── bulk_reader.cpp   # C++ high-throughput scanner
 │   │   ├── write_modes.cpp   # C++ write modes demo
 │   │   └── coroutine_copy.cpp # C++20 coroutine file copy
+│   ├── rust/
+│   │   └── examples/
+│   │       ├── quickstart.rs     # Minimal Rust async read
+│   │       ├── simple_read.rs    # Read with stats reporting
+│   │       ├── bulk_reader.rs    # Concurrent directory scanner
+│   │       ├── file_copy.rs      # Synchronous-style file copy
+│   │       ├── async_copy.rs     # Future-based async file copy
+│   │       └── write_modes.rs    # O_DIRECT vs buffered comparison
 │   └── Makefile
 ├── tests/
 │   ├── test_engine.c         # AIMD algorithm tests
 │   ├── test_ring.c           # Ring management tests
 │   ├── test_buffer.c         # Buffer pool tests
+│   ├── test_stats.c          # Observability API tests
 │   ├── test_cpp.cpp          # C++ binding tests
 │   ├── stress_test.cpp       # Multi-threaded stress test
+│   ├── perf_bench.c          # Performance benchmarks (throughput, latency, scalability)
 │   ├── bench_buffer.c        # Buffer pool microbenchmark
 │   ├── repro_race.c          # Race condition reproduction
+│   ├── run_analysis.sh       # FIO comparison benchmark suite
+│   ├── run_deep_analysis.sh  # Flamegraph/cachegrind/pahole profiling
+│   ├── run_perf_test.sh      # Portable benchmark runner
 │   └── Makefile
+├── docs/
+│   ├── api_reference.md      # Complete C and C++ API reference
+│   ├── architecture.md       # Design philosophy, concurrency model, migration guide
+│   ├── observability.md      # Metrics API, Prometheus, sampling cost analysis
+│   └── performance.md        # Hardware-aware I/O design, optimization tips
 ├── pkg/
 │   └── libauraio.pc.in       # pkg-config template
-├── lib/                      # Build output (.so, .a, .pc)
-├── Makefile                  # Main build system
-└── README.md                 # User documentation
+├── Makefile                   # Main build system
+└── README.md                  # User documentation
 ```
 
 ## Module Guide
@@ -116,8 +171,8 @@ AuraIO/
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `include/auraio.h` | Public types and function declarations | 5,483 |
-| `src/auraio.c` | API implementation | 8,931 |
+| `include/auraio.h` | Public types and function declarations | 7,268 |
+| `src/auraio.c` | API implementation | 11,369 |
 
 **Key Types**:
 - `auraio_engine_t` - Opaque engine handle
@@ -133,6 +188,7 @@ AuraIO/
 - Event loop: `auraio_poll()`, `auraio_wait()`, `auraio_run()`, `auraio_stop()`
 - Buffers: `auraio_buffer_alloc()`, `auraio_buffer_free()`
 - Registered I/O: `auraio_register_buffers()`, `auraio_register_files()`
+- Observability: `auraio_get_stats()`, `auraio_get_ring_stats()`, `auraio_get_histogram()`, `auraio_get_buffer_stats()`
 - Cancellation: `auraio_cancel()`
 
 **Dependencies**: All internal modules, liburing, pthread, eventfd
@@ -150,15 +206,15 @@ AuraIO/
 | File | Purpose | Tokens |
 |------|---------|--------|
 | `include/auraio.hpp` | Umbrella header | 427 |
-| `include/auraio/engine.hpp` | Engine class, callbacks, concepts | 3,869 |
-| `include/auraio/coro.hpp` | Task<T>, IoAwaitable, FsyncAwaitable | 2,134 |
-| `include/auraio/buffer.hpp` | Buffer (RAII), BufferRef | 1,798 |
+| `include/auraio/engine.hpp` | Engine class, callbacks, concepts | 4,191 |
+| `include/auraio/coro.hpp` | Task<T>, IoAwaitable, FsyncAwaitable | 2,687 |
+| `include/auraio/buffer.hpp` | Buffer (RAII), BufferRef | 1,998 |
 | `include/auraio/options.hpp` | Options wrapper | 971 |
-| `include/auraio/request.hpp` | Request wrapper | 439 |
-| `include/auraio/stats.hpp` | Stats wrapper | 467 |
-| `include/auraio/error.hpp` | auraio::Error exception | 531 |
-| `include/auraio/fwd.hpp` | Forward declarations | 83 |
-| `include/auraio/detail/callback_storage.hpp` | CallbackPool, type erasure | 663 |
+| `include/auraio/request.hpp` | Request wrapper | 442 |
+| `include/auraio/stats.hpp` | Stats wrapper | 1,143 |
+| `include/auraio/error.hpp` | auraio::Error exception | 571 |
+| `include/auraio/fwd.hpp` | Forward declarations | 94 |
+| `include/auraio/detail/callback_storage.hpp` | CallbackPool, type erasure | 1,733 |
 
 **Key Classes**:
 - `auraio::Engine` - Move-only engine wrapper with template callbacks
@@ -172,19 +228,101 @@ AuraIO/
 - `IoAwaitable` - Awaitable for read/write (yields `ssize_t`)
 - `FsyncAwaitable` - Awaitable for fsync (yields `void`)
 
-**Example**:
-```cpp
-Task<int> read_file(Engine& engine, int fd) {
-    auto buf = engine.allocate_buffer(4096);
-    ssize_t n = co_await engine.async_read(fd, buf, 4096, 0);
-    co_return n;
-}
-```
-
 **Patterns**:
 - Type-erased callbacks via `std::function` + trampoline
 - Pre-allocated `CallbackPool` avoids per-I/O malloc
 - Move-only semantics prevent accidental copies
+
+---
+
+### Rust Bindings (`bindings/rust/`)
+
+**Purpose**: Safe, idiomatic Rust wrapper with RAII, async/await, and zero-cost abstractions
+
+**Entry point**: `bindings/rust/auraio/src/lib.rs`
+
+| File | Purpose | Tokens |
+|------|---------|--------|
+| `auraio-sys/build.rs` | Library detection + bindgen codegen | 781 |
+| `auraio-sys/src/lib.rs` | Raw FFI re-exports | 450 |
+| `auraio/src/lib.rs` | Public API, integration tests | 8,045 |
+| `auraio/src/engine.rs` | Engine RAII wrapper, all I/O methods | 3,682 |
+| `auraio/src/async_io.rs` | AsyncEngine trait, IoFuture | 3,758 |
+| `auraio/src/buffer.rs` | Buffer (RAII, Drop) + BufferRef (Copy) | 1,431 |
+| `auraio/src/callback.rs` | BoxedCallback, FFI trampoline | 385 |
+| `auraio/src/options.rs` | Builder-pattern config | 639 |
+| `auraio/src/request.rs` | RequestHandle (pending op) | 827 |
+| `auraio/src/error.rs` | Error enum via thiserror | 278 |
+| `auraio/src/stats.rs` | Stats snapshot | 314 |
+
+**Architecture**:
+```
+Application
+    ↓
+auraio crate (safe API: Engine, Buffer, AsyncEngine)
+    ↓
+auraio-sys crate (raw FFI, bindgen-generated)
+    ↓
+libauraio.so (C library)
+```
+
+**Key Types**:
+- `Engine` - RAII wrapper (`Send + Sync`), destroyed on `Drop`
+- `Buffer` - RAII pool buffer (`Send`, not `Sync`), freed on `Drop`
+- `BufferRef` - Lightweight descriptor (`Copy`), no ownership
+- `AsyncEngine` - Extension trait adding `async_read()`, `async_write()`, `async_fsync()`
+- `IoFuture` - Runtime-agnostic future for async I/O
+- `Options` - Builder with chainable setters
+- `Error` - `Io`, `EngineCreate`, `BufferAlloc`, `Submission`, `Cancelled`, `InvalidArgument`
+
+**Callback Flow**:
+1. Rust closure boxed as `BoxedCallback` (`Box<dyn FnOnce(Result<usize>) + Send>`)
+2. `Box::into_raw()` transfers ownership to C library via `user_data` pointer
+3. C library invokes `callback_trampoline()` on completion
+4. Trampoline calls `Box::from_raw()`, invokes closure, drops context
+
+**Async Pattern**:
+- `AsyncEngine` methods return `IoFuture` (shared `Arc<Mutex<IoState>>`)
+- Callback stores result + invokes `Waker`
+- Requires background thread calling `engine.wait()` to make progress
+- Runtime-agnostic: no tokio/async-std dependency
+
+**Gotchas**:
+- `RequestHandle` becomes **invalid** after callback starts (dangling pointer)
+- Inline C functions (`auraio_buf`, `auraio_buf_fixed`) reimplemented in Rust (bindgen can't handle inline)
+- Async futures don't progress without `engine.wait()` calls
+- Per-ring stats not yet exposed in Rust bindings
+
+---
+
+### Prometheus Exporter (`exporters/prometheus/`)
+
+**Purpose**: Standalone Prometheus text exposition format formatter for AuraIO metrics
+
+| File | Purpose | Tokens |
+|------|---------|--------|
+| `auraio_prometheus.h` | Formatter API | 351 |
+| `auraio_prometheus.c` | Text format implementation | 2,375 |
+| `example.c` | HTTP server on :9091 | 1,253 |
+
+**API**: `auraio_metrics_prometheus(engine, buf, buf_size)` - returns bytes written, negative if buffer too small
+
+**Metrics exported** (30+):
+- Aggregate: ops_completed, bytes_transferred, throughput, p99_latency, in_flight, ring_count
+- Per-ring: ops, bytes, in_flight, in_flight_limit, batch_threshold, queue_depth, p99, throughput, aimd_phase
+- Per-ring histograms: latency distribution with cumulative buckets
+- Buffer pool: allocated_bytes, buffers, shards
+
+**Patterns**:
+- `PROM_APPEND` macro for safe buffer building with overflow detection
+- NaN/Inf clamped to 0.0 (Prometheus format compliance)
+- Cumulative histogram buckets (per Prometheus spec)
+- No external dependencies beyond libc
+
+**Gotchas**:
+- Histogram sum is estimated using bucket midpoints (not exact)
+- On overflow, returns `-written * 2 + 4096` as conservative retry estimate
+- Example server is demo-quality (not production-grade)
 
 ---
 
@@ -196,8 +334,8 @@ Task<int> read_file(Engine& engine, int fd) {
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `src/adaptive_ring.h` | Ring interface, request struct | 2,006 |
-| `src/adaptive_ring.c` | Ring implementation | 4,416 |
+| `src/adaptive_ring.h` | Ring interface, request struct | 2,195 |
+| `src/adaptive_ring.c` | Ring implementation | 5,407 |
 
 **Key Types**:
 - `ring_ctx_t` - Per-ring context (io_uring, request pool, mutex, adaptive controller)
@@ -231,13 +369,13 @@ Task<int> read_file(Engine& engine, int fd) {
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `src/adaptive_engine.h` | Controller interface, constants | 3,091 |
-| `src/adaptive_engine.c` | AIMD implementation | 3,860 |
+| `src/adaptive_engine.h` | Controller interface, constants | 3,137 |
+| `src/adaptive_engine.c` | AIMD implementation | 3,923 |
 
 **Key Types**:
 - `adaptive_controller_t` - Per-ring controller state
 - `adaptive_phase_t` - State machine phases
-- `adaptive_histogram_t` - P99 latency tracking (50μs buckets, 200 buckets)
+- `adaptive_histogram_t` - P99 latency tracking (50us buckets, 200 buckets)
 
 **Key Functions**:
 - `adaptive_init()`, `adaptive_destroy()` - Lifecycle
@@ -251,7 +389,7 @@ BASELINE (warmup, 100ms)
     ↓
 PROBING (additive increase: +1/tick)
     ↓ plateau OR latency spike
-BACKOFF (multiplicative decrease: ×0.8)
+BACKOFF (multiplicative decrease: x0.8)
     ↓
 SETTLING (wait 100ms)
     ↓
@@ -259,10 +397,6 @@ STEADY (maintain config)
     ↓ stable for 5s
 CONVERGED (no more changes)
 ```
-
-**Dual-Loop Control**:
-1. **Outer Loop (AIMD)**: Adjusts in-flight limit based on efficiency ratio
-2. **Inner Loop (Batch Optimizer)**: Adjusts batch threshold targeting 8 SQEs/syscall
 
 **Key Constants** (tuned for NVMe SSDs):
 ```c
@@ -273,11 +407,6 @@ ADAPTIVE_AIMD_DECREASE         = 0.80   // Cut 20% on backoff
 ADAPTIVE_LATENCY_GUARD_MULT    = 10.0   // Backoff if P99 > 10x baseline
 ADAPTIVE_DEFAULT_LATENCY_GUARD = 10.0   // Hard ceiling: 10ms P99
 ```
-
-**Patterns**:
-- Double-buffered histogram for O(1) swap/reset
-- Efficiency ratio: Δthroughput / Δin_flight
-- Low-IOPS handling: Extends sample window when < 20 samples
 
 **Gotchas**:
 - Histogram swap uses `adaptive_hist_reset()` with atomic stores (not memset)
@@ -293,17 +422,8 @@ ADAPTIVE_DEFAULT_LATENCY_GUARD = 10.0   // Hard ceiling: 10ms P99
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `src/adaptive_buffer.h` | Pool interface | 1,213 |
-| `src/adaptive_buffer.c` | Pool implementation | 4,563 |
-
-**Key Types**:
-- `buffer_pool_t` - Main pool (shards, thread cache registry)
-- `buffer_shard_t` - Per-shard state (mutex, free lists by size class)
-- `thread_cache_t` - TLS cache for lock-free fast path
-
-**Key Functions**:
-- `buffer_pool_init()`, `buffer_pool_destroy()` - Lifecycle
-- `buffer_pool_alloc()`, `buffer_pool_free()` - Allocate/free aligned buffers
+| `src/adaptive_buffer.h` | Pool interface | 1,295 |
+| `src/adaptive_buffer.c` | Pool implementation | 4,698 |
 
 **Three-Tier Architecture**:
 ```
@@ -316,23 +436,12 @@ posix_memalign (slow path)
 
 **Size Classes**: 16 classes from 4KB to 128MB (power-of-2)
 
-**Auto-Scaling Shards**:
-```
-4 cores   → 2 shards   (~2 threads/shard)
-16 cores  → 4 shards   (~4 threads/shard)
-64 cores  → 16 shards  (~4 threads/shard)
-500 cores → 64 shards  (~8 threads/shard)
-```
+**Auto-Scaling Shards**: 2-64 shards based on core count
 
 **Patterns**:
-- Uses `__builtin_clzl()` for O(1) size-to-class mapping
+- `__builtin_clzl()` for O(1) size-to-class mapping
 - Batch transfers (4 at a time) between cache and shard
 - High-water mark limits cached buffers (default 64/shard)
-
-**Gotchas**:
-- Only first pool per thread gets TLS cache benefit
-- Pre-allocated metadata eliminates malloc on free path
-- `destroyed` flag checked to prevent use-after-free
 
 ---
 
@@ -383,27 +492,26 @@ sequenceDiagram
     Ring->>Ring: return request slot
 ```
 
-### C++ Coroutine Flow
+### Rust Callback Flow
 
 ```mermaid
 sequenceDiagram
-    participant Coro as Coroutine
-    participant Engine as Engine
-    participant Ring as Ring
-    participant Kernel as io_uring
+    participant App as Rust App
+    participant Eng as Engine (Rust)
+    participant CB as callback.rs
+    participant C as C Library
 
-    Coro->>Engine: co_await async_read(fd, buf, len, offset)
-    Engine->>Engine: allocate CallbackContext
-    Engine->>Ring: auraio_read() with trampoline callback
-    Ring->>Kernel: Submit SQE
-    Note over Coro: Suspended
+    App->>Eng: engine.read(fd, buf, len, offset, closure)
+    Eng->>CB: BoxedCallback::new(closure)
+    CB->>CB: Box::into_raw() → *void
+    Eng->>C: auraio_read(engine, ..., trampoline, user_data)
 
-    Note over Kernel: I/O completes
+    Note over C: I/O completes
 
-    Kernel-->>Ring: CQE
-    Ring->>Engine: trampoline(result)
-    Engine->>Coro: coroutine_handle.resume()
-    Coro->>Coro: await_resume() returns result
+    C->>CB: callback_trampoline(req, result, user_data)
+    CB->>CB: Box::from_raw(user_data)
+    CB->>App: closure(Result<usize>)
+    CB->>CB: Drop context
 ```
 
 ### Adaptive Tuning Flow
@@ -447,6 +555,8 @@ sequenceDiagram
 | Engine stats | Atomics with release/acquire | ARM/PowerPC safe |
 | C++ CallbackPool | Mutex-protected allocation | Short-lived |
 | C++ pending_contexts_ | Mutex-protected map | Thread-safe cleanup |
+| Rust Engine | `Send + Sync` | C library handles locking |
+| Rust IoFuture | `Arc<Mutex<IoState>>` | Waker-based notification |
 
 ### Lock Hierarchy (prevents deadlock)
 1. Buffer pool shards (independent, no nesting)
@@ -458,6 +568,65 @@ sequenceDiagram
 - **Poll thread**: Single thread calls poll/wait (releases lock for callbacks)
 - **Tick thread**: Runs every 10ms, lock-free stats via atomics
 - **SQPOLL threads** (optional): Kernel threads auto-submit SQEs
+- **Rust background poller** (async pattern): Calls `engine.wait()` for future progress
+
+## Test Infrastructure
+
+### Unit Tests
+
+| Test | Focus | File |
+|------|-------|------|
+| test_engine | AIMD algorithm, phase transitions | `tests/test_engine.c` |
+| test_ring | Ring lifecycle, submission, completion | `tests/test_ring.c` |
+| test_buffer | Buffer pool alloc/free, size classes | `tests/test_buffer.c` |
+| test_stats | Observability API, per-ring stats, histograms | `tests/test_stats.c` |
+| test_cpp | C++ bindings, RAII, coroutines, concepts | `tests/test_cpp.cpp` |
+| stress_test | Multi-threaded concurrent I/O | `tests/stress_test.cpp` |
+| Rust tests | FFI bindings, safe API, async I/O | `bindings/rust/auraio/src/lib.rs` |
+
+### Performance Benchmarks (`tests/perf_bench.c`)
+
+Six benchmark modes:
+- **Throughput**: 64K random reads, max inflight 256
+- **Latency**: 4K serial reads, depth=1, min/avg/max/P99
+- **Scalability**: Varying queue depth 4-128
+- **Mixed**: 70% reads, 25% writes, 5% fsync
+- **Syscall**: Measures ops per `io_uring_enter`
+- **Buffer pool**: Multi-threaded alloc/free stress
+
+Each benchmark runs in a separate fork to avoid io_uring kernel state contamination.
+
+### Analysis Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `run_analysis.sh` | FIO comparison suite with apples-to-apples mode (recommended) |
+| `run_deep_analysis.sh` | Flamegraphs, cachegrind, pahole, callgrind, perf c2c |
+| `run_perf_test.sh` | Portable benchmark runner (earlier iteration) |
+
+**`run_analysis.sh`** profiles: `--quick` (3s), `--standard` (5s), `--full` (10s). Generates Python report with FIO vs AuraIO comparison tables, percentage deltas, and key findings.
+
+**`run_deep_analysis.sh`** phases: CPU flamegraphs, lock contention, cache behavior, struct layout (pahole), callgraph, false sharing detection. Generates automated optimization recommendations.
+
+### Build Targets
+
+```bash
+# Core tests
+make test              # C unit tests
+make test-all          # C + C++ + Rust with unified summary
+
+# Sanitizers
+make test-sanitizers   # Valgrind + TSan + ASan combined summary
+
+# Benchmarks
+make bench             # FIO comparison (5s/test)
+make bench-quick       # Quick (3s/test)
+make bench-deep        # Deep profiling (flamegraphs, cachegrind)
+
+# Dependencies
+make deps              # Interactive installer (kernel >= 6.0 required)
+make deps-check        # Verify availability
+```
 
 ## Conventions
 
@@ -465,8 +634,10 @@ sequenceDiagram
 - **Types**: Opaque handles for public API, full structs internal
 - **Memory**: Pre-allocate pools, avoid malloc on hot paths
 - **Locking**: Release around callbacks, batch to reduce lock acquisitions
-- **Errors**: Return negative errno on failure (C), throw `auraio::Error` (C++)
-- **C++ Style**: RAII everywhere, move-only semantics, concepts for type safety
+- **Errors**: Return negative errno (C), throw `auraio::Error` (C++), `Result<T>` (Rust)
+- **C++ Style**: RAII, move-only semantics, concepts for type safety
+- **Rust Style**: RAII via Drop, `NonNull` for pointer safety, extension traits for async
+- **Build**: `-Wall -Wextra -Wshadow -Wpedantic -std=c11 -O2 -fPIC -fvisibility=hidden`
 
 ## Gotchas
 
@@ -476,10 +647,15 @@ sequenceDiagram
 4. **Buffer pool TLS**: Only first pool accessed per thread gets cache benefit
 5. **Registered buffer lifetime**: No in-flight I/O during unregister
 6. **SQPOLL**: May silently fall back without root/CAP_SYS_NICE
-7. **Partial file update**: `auraio_update_file()` may leave inconsistent state on error
-8. **Low-IOPS devices**: Tick may skip if < 20 samples and < 100ms elapsed
-9. **Histogram race (FIXED)**: Uses `adaptive_hist_reset()` with atomic stores, not memset
-10. **process_completion() locking**: Callers must NOT hold lock when calling it
+7. **Low-IOPS devices**: Tick may skip if < 20 samples and < 100ms elapsed
+8. **Histogram race (FIXED)**: Uses `adaptive_hist_reset()` with atomic stores, not memset
+9. **process_completion() locking**: Callers must NOT hold lock when calling it
+10. **Rust inline functions**: `auraio_buf`/`auraio_buf_fixed` reimplemented (bindgen can't handle inline)
+11. **Rust async polling**: Futures don't progress without background `engine.wait()` calls
+12. **Rust RequestHandle**: Becomes dangling pointer after callback starts (most dangerous Rust gotcha)
+13. **Prometheus histogram sum**: Estimated via midpoint (not exact)
+14. **Coroutine ownership**: Task must remain alive until completion (UB if destroyed early)
+15. **TSan ASLR**: Kernel >= 6.5 needs `setarch --addr-no-randomize` workaround
 
 ## Navigation Guide
 
@@ -487,6 +663,8 @@ sequenceDiagram
 1. Declare in `include/auraio.h`
 2. Implement in `src/auraio.c`
 3. Add C++ wrapper in `include/auraio/engine.hpp`
+4. Add Rust wrapper in `bindings/rust/auraio/src/engine.rs`
+5. Re-export from `bindings/rust/auraio/src/lib.rs`
 
 **To modify adaptive tuning behavior**:
 1. Constants at top of `src/adaptive_engine.h`
@@ -498,28 +676,44 @@ sequenceDiagram
 3. Expose via public API in `auraio.c` and `auraio.h`
 4. Add C++ method in `include/auraio/engine.hpp`
 5. Add awaitable in `include/auraio/coro.hpp` if applicable
+6. Add Rust method in `bindings/rust/auraio/src/engine.rs`
+7. Add async variant in `bindings/rust/auraio/src/async_io.rs` if applicable
 
-**To modify ring behavior**:
-1. Edit `src/adaptive_ring.c`
-2. Update tests in `tests/test_ring.c`
+**To add Prometheus metrics**:
+1. Add stat to public API in `include/auraio.h` (if new)
+2. Add formatting in `exporters/prometheus/auraio_prometheus.c`
 
-**To add a new C++ feature**:
-1. Add to appropriate header in `include/auraio/`
-2. Update tests in `tests/test_cpp.cpp`
+**To add a new Rust feature**:
+1. Implement in appropriate `bindings/rust/auraio/src/*.rs` file
+2. Re-export from `lib.rs`
+3. Add tests in `lib.rs` test module
+4. Add example in `examples/rust/examples/`
 
 **Build and test**:
 ```bash
-orb -m Caliente-dev bash -c "make test"        # All tests
-orb -m Caliente-dev bash -c "make test-cpp"    # C++ tests only
-orb -m Caliente-dev bash -c "make test-tsan"   # With ThreadSanitizer
+orb -m Caliente-dev bash -c "make test"           # C tests
+orb -m Caliente-dev bash -c "make test-all"       # C + C++ + Rust
+orb -m Caliente-dev bash -c "make test-sanitizers" # Valgrind + TSan + ASan
+orb -m Caliente-dev bash -c "make bench"           # Performance vs FIO
 ```
 
 ## Examples Reference
 
 | Example | Language | Purpose |
 |---------|----------|---------|
-| `quickstart.c/cpp` | C/C++ | Minimal async read |
-| `simple_read.c/cpp` | C/C++ | Read with stats |
-| `bulk_reader.c/cpp` | C/C++ | High-throughput scanner |
-| `write_modes.c/cpp` | C/C++ | O_DIRECT vs buffered |
+| `quickstart.c/cpp/rs` | C/C++/Rust | Minimal async read |
+| `simple_read.c/cpp/rs` | C/C++/Rust | Read with stats |
+| `bulk_reader.c/cpp/rs` | C/C++/Rust | High-throughput scanner |
+| `write_modes.c/cpp/rs` | C/C++/Rust | O_DIRECT vs buffered |
 | `coroutine_copy.cpp` | C++20 | Coroutine file copy |
+| `file_copy.rs` | Rust | Synchronous-style copy |
+| `async_copy.rs` | Rust | Future-based async copy |
+
+## Documentation Reference
+
+| Document | Covers |
+|----------|--------|
+| `docs/api_reference.md` | Complete C/C++ API: types, functions, error codes, callback rules |
+| `docs/architecture.md` | Design philosophy, concurrency model, migration guide |
+| `docs/observability.md` | Metrics API, Prometheus integration, sampling cost analysis, PromQL examples |
+| `docs/performance.md` | Hardware-aware I/O design, buffer registration, optimization tips |

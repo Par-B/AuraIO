@@ -146,7 +146,9 @@ public:
 
         auto& result = handle_.promise().result;
         if (std::holds_alternative<std::exception_ptr>(result)) {
-            std::rethrow_exception(std::get<std::exception_ptr>(result));
+            auto ex = std::get<std::exception_ptr>(result);
+            result = std::monostate{};
+            std::rethrow_exception(ex);
         }
         if (!std::holds_alternative<T>(result)) {
             throw std::logic_error("Task result already consumed");
