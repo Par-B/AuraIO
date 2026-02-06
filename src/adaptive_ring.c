@@ -41,9 +41,21 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
      * The cpu_id is stored for reference but affinity is not changed.
      * Users who need CPU pinning should do it in their worker threads. */
 
-    /* Initialize io_uring with optional SQPOLL */
+    /* Initialize io_uring with performance flags.
+     *
+     * IORING_SETUP_COOP_TASKRUN (kernel 5.19+): completions are delivered
+     * cooperatively rather than via task_work interrupts. Reduces latency
+     * variance and context switches. Safe for multi-threaded usage.
+     *
+     * Note: IORING_SETUP_SINGLE_ISSUER is NOT used because AuraIO allows
+     * any thread to submit to any ring (via select_ring() + per-ring mutex).
+     * SINGLE_ISSUER requires a single task per ring's entire lifetime. */
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
+
+#ifdef IORING_SETUP_COOP_TASKRUN
+    params.flags |= IORING_SETUP_COOP_TASKRUN;
+#endif
 
     bool try_sqpoll = options && options->enable_sqpoll;
     if (try_sqpoll) {
@@ -57,13 +69,30 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
 
     int ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
 
-    /* If SQPOLL failed (usually permission), retry without it */
-    if (ret < 0 && try_sqpoll) {
+    /* If init failed, retry without optional flags.
+     * COOP_TASKRUN/SINGLE_ISSUER may not be supported on older kernels,
+     * and SQPOLL requires root/CAP_SYS_NICE. */
+    if (ret < 0) {
         memset(&params, 0, sizeof(params));
+        if (try_sqpoll) {
+            params.flags |= IORING_SETUP_SQPOLL;
+            if (options->sqpoll_idle_ms > 0) {
+                params.sq_thread_idle = options->sqpoll_idle_ms;
+            } else {
+                params.sq_thread_idle = 1000;
+            }
+        }
         ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
-        ctx->sqpoll_enabled = false;
-    } else if (ret >= 0 && try_sqpoll) {
-        ctx->sqpoll_enabled = true;
+        ctx->sqpoll_enabled = try_sqpoll && (ret >= 0);
+
+        /* If SQPOLL also failed, try bare minimum */
+        if (ret < 0 && try_sqpoll) {
+            memset(&params, 0, sizeof(params));
+            ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
+            ctx->sqpoll_enabled = false;
+        }
+    } else {
+        ctx->sqpoll_enabled = try_sqpoll;
     }
 
     if (ret < 0) {

@@ -931,60 +931,56 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     /* Intentionally ignored - see comment above */
   }
 
-  /* Flush all rings and snapshot pending state under a single lock hold
-   * per ring. This halves the ring->lock acquisitions vs separate loops. */
-  bool ring_has_pending[AURAIO_MAX_RINGS];
+  /* Single-pass flush+poll: flush each ring and immediately poll it.
+   * Returns as soon as any ring produces completions — remaining rings
+   * get their flush on the next auraio_wait() call. This merges two
+   * full passes (flush all, poll all) into one early-exit pass. */
+  int total = 0;
+  int first_pending = -1;  /* First ring with pending ops (for blocking) */
   for (int i = 0; i < engine->ring_count; i++) {
     ring_ctx_t *ring = &engine->rings[i];
     pthread_mutex_lock(&ring->lock);
     ring_flush(ring);
-    ring_has_pending[i] = (ring->pending_count > 0);
+    bool has_pending = (ring->pending_count > 0);
     pthread_mutex_unlock(&ring->lock);
-  }
 
-  /* Non-blocking poll ALL rings first to harvest ready completions.
-   * This avoids starvation where only the first ring with pending ops
-   * gets serviced while later rings accumulate completions. */
-  int total = 0;
-  for (int i = 0; i < engine->ring_count; i++) {
-    int n = ring_poll(&engine->rings[i]);
+    int n = ring_poll(ring);
     if (n > 0) {
       total += n;
       atomic_fetch_add(&engine->total_ops, n);
+    }
+    if (has_pending && first_pending < 0) {
+      first_pending = i;
     }
   }
   if (total > 0) {
     return total;
   }
 
-  /* Nothing ready - find first ring with pending ops and block on it.
-   * Uses pending state captured during flush to avoid re-locking. */
-  for (int i = 0; i < engine->ring_count; i++) {
-    if (!ring_has_pending[i]) {
-      continue;
-    }
+  /* Nothing ready — block on first ring with pending ops.
+   * first_pending is captured during the flush pass above. */
+  if (first_pending < 0) {
+    return (0);
+  }
 
-    {
-      int completed = ring_wait(&engine->rings[i], timeout_ms);
+  {
+    int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
+    if (completed > 0) {
+      atomic_fetch_add(&engine->total_ops, completed);
 
-      if (completed > 0) {
-        atomic_fetch_add(&engine->total_ops, completed);
-
-        /* Also poll all other rings */
-        for (int j = 0; j < engine->ring_count; j++) {
-          if (j == i) continue;
-          int more = ring_poll(&engine->rings[j]);
-          if (more > 0) {
-            completed += more;
-            atomic_fetch_add(&engine->total_ops, more);
-          }
+      /* Also poll other rings that may have completed while we blocked */
+      for (int j = 0; j < engine->ring_count; j++) {
+        if (j == first_pending) continue;
+        int more = ring_poll(&engine->rings[j]);
+        if (more > 0) {
+          completed += more;
+          atomic_fetch_add(&engine->total_ops, more);
         }
-        return completed;
       }
-      if (completed < 0) {
-        return (-1);
-      }
-      /* completed == 0: timeout, try next ring */
+      return completed;
+    }
+    if (completed < 0) {
+      return (-1);
     }
   }
 
