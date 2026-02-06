@@ -162,10 +162,18 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     int idx = ctx->free_request_stack[--ctx->free_request_count];
     auraio_request_t *req = &ctx->requests[idx];
 
-    /* Clear previous state but preserve op_idx. */
-    int saved_idx = req->op_idx;
-    memset(req, 0, sizeof(*req));
-    req->op_idx = saved_idx;
+    /* Zero only the variant fields that differ between operation types.
+     * Fields always set by callers (fd, callback, user_data, ring_idx,
+     * submit_time_ns, op_type) are omitted — they'll be overwritten.
+     * op_idx is preserved (assigned at ring init, never changes). */
+    req->offset = 0;
+    req->buffer = NULL;
+    req->len = 0;
+    req->buf_index = 0;
+    req->iovcnt = 0;
+    req->buf_offset = 0;
+    req->iov = NULL;
+    req->cancel_target = NULL;
     atomic_init(&req->pending, false);
     atomic_init(&req->cancel_requested, false);
 

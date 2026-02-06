@@ -108,34 +108,38 @@ static int get_cpu_count(void) {
   return (int)n;
 }
 
-/**
- * Thread-local cached ring index for fallback path.
- * -1 means not yet assigned.
- */
-static __thread int cached_ring_idx = -1;
+/** How often to refresh the cached CPU index (every N submissions). */
+#define SELECT_RING_REFRESH 32
+
+/** Thread-local cached CPU for ring selection. -1 = not yet cached. */
+static __thread int cached_cpu = -1;
+/** Countdown to next sched_getcpu() refresh. */
+static __thread int cpu_refresh_counter = 0;
 
 /**
  * Select a ring for the next operation.
  *
- * Uses sched_getcpu() to select the ring matching the calling thread's CPU
- * for better cache locality. Falls back to thread-local sticky assignment
- * if CPU detection fails (better than round-robin which causes hot spots).
+ * Caches sched_getcpu() result in TLS and refreshes every SELECT_RING_REFRESH
+ * submissions. Falls back to thread-ID-based sticky assignment if CPU
+ * detection fails or returns an out-of-range value.
  */
 static ring_ctx_t *select_ring(auraio_engine_t *engine) {
-  /* Try to use CPU-local ring for better cache locality */
-  int cpu = sched_getcpu();
-  if (cpu >= 0 && cpu < engine->ring_count) {
-    return &engine->rings[cpu];
+  if (--cpu_refresh_counter <= 0) {
+    cpu_refresh_counter = SELECT_RING_REFRESH;
+    cached_cpu = sched_getcpu();
+  }
+
+  if (cached_cpu >= 0 && cached_cpu < engine->ring_count) {
+    return &engine->rings[cached_cpu];
   }
 
   /* Fallback: thread-local sticky assignment.
    * Each thread gets assigned to one ring and stays there.
    * Better than round-robin which can cause hot spots. */
-  if (cached_ring_idx < 0 || cached_ring_idx >= engine->ring_count) {
-    /* First call from this thread - assign based on thread ID */
-    cached_ring_idx = (int)((uintptr_t)pthread_self() % engine->ring_count);
+  if (cached_cpu < 0) {
+    cached_cpu = (int)((uintptr_t)pthread_self() % engine->ring_count);
   }
-  return &engine->rings[cached_ring_idx];
+  return &engine->rings[cached_cpu % engine->ring_count];
 }
 
 /**

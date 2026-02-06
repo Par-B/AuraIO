@@ -172,29 +172,22 @@ static void shard_destroy(buffer_shard_t *shard) {
  * Uses lock-free CAS to register the cache with the pool for cleanup.
  */
 static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
-    /* Check pool liveness before dereferencing potentially-freed TLS cache.
-     * After buffer_pool_destroy() frees thread caches, other threads' TLS
-     * pointers become dangling. This check prevents use-after-free. */
-    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        tls_cache = NULL;
-        return NULL;
-    }
-
     thread_cache_t *cache = tls_cache;
 
     /* Fast path: already have a valid cache for this pool.
      * Check both pointer and generation ID to detect stale caches from
-     * a previous pool that happened to occupy the same address. */
+     * a previous pool that happened to occupy the same address.
+     * This avoids the atomic pool->destroyed load on every call. */
     if (cache && cache->pool == pool && cache->pool_id == pool->pool_id) {
         return cache;
     }
 
-    /* Slow path: check if pool is destroyed (acquire fence is fine here).
-     * This only runs on first access per thread or pool mismatch. */
+    /* Slow path: pool mismatch, no cache, or first call.
+     * Check pool liveness — after buffer_pool_destroy() frees thread caches,
+     * TLS pointers become dangling. The acquire fence ensures we see the
+     * destroyed flag before any freed memory. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        if (tls_cache && tls_cache->pool == pool) {
-            tls_cache = NULL;
-        }
+        tls_cache = NULL;
         return NULL;
     }
 
