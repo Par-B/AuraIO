@@ -11,6 +11,7 @@ tests/test_engine
 tests/test_buffer
 tests/test_ring
 tests/test_cpp
+tests/test_stats
 tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan
@@ -32,6 +33,9 @@ examples/cpp/simple_read
 examples/cpp/bulk_reader
 examples/cpp/write_modes
 examples/cpp/coroutine_copy
+
+# Exporter binaries
+exporters/prometheus/prometheus_example
 
 # Editor/IDE
 *.swp

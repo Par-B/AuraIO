@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <utility>
 
 namespace auraio {
@@ -540,6 +541,51 @@ public:
         Stats stats;
         auraio_get_stats(handle_, &stats.stats_);
         return stats;
+    }
+
+    /**
+     * Get the number of io_uring rings
+     * @return Number of rings
+     */
+    [[nodiscard]] int ring_count() const noexcept {
+        return auraio_get_ring_count(handle_);
+    }
+
+    /**
+     * Get per-ring statistics
+     * @param ring_idx Ring index (0 to ring_count()-1)
+     * @return RingStats snapshot
+     * @throws std::out_of_range if ring_idx is invalid
+     */
+    [[nodiscard]] RingStats get_ring_stats(int ring_idx) const {
+        RingStats rs;
+        if (auraio_get_ring_stats(handle_, ring_idx, &rs.stats_) != 0)
+            throw std::out_of_range("ring_idx out of range");
+        rs.ring_idx_ = ring_idx;
+        return rs;
+    }
+
+    /**
+     * Get latency histogram snapshot for a ring
+     * @param ring_idx Ring index (0 to ring_count()-1)
+     * @return Histogram snapshot
+     * @throws std::out_of_range if ring_idx is invalid
+     */
+    [[nodiscard]] Histogram get_histogram(int ring_idx) const {
+        Histogram h;
+        if (auraio_get_histogram(handle_, ring_idx, &h.hist_) != 0)
+            throw std::out_of_range("ring_idx out of range");
+        return h;
+    }
+
+    /**
+     * Get buffer pool statistics
+     * @return BufferStats snapshot
+     */
+    [[nodiscard]] BufferStats get_buffer_stats() const {
+        BufferStats bs;
+        auraio_get_buffer_stats(handle_, &bs.stats_);
+        return bs;
     }
 
     // =========================================================================

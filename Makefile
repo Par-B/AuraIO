@@ -140,6 +140,13 @@ test-all: all
 		echo "RESULT: ALL PASSED"; \
 	fi
 
+# Build metrics exporters (Prometheus)
+exporters: all
+	$(CC) -Wall -Wextra -std=c11 -O2 -Iinclude -Iexporters/prometheus \
+		exporters/prometheus/example.c exporters/prometheus/auraio_prometheus.c \
+		-o exporters/prometheus/prometheus_example \
+		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
+
 # Build examples
 examples: all
 	$(MAKE) -C examples
@@ -237,6 +244,7 @@ clean: rust-clean
 	rm -rf lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples clean 2>/dev/null || true
+	rm -f exporters/prometheus/prometheus_example
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
@@ -715,6 +723,9 @@ help:
 	@echo "  make lint-clang-tidy Run clang-tidy"
 	@echo "  make compdb         Generate compile_commands.json"
 	@echo ""
+	@echo "Exporters:"
+	@echo "  make exporters      Build metrics exporters (Prometheus)"
+	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
@@ -724,4 +735,5 @@ help:
         rust rust-test rust-examples rust-clean \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
         bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
-        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual
+        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
+        exporters

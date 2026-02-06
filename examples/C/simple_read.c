@@ -116,16 +116,27 @@ int main(int argc, char **argv) {
         printf("\n");
     }
 
-    /* Get statistics */
+    /* Get aggregate statistics */
     auraio_stats_t stats;
     auraio_get_stats(engine, &stats);
     printf("\nEngine statistics:\n");
-    printf("  Ops completed:     %lld\n", stats.ops_completed);
-    printf("  Bytes transferred: %lld\n", stats.bytes_transferred);
-    printf("  Throughput:        %.2f MB/s\n", stats.current_throughput_bps / (1024 * 1024));
+    printf("  Ops completed:     %lld\n", (long long)stats.ops_completed);
+    printf("  Bytes transferred: %lld\n", (long long)stats.bytes_transferred);
+    printf("  Throughput:        %.2f MB/s\n", stats.current_throughput_bps / (1024.0 * 1024.0));
     printf("  P99 latency:       %.2f ms\n", stats.p99_latency_ms);
     printf("  Optimal in-flight: %d\n", stats.optimal_in_flight);
     printf("  Optimal batch:     %d\n", stats.optimal_batch_size);
+
+    /* Per-ring statistics (demonstrates auraio_get_ring_stats) */
+    int rings = auraio_get_ring_count(engine);
+    for (int i = 0; i < rings; i++) {
+        auraio_ring_stats_t rs;
+        if (auraio_get_ring_stats(engine, i, &rs) == 0) {
+            printf("  Ring %d: phase=%s depth=%d/%d\n",
+                   i, auraio_phase_name(rs.aimd_phase),
+                   rs.pending_count, rs.in_flight_limit);
+        }
+    }
 
     /* Cleanup */
     auraio_buffer_free(engine, buf, READ_SIZE);

@@ -14,6 +14,9 @@ class BufferRef;
 class Request;
 class Options;
 class Stats;
+class RingStats;
+class Histogram;
+class BufferStats;
 class Error;
 
 template<typename T = void>

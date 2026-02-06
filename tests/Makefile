@@ -11,7 +11,7 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring
+TESTS = test_engine test_buffer test_ring test_stats
 CPP_TESTS = test_cpp
 
 all: $(TESTS)
@@ -36,6 +36,9 @@ test_buffer: test_buffer.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 test_ring: test_ring.c ../lib/libauraio.a
+	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+test_stats: test_stats.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 # ============================================================================

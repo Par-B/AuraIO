@@ -61,6 +61,7 @@
 #endif
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 
@@ -132,14 +133,83 @@ typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result,
  * Retrieved via auraio_get_stats() for monitoring and debugging.
  */
 typedef struct {
-  long long ops_completed;       /**< Total operations completed */
-  long long bytes_transferred;   /**< Total bytes read/written */
+  int64_t ops_completed;         /**< Total operations completed */
+  int64_t bytes_transferred;     /**< Total bytes read/written */
   double current_throughput_bps; /**< Current throughput (bytes/sec) */
   double p99_latency_ms;         /**< 99th percentile latency (ms) */
   int current_in_flight;         /**< Current in-flight operations */
   int optimal_in_flight;         /**< Tuned optimal in-flight limit */
   int optimal_batch_size;        /**< Tuned optimal batch size */
 } auraio_stats_t;
+
+/**
+ * Per-ring statistics
+ *
+ * Provides detailed per-ring metrics including AIMD controller state.
+ * Retrieved via auraio_get_ring_stats().
+ */
+typedef struct {
+    int64_t ops_completed;      /**< Total operations completed on this ring */
+    int64_t bytes_transferred;  /**< Total bytes transferred through this ring */
+    int pending_count;          /**< Current in-flight operations */
+    int in_flight_limit;        /**< Current AIMD-tuned in-flight limit */
+    int batch_threshold;        /**< Current AIMD-tuned batch threshold */
+    double p99_latency_ms;      /**< Current P99 latency for this ring (ms) */
+    double throughput_bps;      /**< Current throughput for this ring (bytes/sec) */
+    int aimd_phase;             /**< Current AIMD phase (see AURAIO_PHASE_* constants) */
+    int queue_depth;            /**< Maximum queue depth */
+    uint32_t _reserved[4];     /**< Reserved for future use; must be zero */
+} auraio_ring_stats_t;
+
+/** AIMD controller phase constants for auraio_ring_stats_t.aimd_phase */
+#define AURAIO_PHASE_BASELINE   0  /**< Collecting baseline latency */
+#define AURAIO_PHASE_PROBING    1  /**< Increasing in-flight limit */
+#define AURAIO_PHASE_STEADY     2  /**< Maintaining optimal config */
+#define AURAIO_PHASE_BACKOFF    3  /**< Reducing due to latency spike */
+#define AURAIO_PHASE_SETTLING   4  /**< Waiting for metrics to stabilize */
+#define AURAIO_PHASE_CONVERGED  5  /**< Tuning complete */
+
+/**
+ * Latency histogram snapshot
+ *
+ * An approximate snapshot of the active latency histogram for a ring.
+ * Tracks latencies from 0 to max_tracked_us in bucket_width_us increments.
+ * Operations exceeding max_tracked_us are counted in overflow.
+ *
+ * Because the snapshot is read from a concurrently-written histogram,
+ * individual bucket values are atomic but the overall snapshot may not
+ * be perfectly consistent (e.g., total_count may differ slightly from
+ * the sum of all buckets + overflow).  For monitoring purposes this is
+ * negligible.
+ *
+ * When adaptive tuning is disabled (disable_adaptive = true), the
+ * histogram is not periodically reset and accumulates data indefinitely.
+ *
+ * Retrieved via auraio_get_histogram().
+ */
+#define AURAIO_HISTOGRAM_BUCKETS         200
+#define AURAIO_HISTOGRAM_BUCKET_WIDTH_US  50
+
+typedef struct {
+    uint32_t buckets[AURAIO_HISTOGRAM_BUCKETS]; /**< Latency frequency buckets */
+    uint32_t overflow;          /**< Count of operations exceeding max_tracked_us */
+    uint32_t total_count;       /**< Total samples in this snapshot */
+    int bucket_width_us;        /**< Width of each bucket in microseconds */
+    int max_tracked_us;         /**< Maximum tracked latency in microseconds */
+    uint32_t _reserved[2];     /**< Reserved for future use; must be zero */
+} auraio_histogram_t;
+
+/**
+ * Buffer pool statistics
+ *
+ * Retrieved via auraio_get_buffer_stats().
+ */
+typedef struct {
+    size_t total_allocated_bytes; /**< Total bytes currently allocated from pool */
+    size_t total_buffers;         /**< Total buffer count currently allocated */
+    int shard_count;              /**< Number of pool shards */
+    uint32_t _reserved[4];       /**< Reserved for future use; must be zero */
+} auraio_buffer_stats_t;
 
 /**
  * Engine configuration options
@@ -720,6 +790,71 @@ AURAIO_API int auraio_unregister_files(auraio_engine_t *engine);
  * @param stats  Output statistics structure
  */
 AURAIO_API void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats);
+
+/**
+ * Get the number of io_uring rings in the engine
+ *
+ * @param engine Engine handle
+ * @return Number of rings, or 0 if engine is NULL
+ */
+AURAIO_API int auraio_get_ring_count(auraio_engine_t *engine);
+
+/**
+ * Get statistics for a specific ring
+ *
+ * Thread-safe: locks the ring's mutex during the read.
+ * If engine or stats is NULL, returns -1 without modifying stats.
+ * If ring_idx is out of range, returns -1 and zeroes stats.
+ *
+ * @param engine   Engine handle
+ * @param ring_idx Ring index (0 to auraio_get_ring_count()-1)
+ * @param stats    Output statistics structure
+ * @return 0 on success, -1 on error (NULL engine/stats or invalid ring_idx)
+ */
+AURAIO_API int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
+                                      auraio_ring_stats_t *stats);
+
+/**
+ * Get a latency histogram snapshot for a specific ring
+ *
+ * Copies the current active histogram. The snapshot is approximate —
+ * see auraio_histogram_t documentation for details.
+ *
+ * Thread-safe: locks the ring's mutex during the copy.
+ * If engine or hist is NULL, returns -1 without modifying hist.
+ * If ring_idx is out of range, returns -1 and zeroes hist.
+ *
+ * @param engine   Engine handle
+ * @param ring_idx Ring index (0 to auraio_get_ring_count()-1)
+ * @param hist     Output histogram structure
+ * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
+ */
+AURAIO_API int auraio_get_histogram(auraio_engine_t *engine, int ring_idx,
+                                     auraio_histogram_t *hist);
+
+/**
+ * Get buffer pool statistics
+ *
+ * Thread-safe: reads atomic counters from the buffer pool.
+ * If engine or stats is NULL, returns -1 without modifying stats.
+ *
+ * @param engine Engine handle
+ * @param stats  Output statistics structure
+ * @return 0 on success, -1 on error (NULL engine or stats)
+ */
+AURAIO_API int auraio_get_buffer_stats(auraio_engine_t *engine,
+                                        auraio_buffer_stats_t *stats);
+
+/**
+ * Get human-readable name for an AIMD phase value
+ *
+ * Valid phase values are 0-5 (AURAIO_PHASE_BASELINE through
+ * AURAIO_PHASE_CONVERGED).  Returns "UNKNOWN" for out-of-range values.
+ *
+ * @param phase Phase value (from auraio_ring_stats_t.aimd_phase)
+ * @return Static string like "BASELINE", "PROBING", etc., or "UNKNOWN"
+ */
+AURAIO_API const char *auraio_phase_name(int phase);
 
 /**
  * Get library version string

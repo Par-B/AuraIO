@@ -224,8 +224,8 @@ typedef struct {
     double latency_rise_threshold;      /**< Threshold for latency backoff */
     double max_p99_ms;                  /**< Hard ceiling on P99 (0 = none) */
 
-    /* AIMD state */
-    adaptive_phase_t phase;         /**< Current phase */
+    /* AIMD state — phase is atomic for thread-safe stats reads */
+    _Atomic adaptive_phase_t phase; /**< Current phase */
     int warmup_count;               /**< Samples collected in warmup */
     int plateau_count;              /**< Consecutive plateau samples */
     int steady_count;               /**< Time in STEADY phase */

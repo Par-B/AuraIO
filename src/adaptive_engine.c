@@ -322,7 +322,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
             /* Collect baseline metrics */
             ctrl->warmup_count++;
             if (ctrl->warmup_count >= ADAPTIVE_WARMUP_SAMPLES) {
-                ctrl->phase = ADAPTIVE_PHASE_PROBING;
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
                 ctrl->prev_throughput_bps = throughput_bps;
                 ctrl->prev_in_flight_limit = in_flight_limit;
             }
@@ -334,7 +334,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
                 ctrl->spike_count++;
                 if (ctrl->spike_count >= 2) {
                     /* Latency spike - back off */
-                    ctrl->phase = ADAPTIVE_PHASE_BACKOFF;
+                    atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
                     ctrl->spike_count = 0;
                 }
             } else {
@@ -354,7 +354,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
                     ctrl->plateau_count++;
                     if (ctrl->plateau_count >= 3) {
                         /* Confirmed plateau - enter steady */
-                        ctrl->phase = ADAPTIVE_PHASE_SETTLING;
+                        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
                         ctrl->settling_timer = 0;
                     }
                 }
@@ -365,7 +365,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
             /* Wait for metrics to stabilize */
             ctrl->settling_timer++;
             if (ctrl->settling_timer >= ADAPTIVE_SETTLING_TICKS) {
-                ctrl->phase = ADAPTIVE_PHASE_STEADY;
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_STEADY, memory_order_release);
                 ctrl->steady_count = 0;
             }
             break;
@@ -376,12 +376,12 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
 
             /* Check for latency spike */
             if (latency_rising) {
-                ctrl->phase = ADAPTIVE_PHASE_BACKOFF;
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
                 ctrl->steady_count = 0;
             }
             /* Check for sustained steady state */
             else if (ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
-                ctrl->phase = ADAPTIVE_PHASE_CONVERGED;
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
             }
             break;
 
@@ -394,7 +394,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
             atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_relaxed);
             params_changed = true;
             ctrl->plateau_count = 0;
-            ctrl->phase = ADAPTIVE_PHASE_SETTLING;
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
             ctrl->settling_timer = 0;
             break;
 

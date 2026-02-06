@@ -1299,3 +1299,112 @@ void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats) {
   stats->current_throughput_bps = max_throughput * engine->ring_count;
   stats->p99_latency_ms = max_p99;
 }
+
+/* Verify public and internal histogram constants stay in sync */
+_Static_assert(AURAIO_HISTOGRAM_BUCKETS == LATENCY_BUCKET_COUNT,
+               "Public AURAIO_HISTOGRAM_BUCKETS must match internal LATENCY_BUCKET_COUNT");
+_Static_assert(AURAIO_HISTOGRAM_BUCKET_WIDTH_US == LATENCY_BUCKET_WIDTH_US,
+               "Public AURAIO_HISTOGRAM_BUCKET_WIDTH_US must match internal LATENCY_BUCKET_WIDTH_US");
+
+/* Verify public phase constants match internal enum */
+_Static_assert(AURAIO_PHASE_BASELINE  == ADAPTIVE_PHASE_BASELINE,
+               "AURAIO_PHASE_BASELINE must match internal enum");
+_Static_assert(AURAIO_PHASE_PROBING   == ADAPTIVE_PHASE_PROBING,
+               "AURAIO_PHASE_PROBING must match internal enum");
+_Static_assert(AURAIO_PHASE_STEADY    == ADAPTIVE_PHASE_STEADY,
+               "AURAIO_PHASE_STEADY must match internal enum");
+_Static_assert(AURAIO_PHASE_BACKOFF   == ADAPTIVE_PHASE_BACKOFF,
+               "AURAIO_PHASE_BACKOFF must match internal enum");
+_Static_assert(AURAIO_PHASE_SETTLING  == ADAPTIVE_PHASE_SETTLING,
+               "AURAIO_PHASE_SETTLING must match internal enum");
+_Static_assert(AURAIO_PHASE_CONVERGED == ADAPTIVE_PHASE_CONVERGED,
+               "AURAIO_PHASE_CONVERGED must match internal enum");
+
+int auraio_get_ring_count(auraio_engine_t *engine) {
+  if (!engine) return 0;
+  return engine->ring_count;
+}
+
+int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
+                          auraio_ring_stats_t *stats) {
+  if (!engine || !stats) return -1;
+  if (ring_idx < 0 || ring_idx >= engine->ring_count) {
+    memset(stats, 0, sizeof(*stats));
+    return -1;
+  }
+
+  ring_ctx_t *ring = &engine->rings[ring_idx];
+  pthread_mutex_lock(&ring->lock);
+
+  stats->ops_completed    = ring->ops_completed;
+  stats->bytes_transferred = ring->bytes_submitted;
+  stats->pending_count    = ring->pending_count;
+  stats->queue_depth      = ring->max_requests;
+
+  /* Use acquire ordering on all adaptive controller atomics to pair with
+   * release in the tick thread.  The tick thread writes these without
+   * holding ring->lock, so the mutex alone does not establish
+   * happens-before; acquire on the loads does. */
+  adaptive_controller_t *ctrl = &ring->adaptive;
+  stats->in_flight_limit = atomic_load_explicit(&ctrl->current_in_flight_limit,
+                                                 memory_order_acquire);
+  stats->batch_threshold = atomic_load_explicit(&ctrl->current_batch_threshold,
+                                                 memory_order_acquire);
+  stats->p99_latency_ms  = atomic_load_explicit(&ctrl->current_p99_ms,
+                                                 memory_order_acquire);
+  stats->throughput_bps  = atomic_load_explicit(&ctrl->current_throughput_bps,
+                                                 memory_order_acquire);
+  stats->aimd_phase      = atomic_load_explicit(&ctrl->phase,
+                                                 memory_order_acquire);
+  memset(stats->_reserved, 0, sizeof(stats->_reserved));
+
+  pthread_mutex_unlock(&ring->lock);
+  return 0;
+}
+
+int auraio_get_histogram(auraio_engine_t *engine, int ring_idx,
+                         auraio_histogram_t *hist) {
+  if (!engine || !hist) return -1;
+  if (ring_idx < 0 || ring_idx >= engine->ring_count) {
+    memset(hist, 0, sizeof(*hist));
+    return -1;
+  }
+
+  ring_ctx_t *ring = &engine->rings[ring_idx];
+  pthread_mutex_lock(&ring->lock);
+
+  /* Read from the active histogram.  Individual bucket loads are atomic but
+   * the overall snapshot is approximate — see auraio_histogram_t docs. */
+  adaptive_histogram_t *active = adaptive_hist_active(&ring->adaptive.hist_pair);
+  for (int i = 0; i < AURAIO_HISTOGRAM_BUCKETS; i++) {
+    hist->buckets[i] = atomic_load_explicit(&active->buckets[i],
+                                             memory_order_relaxed);
+  }
+  hist->overflow    = atomic_load_explicit(&active->overflow, memory_order_relaxed);
+  hist->total_count = atomic_load_explicit(&active->total_count, memory_order_relaxed);
+  hist->bucket_width_us = LATENCY_BUCKET_WIDTH_US;
+  hist->max_tracked_us  = LATENCY_MAX_US;
+  memset(hist->_reserved, 0, sizeof(hist->_reserved));
+
+  pthread_mutex_unlock(&ring->lock);
+  return 0;
+}
+
+int auraio_get_buffer_stats(auraio_engine_t *engine,
+                            auraio_buffer_stats_t *stats) {
+  if (!engine || !stats) return -1;
+
+  memset(stats, 0, sizeof(*stats));
+
+  buffer_pool_t *pool = &engine->buffer_pool;
+  stats->total_allocated_bytes = atomic_load_explicit(&pool->total_allocated,
+                                                       memory_order_relaxed);
+  stats->total_buffers         = atomic_load_explicit(&pool->total_buffers,
+                                                       memory_order_relaxed);
+  stats->shard_count           = pool->shard_count;
+  return 0;
+}
+
+const char *auraio_phase_name(int phase) {
+  return adaptive_phase_name((adaptive_phase_t)phase);
+}
