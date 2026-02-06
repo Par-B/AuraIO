@@ -485,6 +485,27 @@ Signal the event loop to stop. Thread-safe — can be called from any thread or 
 
 ---
 
+##### `auraio_drain`
+
+```c
+int auraio_drain(auraio_engine_t *engine, int timeout_ms);
+```
+
+Wait until all in-flight operations across all rings have completed. Useful for graceful shutdown or synchronization points.
+
+New submissions are **not** blocked during drain; if other threads submit concurrently, drain processes those as well.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `engine` | `auraio_engine_t *` | Engine handle |
+| `timeout_ms` | `int` | Max wait: -1 = forever, 0 = non-blocking poll |
+
+**Returns:** Total completions processed, or -1 on error/timeout.
+
+**Errors:** `ETIMEDOUT` if deadline exceeded, `EINVAL` if engine is `NULL`.
+
+---
+
 #### Buffer Management
 
 ---
@@ -860,6 +881,7 @@ Coroutine awaitables throw `Error` on negative results when resumed.
 | `wait(int timeout_ms = -1)` | `int` | `Error` | Block until completion or timeout |
 | `run()` | `void` | — | Run event loop until `stop()` |
 | `stop() noexcept` | `void` | — | Signal event loop to stop (thread-safe) |
+| `drain(int timeout_ms = -1)` | `int` | `Error` | Wait until all in-flight ops complete |
 
 #### Buffer Management
 

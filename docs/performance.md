@@ -9,10 +9,12 @@ AuraIO is built on the principle of **Hardware-Aware I/O**. It does not treat th
 ### Registered Buffers
 Standard `read/write` syscalls involve copying data between kernel space and user space. AuraIO mitigates this overhead through **Registered Buffers** (`auraio_register_buffers`).
 - **Mechanism**: Buffers are pinned in memory and mapped into the kernel's address space once at startup.
-- **Benefit**: I/O operations using these buffers (`AURAIO_BUF_REGISTERED`) bypass the page mapping overhead entirely, essential for high-frequency small I/O (< 4KB).
+- **Benefit**: I/O operations using these buffers (`AURAIO_BUF_REGISTERED`) bypass the page mapping overhead entirely, essential for high-frequency small I/O (< 16KB).
 
 ### Registered Files
-Similar to buffers, file descriptors can be pre-registered to avoid the overhead of looking up the internal file structure in the kernel for every operation.
+Every unregistered I/O operation forces the kernel to look up the internal `struct file` via an atomic reference count (`fget`/`fput`). AuraIO allows pre-registering file descriptors (`auraio_register_files`) to pin these references at startup.
+- **Mechanism**: File references are resolved once and stored in the ring's fixed file table. Subsequent I/O operations skip the per-op `fget`/`fput` atomic.
+- **Benefit**: Eliminates cross-core cache-line contention on the file's reference count, which becomes a bottleneck at millions of IOPS on many-core systems.
 
 ## 2. Lock-Free Memory Management
 
@@ -29,8 +31,8 @@ All buffers are automatically aligned to 4096 bytes (or custom alignment) to ens
 
 ### The "Sticky Ring" Strategy
 Cache misses are expensive. AuraIO ensures that data stays hot in the L1/L2 cache of the CPU core processing it.
-- **Submission**: `auraio_read` checks the current CPU ID. It routes the request to the `io_uring` instance dedicated to that specific core.
-- **Completion**: Since the ring is bound to the core, the kernel writes the completion event (CQE) to memory associated with that core, maximizing the chance that the user thread (which is likely still on that core) reads it from L2 cache.
+- **Submission**: Each thread maintains a TLS-cached CPU ID (via `sched_getcpu()`, refreshed every 32 submissions). I/O operations route to the `io_uring` instance dedicated to that core, avoiding cross-core contention without a syscall on every request.
+- **Completion**: With cooperative task delivery (`IORING_SETUP_COOP_TASKRUN`, enabled automatically on kernel 5.19+), completions are processed on the submitting core rather than via interrupts. This maximizes the chance that the user thread reads CQE data from L2 cache.
 
 ## 4. Adaptive Congestion Control (The "Brain")
 
@@ -43,12 +45,14 @@ Performance is not just about raw speed but about **consistent latency**. AuraIO
 
 2.  **Outer Loop (Throughput/Latency Manager)**:
     - Uses **AIMD** (Additive Increase Multiplicative Decrease) logic.
+    - Tuned for I/O patterns consistent with both local NVMe and network latencies. Self-adapts to the hardware it runs on — works equally well with high-performance NVMe and 7200 RPM magnetic platter storage.
+    - Self-adjusting variable-width sample windows based on IOPS rate to avoid low-IOPS workloads skewing the sample results.
     - **P99 Guard Logic**: It continuously samples the 99th percentile latency. If latency exceeds the guard threshold (default 10ms jitter), it immediately slashes concurrency. This prevents "Bufferbloat" at the device level, keeping the I/O piping full but not overflowing.
 
 ## 5. Performance Tips for Users
 
 To fully leverage this architecture:
-1.  **Pin Your Threads**: Use `pthread_setaffinity_np` in your worker threads. AuraIO automatically detects this and aligns its rings to match your topology.
+1.  **Pin Your Threads**: Use `pthread_setaffinity_np` in your worker threads. AuraIO routes I/O to per-core rings via `sched_getcpu()`. Pinning ensures stable core affinity, keeping ring data and CQE memory hot in L1/L2 cache.
 2.  **Use `O_DIRECT`**: This bypasses the kernel page cache, allowing AuraIO's adaptive controller to see the *true* device latency and tune accurately.
 3.  **Pre-register Memory**: For long-running applications, register your buffer pool at startup to shave off microseconds from every operation.
 
@@ -210,5 +214,47 @@ AuraIO's internal architecture avoids global contention points:
 - **Per-thread buffer cache**: Buffer allocation is lock-free on the fast path (TLS cache hit). The sharded global pool (up to 256 shards) handles cache misses with minimal contention.
 - **CPU-local ring selection**: Submissions are routed to the ring for the current CPU via a TLS-cached `sched_getcpu()` call (refreshed every 32 submissions). No atomic operations on the ring selection path.
 - **Cooperative completions**: `IORING_SETUP_COOP_TASKRUN` (kernel 5.19+) is enabled automatically, delivering completions cooperatively rather than via interrupts. This reduces context switches and latency jitter.
+
+## 7. Internal Optimization Techniques
+
+AuraIO's implementation applies several micro-architectural optimizations to minimize overhead on the I/O hot path. These are transparent to users but explain where the performance comes from.
+
+### Cache-Line-Aware Data Layout
+
+Internal structures are organized so that fields accessed together on the hot path share a 64-byte cache line:
+
+- **Request structs**: File descriptor, opcode, buffer pointer, and callback are packed into the first cache line. Completion metadata occupies a second line, avoiding false sharing between submission and completion.
+- **Thread-local buffer caches**: The pool pointer, generation ID, and per-class counts live in cache line 0 for fast-path validation. The buffer pointer arrays (cold) are in subsequent lines.
+- **Adaptive controller**: AIMD state (inflight limit, batch threshold, phase) is separated from histogram data. The controller's hot loop touches only the first cache line.
+
+### Lock-Free Fast Paths
+
+The most frequent operations avoid locks and atomics entirely:
+
+- **Thread-local buffer cache**: Allocation and deallocation from the per-thread cache are `O(1)` with zero atomics — just a pointer swap on a stack.
+- **TLS-cached CPU routing**: The result of `sched_getcpu()` is cached in thread-local storage and refreshed every 32 submissions, avoiding a syscall on every I/O operation.
+- **Size-class lookup**: Common buffer sizes (up to 256KB) use a comparison cascade rather than a `CLZ` instruction, which is faster on most x86 microarchitectures for the typical 4KB-64KB range.
+
+### Lock Batching
+
+Where locks are required, AuraIO amortizes the cost by doing more work per acquisition:
+
+- **Completion queue drain**: The `cq_lock` is held for up to 32 CQE extractions per acquisition, rather than lock-per-CQE.
+- **Wait path**: A single lock acquisition covers the flush, pending-request check, and batch extraction — three operations that previously required separate lock cycles.
+
+### Per-Operation Overhead Reduction
+
+Micro-optimizations that compound at high IOPS:
+
+- **Request initialization**: Only the 8 fields needed for a new request are written (targeted stores), rather than zeroing the full struct with `memset`.
+- **Buffer allocation fast path**: The TLS cache validity check (pointer + generation ID comparison) runs before the atomic `pool->destroyed` check, keeping the common case branch-free.
+- **Inline hot getters**: The adaptive controller's `inflight_limit` and `batch_threshold` are computed via `static inline` functions in the header, eliminating function call overhead on every submission.
+
+### Kernel Cooperation
+
+AuraIO configures `io_uring` to minimize kernel-userspace friction:
+
+- **`IORING_SETUP_COOP_TASKRUN`** (kernel 5.19+): Completions are delivered cooperatively when the application polls, rather than via asynchronous interrupts. This reduces context switches and keeps completion data on the submitting core's cache.
+- **Merged flush+poll**: The wait path performs submission and completion reaping in a single pass, with an early exit as soon as the first completions arrive — avoiding unnecessary re-entry into the kernel.
 
 See [API Reference](api_reference.md) for full function signatures and [Architecture](architecture.md) for internal design details.

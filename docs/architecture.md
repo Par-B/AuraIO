@@ -3,7 +3,7 @@ Adaptive Uring Runtime Architecture
 
 ## System Overview
 
-AuraIO is designed as a **thread-per-core** asynchronous I/O runtime. Unlike traditional reactor patterns that use a single event loop or a thread pool for callbacks, AuraIO dedicates an `io_uring` instance to each CPU core. This architecture minimizes cross-core traffic, maximizes cache locality, and eliminates the "thundering herd" problem common in high-concurrency network servers.
+AuraIO is designed as a **ring-per-core** asynchronous I/O runtime. Unlike traditional reactor patterns that use a single event loop or a thread pool for callbacks, AuraIO dedicates an `io_uring` instance to each CPU core and routes submissions to the local core's ring. This architecture minimizes cross-core traffic, maximizes cache locality, and eliminates the "thundering herd" problem common in high-concurrency network servers.
 
 ## Core Components
 
@@ -17,8 +17,8 @@ A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 - **Placement**: Typically pinned or logically associated with a specific CPU core.
 - **Locking**: Uses a fine-grained `pthread_mutex` for submission. While `io_uring` is lock-free, the library layer adds a lightweight lock to ensure thread safety when multiple application threads submit to the same core's ring.
 - **Assignment Strategy**:
-  1.  **Ideal**: Submission thread is already on Core N -> Use Ring N (`sched_getcpu()`).
-  2.  **Fallback**: Thread has no stable core -> Sticky assignment to Ring `(thread_id % core_count)`.
+  1.  **Ideal**: Submission thread is on Core N -> Use Ring N (via TLS-cached `sched_getcpu()`, refreshed every 32 submissions).
+  2.  **Fallback**: `sched_getcpu()` unavailable -> Sticky assignment to Ring `(pthread_self() % ring_count)`.
 
 ### 3. Adaptive Controller (`adaptive_controller_t`)
 A robust control system embedded within each ring that tunes `queue_depth` and batching behavior in real-time.
@@ -31,8 +31,8 @@ A robust control system embedded within each ring that tunes `queue_depth` and b
 ### 4. Memory Pool (`buffer_pool_t`)
 A zero-copy-ready slab allocator designed to reduce `malloc/free` overhead and ensure `O_DIRECT` alignment (4KB).
 - **Layer 1: Thread-Local Cache**:
-  - Lock-free stack of hot buffers.
-  - Handles ~95% of allocation/free traffic.
+  - Lock-free stack of hot buffers per size class.
+  - Handles the majority of allocation/free traffic with zero lock contention.
 - **Layer 2: Sharded Global Pool**:
   - Fallback when local cache is empty/full.
   - Sharded by `next_power_of_2(cpu_count / 4)` to reduce lock contention.
@@ -56,7 +56,7 @@ graph TD
 
 ### Submission Flow
 1. Thread calls `auraio_read()`.
-2. Library checks `sched_getcpu()`.
+2. Library reads TLS-cached CPU ID (refreshed via `sched_getcpu()` every 32 submissions).
 3. Acquires Mutex for that Core's Ring.
 4. Pushes SQE (Submission Queue Entry).
 5. Checks Adaptive Controller: "Should we flush now?" (Batching optimizer).
@@ -64,9 +64,9 @@ graph TD
 
 ### Completion Flow
 1. User calls `auraio_poll()` or `auraio_wait()`.
-2. Library peeks at Completion Queue (CQ).
-3. If atomic ref-counts allow, reuses request slot immediately.
-4. Invokes user callback.
+2. Library drains Completion Queue (CQ) entries under the ring's completion lock.
+3. For each CQE: invokes user callback, then returns the request slot to the free stack.
+4. Adaptive controller records latency sample and updates throughput counters.
 
 ## Design Decisions & Trade-offs
 
