@@ -244,6 +244,9 @@ test_ring_tsan: test_ring.c ../lib/libauraio_tsan.a
 test_stats_tsan: test_stats.c ../lib/libauraio_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
 
+test_ring_select_tsan: test_ring_select.c ../lib/libauraio_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) -O2 $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
+
 test_concurrency_stress_tsan: test_concurrency_stress.c ../lib/libauraio_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
 
@@ -273,6 +276,9 @@ test_ring_asan: test_ring.c ../lib/libauraio_asan.a
 
 test_stats_asan: test_stats.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
+
+test_ring_select_asan: test_ring_select.c ../lib/libauraio_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 test_concurrency_stress_asan: test_concurrency_stress.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread

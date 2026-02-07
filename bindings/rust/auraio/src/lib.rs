@@ -20,13 +20,13 @@
 //!     let done = Arc::new(AtomicBool::new(false));
 //!     let done_clone = done.clone();
 //!
-//!     engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, move |result| {
+//!     unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, move |result| {
 //!         match result {
 //!             Ok(n) => println!("Read {} bytes", n),
 //!             Err(e) => eprintln!("Error: {}", e),
 //!         }
 //!         done_clone.store(true, Ordering::SeqCst);
-//!     })?;
+//!     }) }?;
 //!
 //!     while !done.load(Ordering::SeqCst) {
 //!         engine.wait(100)?;
@@ -516,15 +516,17 @@ mod tests {
         let done_clone = done.clone();
         let result_clone = result_bytes.clone();
 
-        engine
-            .read(fd, (&buf).into(), 4096, 0, move |result| {
-                match result {
-                    Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
-                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
-                }
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |result| {
+                    match result {
+                        Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
+                        Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                    }
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         // Wait for completion
         while !done.load(Ordering::SeqCst) {
@@ -559,15 +561,17 @@ mod tests {
         let done_clone = done.clone();
         let result_clone = result_bytes.clone();
 
-        engine
-            .write(fd, (&buf).into(), test_data.len(), 0, move |result| {
-                match result {
-                    Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
-                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
-                }
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        unsafe {
+            engine
+                .write(fd, (&buf).into(), test_data.len(), 0, move |result| {
+                    match result {
+                        Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
+                        Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                    }
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -603,14 +607,16 @@ mod tests {
         let counter_clone = counter.clone();
         let flag_clone = flag.clone();
 
-        engine
-            .read(fd, (&buf).into(), 4096, 0, move |result| {
-                if result.is_ok() {
-                    counter_clone.fetch_add(1, Ordering::SeqCst);
-                }
-                flag_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |result| {
+                    if result.is_ok() {
+                        counter_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+                    flag_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         while !flag.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -883,11 +889,13 @@ mod tests {
         let done = Arc::new(AtomicBool::new(false));
         let done_clone = done.clone();
 
-        engine
-            .read(fd, (&buf).into(), 4096, 0, move |_result| {
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -921,13 +929,15 @@ mod tests {
             let buf = engine.allocate_buffer(4).unwrap();
             let completed_clone = completed.clone();
 
-            engine
-                .read(fd, (&buf).into(), 4, (i * 4) as i64, move |_result| {
-                    completed_clone.fetch_add(1, Ordering::SeqCst);
-                    // Buffer dropped here
-                    drop(buf); // Buffer captured to keep it alive until callback fires
-                })
-                .unwrap();
+            unsafe {
+                engine
+                    .read(fd, (&buf).into(), 4, (i * 4) as i64, move |_result| {
+                        completed_clone.fetch_add(1, Ordering::SeqCst);
+                        // Buffer dropped here
+                        drop(buf); // Buffer captured to keep it alive until callback fires
+                    })
+                    .unwrap();
+            }
         }
 
         // Wait for all completions
@@ -957,11 +967,13 @@ mod tests {
         let done = Arc::new(AtomicBool::new(false));
         let done_clone = done.clone();
 
-        let handle = engine
-            .read(fd, (&buf).into(), 4096, 0, move |_result| {
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        let handle = unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap()
+        };
 
         // Check fd matches (safe: callback hasn't run yet)
         assert_eq!(unsafe { handle.fd() }, fd);
@@ -1017,14 +1029,16 @@ mod tests {
         let was_cancelled_clone = was_cancelled.clone();
         let completed_clone = completed.clone();
 
-        let handle = engine
-            .read(fd, (&buf).into(), 1024 * 1024, 0, move |result| {
-                if let Err(Error::Cancelled) = result {
-                    was_cancelled_clone.store(true, Ordering::SeqCst);
-                }
-                completed_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        let handle = unsafe {
+            engine
+                .read(fd, (&buf).into(), 1024 * 1024, 0, move |result| {
+                    if let Err(Error::Cancelled) = result {
+                        was_cancelled_clone.store(true, Ordering::SeqCst);
+                    }
+                    completed_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap()
+        };
 
         // Request should be pending initially (safe: callback hasn't run yet)
         assert!(unsafe { handle.is_pending() });
@@ -1066,11 +1080,13 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let completed_clone = completed.clone();
 
-        let handle = engine
-            .read(fd, (&buf).into(), 4096, 0, move |_result| {
-                completed_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        let handle = unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    completed_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap()
+        };
 
         // Try to cancel immediately
         // Safety: handle is still valid (callback hasn't run yet)
@@ -1102,11 +1118,13 @@ mod tests {
         let completed = Arc::new(AtomicBool::new(false));
         let completed_clone = completed.clone();
 
-        let handle = engine
-            .read(fd, (&buf).into(), 4096, 0, move |_result| {
-                completed_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        let handle = unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    completed_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap()
+        };
 
         // Before completion, handle should be pending (safe: callback hasn't run yet)
         // Note: This is a race condition - the I/O might complete before we check
@@ -1163,15 +1181,17 @@ mod tests {
             let completed_clone = completed_count.clone();
             let cancelled_clone = cancelled_count.clone();
 
-            let handle = engine
-                .read(fd, (&buf).into(), 16 * 1024, 0, move |result| {
-                    completed_clone.fetch_add(1, Ordering::SeqCst);
-                    if matches!(result, Err(Error::Cancelled)) {
-                        cancelled_clone.fetch_add(1, Ordering::SeqCst);
-                    }
-                    drop(buf); // Buffer captured to keep it alive until callback fires
-                })
-                .unwrap();
+            let handle = unsafe {
+                engine
+                    .read(fd, (&buf).into(), 16 * 1024, 0, move |result| {
+                        completed_clone.fetch_add(1, Ordering::SeqCst);
+                        if matches!(result, Err(Error::Cancelled)) {
+                            cancelled_clone.fetch_add(1, Ordering::SeqCst);
+                        }
+                        drop(buf); // Buffer captured to keep it alive until callback fires
+                    })
+                    .unwrap()
+            };
             handles.push(handle);
         }
 

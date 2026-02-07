@@ -12,7 +12,7 @@
 //!
 //! async fn read_file(engine: &Engine, fd: i32) -> auraio::Result<Vec<u8>> {
 //!     let buf = engine.allocate_buffer(4096)?;
-//!     let n = engine.async_read(fd, &buf, 4096, 0).await?;
+//!     let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
 //!     Ok(buf.as_slice()[..n].to_vec())
 //! }
 //! ```
@@ -143,10 +143,10 @@ pub trait AsyncEngine {
     /// # Example
     ///
     /// ```ignore
-    /// let n = engine.async_read(fd, &buffer, 4096, 0).await?;
+    /// let n = unsafe { engine.async_read(fd, &buffer, 4096, 0) }?.await?;
     /// println!("Read {} bytes", n);
     /// ```
-    fn async_read(
+    unsafe fn async_read(
         &self,
         fd: RawFd,
         buf: impl Into<BufferRef>,
@@ -171,7 +171,7 @@ pub trait AsyncEngine {
     ///
     /// The buffer must remain valid until the Future resolves. Dropping
     /// the Future does **not** cancel the kernel I/O — see [`IoFuture`].
-    fn async_write(
+    unsafe fn async_write(
         &self,
         fd: RawFd,
         buf: impl Into<BufferRef>,
@@ -222,7 +222,7 @@ pub trait AsyncEngine {
 }
 
 impl AsyncEngine for Engine {
-    fn async_read(
+    unsafe fn async_read(
         &self,
         fd: RawFd,
         buf: impl Into<BufferRef>,
@@ -230,11 +230,11 @@ impl AsyncEngine for Engine {
         offset: i64,
     ) -> Result<IoFuture> {
         let (future, callback) = create_io_future();
-        self.read(fd, buf.into(), len, offset, callback)?;
+        unsafe { self.read(fd, buf.into(), len, offset, callback)? };
         Ok(future)
     }
 
-    fn async_write(
+    unsafe fn async_write(
         &self,
         fd: RawFd,
         buf: impl Into<BufferRef>,
@@ -242,7 +242,7 @@ impl AsyncEngine for Engine {
         offset: i64,
     ) -> Result<IoFuture> {
         let (future, callback) = create_io_future();
-        self.write(fd, buf.into(), len, offset, callback)?;
+        unsafe { self.write(fd, buf.into(), len, offset, callback)? };
         Ok(future)
     }
 
@@ -322,7 +322,7 @@ mod tests {
         let fd = file.as_raw_fd();
 
         let buf = engine.allocate_buffer(4096).unwrap();
-        let future = engine.async_read(fd, &buf, 4096, 0).unwrap();
+        let future = unsafe { engine.async_read(fd, &buf, 4096, 0) }.unwrap();
 
         let result = block_on(&engine, future);
         assert!(result.is_ok());
@@ -345,7 +345,7 @@ mod tests {
         let test_data = b"Written async!";
         buf.as_mut_slice()[..test_data.len()].copy_from_slice(test_data);
 
-        let future = engine.async_write(fd, &buf, test_data.len(), 0).unwrap();
+        let future = unsafe { engine.async_write(fd, &buf, test_data.len(), 0) }.unwrap();
 
         let result = block_on(&engine, future);
         assert!(result.is_ok());
@@ -482,8 +482,8 @@ mod tests {
         let buf1 = engine.allocate_buffer(4).unwrap();
         let buf2 = engine.allocate_buffer(4).unwrap();
 
-        let future1 = engine.async_read(fd, &buf1, 4, 0).unwrap();
-        let future2 = engine.async_read(fd, &buf2, 4, 4).unwrap();
+        let future1 = unsafe { engine.async_read(fd, &buf1, 4, 0) }.unwrap();
+        let future2 = unsafe { engine.async_read(fd, &buf2, 4, 4) }.unwrap();
 
         // Poll both to completion
         let result1 = block_on(&engine, future1);
@@ -515,7 +515,7 @@ mod tests {
         let fd = file.as_raw_fd();
 
         let buf = engine.allocate_buffer(4096).unwrap();
-        let future = engine.async_read(fd, &buf, 4096, 0).unwrap();
+        let future = unsafe { engine.async_read(fd, &buf, 4096, 0) }.unwrap();
 
         // Start background poller
         let stop = Arc::new(AtomicBool::new(false));

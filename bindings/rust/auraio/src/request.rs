@@ -33,10 +33,10 @@ use std::os::unix::io::RawFd;
 /// # let buf = engine.allocate_buffer(4096)?;
 /// # let file = File::open("/etc/hostname")?;
 /// # let fd = file.as_raw_fd();
-/// let handle = engine.read(fd, (&buf).into(), 4096, 0, |result| {
+/// let handle = unsafe { engine.read(fd, (&buf).into(), 4096, 0, |result| {
 ///     // Handle is INVALID inside this callback!
 ///     // Do NOT pass the handle into the closure.
-/// })?;
+/// }) }?;
 ///
 /// // Safe: handle is valid here, before callback runs
 /// if unsafe { handle.is_pending() } {
@@ -60,7 +60,7 @@ use std::os::unix::io::RawFd;
 /// # let buf = engine.allocate_buffer(4096)?;
 /// # let file = File::open("/etc/hostname")?;
 /// # let fd = file.as_raw_fd();
-/// let handle = engine.read(fd, (&buf).into(), 4096, 0, |_| {})?;
+/// let handle = unsafe { engine.read(fd, (&buf).into(), 4096, 0, |_| {}) }?;
 /// engine.wait(-1)?;  // Callback executes here
 /// unsafe { handle.is_pending() };  // ❌ UNDEFINED BEHAVIOR - handle is dangling!
 /// # Ok(())

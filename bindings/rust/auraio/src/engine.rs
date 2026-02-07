@@ -51,12 +51,12 @@ impl Drop for EngineInner {
 /// let mut buf = engine.allocate_buffer(4096)?;
 /// let file = File::open("/etc/hostname")?;
 ///
-/// engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, |result| {
+/// unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, |result| {
 ///     match result {
 ///         Ok(n) => println!("Read {} bytes", n),
 ///         Err(e) => eprintln!("Error: {}", e),
 ///     }
-/// })?;
+/// }) }?;
 ///
 /// engine.wait(-1)?;
 /// # Ok(())
@@ -239,9 +239,9 @@ impl Engine {
     /// # let buf = engine.allocate_buffer(4096)?;
     /// # let file = File::open("/etc/hostname")?;
     /// # let fd = file.as_raw_fd();
-    /// engine.read(fd, (&buf).into(), 4096, 0, |result| {
+    /// unsafe { engine.read(fd, (&buf).into(), 4096, 0, |result| {
     ///     println!("Read result: {:?}", result);
-    /// })?;
+    /// }) }?;
     /// # Ok(())
     /// # }
     /// ```
@@ -250,7 +250,7 @@ impl Engine {
     /// The memory referenced by `buf` must remain valid and exclusively
     /// borrowed until the callback fires. `BufferRef` carries no lifetime,
     /// so the compiler cannot enforce this. See [`BufferRef`] docs.
-    pub fn read<F>(
+    pub unsafe fn read<F>(
         &self,
         fd: RawFd,
         buf: BufferRef,
@@ -297,7 +297,7 @@ impl Engine {
     /// The memory referenced by `buf` must remain valid until the callback
     /// fires. `BufferRef` carries no lifetime, so the compiler cannot
     /// enforce this. See [`BufferRef`] docs.
-    pub fn write<F>(
+    pub unsafe fn write<F>(
         &self,
         fd: RawFd,
         buf: BufferRef,
