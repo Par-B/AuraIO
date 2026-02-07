@@ -1,6 +1,5 @@
 //! Buffer management for AuraIO
 
-use auraio_sys;
 use std::fmt;
 use std::ptr::NonNull;
 
@@ -156,6 +155,9 @@ fn make_buf(ptr: *mut std::ffi::c_void) -> auraio_sys::auraio_buf_t {
 /// (equivalent to the C inline function auraio_buf_fixed)
 fn make_buf_fixed(index: i32, offset: usize) -> auraio_sys::auraio_buf_t {
     let mut buf: auraio_sys::auraio_buf_t = unsafe { std::mem::zeroed() };
+    if index < 0 {
+        return buf; // Returns UNREGISTERED with ptr=NULL, matching C auraio_buf_fixed()
+    }
     buf.type_ = auraio_sys::auraio_buf_type_t_AURAIO_BUF_REGISTERED;
     buf.u.fixed.index = index;
     buf.u.fixed.offset = offset;

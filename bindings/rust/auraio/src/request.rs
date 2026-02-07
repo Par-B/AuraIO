@@ -1,6 +1,5 @@
 //! Request handle for pending I/O operations
 
-use auraio_sys;
 use std::os::unix::io::RawFd;
 
 /// Handle to a pending I/O request.

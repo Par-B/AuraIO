@@ -1,7 +1,5 @@
 //! Engine configuration options
 
-use auraio_sys;
-
 /// Ring selection mode
 ///
 /// Controls how submissions are distributed across io_uring rings.

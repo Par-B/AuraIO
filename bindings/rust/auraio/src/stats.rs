@@ -1,7 +1,5 @@
 //! Engine statistics
 
-use auraio_sys;
-
 /// Engine statistics snapshot
 ///
 /// Retrieved via `Engine::stats()` for monitoring and debugging.

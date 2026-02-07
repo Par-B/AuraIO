@@ -13,6 +13,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace auraio {
@@ -30,6 +31,12 @@ class BufferRef {
   public:
     /**
      * Construct from raw pointer (unregistered buffer)
+     *
+     * The caller must ensure the pointed-to memory remains valid and
+     * exclusively accessible for the duration of any I/O operation
+     * using this BufferRef. For read operations, the kernel writes into
+     * the buffer; for write operations, the kernel reads from it.
+     *
      * @param ptr Buffer pointer
      */
     BufferRef(void *ptr) noexcept : buf_(auraio_buf(ptr)) {}
@@ -97,6 +104,10 @@ inline BufferRef buf_fixed(int index, size_t offset = 0) noexcept {
  *
  * Automatically returns buffer to pool on destruction.
  * Move-only (cannot be copied).
+ *
+ * @warning The Buffer must not outlive the Engine that allocated it.
+ * Dropping a Buffer after its Engine has been destroyed is undefined
+ * behavior (the engine pointer stored internally would be dangling).
  *
  * Example:
  * @code
@@ -214,7 +225,9 @@ class Buffer {
      * @tparam T Element type
      * @return std::span of T elements
      */
-    template <typename T> [[nodiscard]] std::span<T> as() {
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    [[nodiscard]] std::span<T> as() {
         if (!ptr_) {
             throw Error(EINVAL, "Buffer is null");
         }
@@ -227,12 +240,14 @@ class Buffer {
 
     /**
      * Get buffer as const span of specific type
-     * @tparam T Element type
+     * @tparam T Element type (must be trivially copyable)
      * @return std::span of const T elements
      * @throws Error if buffer is null or not properly aligned for T
      * @note Trailing bytes smaller than sizeof(T) are excluded from the span
      */
-    template <typename T> [[nodiscard]] std::span<const T> as() const {
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    [[nodiscard]] std::span<const T> as() const {
         if (!ptr_) {
             throw Error(EINVAL, "Buffer is null");
         }

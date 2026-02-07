@@ -6,7 +6,6 @@
 #ifndef AURAIO_ERROR_HPP
 #define AURAIO_ERROR_HPP
 
-#include <exception>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -16,10 +15,12 @@ namespace auraio {
 /**
  * Exception class for AuraIO errors
  *
- * Wraps errno values with optional context message.
+ * Inherits from std::system_error so callers can catch either
+ * auraio::Error or std::system_error. Uses std::generic_category
+ * for POSIX errno values.
  */
-class Error : public std::exception {
-public:
+class Error : public std::system_error {
+  public:
     /**
      * Construct error from errno value
      *
@@ -27,43 +28,21 @@ public:
      * @param context Optional context message
      */
     explicit Error(int err, std::string_view context = {})
-        : code_(err)
-    {
-        // Use std::generic_category().message() instead of strerror()
-        // for thread-safety (strerror may use a static buffer)
-        std::string errmsg = std::generic_category().message(err);
-        if (context.empty()) {
-            message_ = std::move(errmsg);
-        } else {
-            message_ = std::string(context) + ": " + errmsg;
-        }
-    }
+        : std::system_error(err, std::generic_category(), std::string(context)) {}
 
     /**
      * Get the error code
      * @return Positive errno value
      */
-    [[nodiscard]] int code() const noexcept { return code_; }
-
-    /**
-     * Get human-readable error message
-     * @return Error message string
-     */
-    [[nodiscard]] const char* what() const noexcept override {
-        return message_.c_str();
-    }
+    [[nodiscard]] int code() const noexcept { return std::system_error::code().value(); }
 
     // Convenience predicates
-    [[nodiscard]] bool is_invalid() const noexcept { return code_ == EINVAL; }
-    [[nodiscard]] bool is_again() const noexcept { return code_ == EAGAIN; }
-    [[nodiscard]] bool is_shutdown() const noexcept { return code_ == ESHUTDOWN; }
-    [[nodiscard]] bool is_cancelled() const noexcept { return code_ == ECANCELED; }
-    [[nodiscard]] bool is_busy() const noexcept { return code_ == EBUSY; }
-    [[nodiscard]] bool is_not_found() const noexcept { return code_ == ENOENT; }
-
-private:
-    int code_;
-    std::string message_;
+    [[nodiscard]] bool is_invalid() const noexcept { return code() == EINVAL; }
+    [[nodiscard]] bool is_again() const noexcept { return code() == EAGAIN; }
+    [[nodiscard]] bool is_shutdown() const noexcept { return code() == ESHUTDOWN; }
+    [[nodiscard]] bool is_cancelled() const noexcept { return code() == ECANCELED; }
+    [[nodiscard]] bool is_busy() const noexcept { return code() == EBUSY; }
+    [[nodiscard]] bool is_not_found() const noexcept { return code() == ENOENT; }
 };
 
 /**

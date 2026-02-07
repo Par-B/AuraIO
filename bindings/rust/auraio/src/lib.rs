@@ -892,7 +892,7 @@ mod tests {
                 .read(fd, (&buf).into(), 4, (i * 4) as i64, move |_result| {
                     completed_clone.fetch_add(1, Ordering::SeqCst);
                     // Buffer dropped here
-                    std::mem::forget(buf); // Keep buffer alive for callback
+                    drop(buf); // Buffer captured to keep it alive until callback fires
                 })
                 .unwrap();
         }
@@ -1137,7 +1137,7 @@ mod tests {
                     if matches!(result, Err(Error::Cancelled)) {
                         cancelled_clone.fetch_add(1, Ordering::SeqCst);
                     }
-                    std::mem::forget(buf); // Keep buffer alive
+                    drop(buf); // Buffer captured to keep it alive until callback fires
                 })
                 .unwrap();
             handles.push(handle);

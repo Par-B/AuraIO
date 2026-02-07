@@ -218,7 +218,9 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
-        assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
+        if (iov.size() > static_cast<size_t>(INT_MAX)) {
+            throw Error(EINVAL, "iov count exceeds INT_MAX");
+        }
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -253,7 +255,9 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
-        assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
+        if (iov.size() > static_cast<size_t>(INT_MAX)) {
+            throw Error(EINVAL, "iov count exceeds INT_MAX");
+        }
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -487,6 +491,9 @@ class Engine {
      * @throws Error on failure
      */
     void register_buffers(std::span<const iovec> bufs) {
+        if (bufs.size() > static_cast<size_t>(INT_MAX)) {
+            throw Error(EINVAL, "buffer count exceeds INT_MAX");
+        }
         if (auraio_register_buffers(handle_, bufs.data(), static_cast<int>(bufs.size())) != 0) {
             throw Error(errno, "auraio_register_buffers");
         }
@@ -514,6 +521,9 @@ class Engine {
      * @throws Error on failure
      */
     void register_files(std::span<const int> fds) {
+        if (fds.size() > static_cast<size_t>(INT_MAX)) {
+            throw Error(EINVAL, "file count exceeds INT_MAX");
+        }
         if (auraio_register_files(handle_, fds.data(), static_cast<int>(fds.size())) != 0) {
             throw Error(errno, "auraio_register_files");
         }

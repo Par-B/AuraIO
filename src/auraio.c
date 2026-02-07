@@ -79,8 +79,6 @@ struct auraio_engine {
     pthread_t tick_thread; /**< Tick thread handle */
 
     /* Aggregated statistics */
-    atomic_llong total_ops; /**< Total ops completed */
-    atomic_llong total_bytes; /**< Total bytes transferred */
     _Atomic uint64_t adaptive_spills; /**< Count of ADAPTIVE ring spills */
 
     /* Registered buffers and files (protected by reg_lock) */
@@ -194,11 +192,12 @@ static ring_ctx_t *select_ring(auraio_engine_t *engine) {
         if (pending < (limit * ADAPTIVE_SPILL_THRESHOLD_NUM / ADAPTIVE_SPILL_THRESHOLD_DEN))
             return local;
 
-        /* Gate 2: Local >> average means we're an outlier, not system-wide
-         * pressure. Stay local for cache benefits — other rings are idle.
+        /* Gate 2: If load is broadly distributed (local within 2x of average),
+         * spilling won't help — stay local for cache benefits.
+         * If local ring is an outlier (>2x average), proceed to spill.
          * Skip when avg==0 (tick hasn't run yet — no data to judge). */
         int avg = atomic_load_explicit(&engine->avg_ring_pending, memory_order_relaxed);
-        if (avg > 0 && pending > avg * 2) return local;
+        if (avg > 0 && pending <= avg * 2) return local;
 
         /* System broadly loaded — power-of-two random choices.
          * Pick two random rings (skipping local), use the lighter one. */
@@ -438,8 +437,6 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
     atomic_init(&engine->stop_requested, false);
     atomic_init(&engine->shutting_down, false);
     atomic_init(&engine->tick_running, false);
-    atomic_init(&engine->total_ops, 0);
-    atomic_init(&engine->total_bytes, 0);
 
     /* Initialize registration lock */
     pthread_rwlock_init(&engine->reg_lock, NULL);
@@ -911,12 +908,11 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
  * ============================================================================
  */
 
-bool auraio_request_pending(const auraio_request_t *req) {
+bool auraio_request_pending(auraio_request_t *req) {
     if (!req) {
         return false;
     }
-    /* Cast away const for atomic access - atomic_load is semantically read-only */
-    return atomic_load_explicit((atomic_bool *)&req->pending, memory_order_acquire);
+    return atomic_load_explicit(&req->pending, memory_order_acquire);
 }
 
 int auraio_request_fd(const auraio_request_t *req) {
@@ -985,7 +981,6 @@ int auraio_poll(auraio_engine_t *engine) {
 
             if (completed > 0) {
                 total += completed;
-                atomic_fetch_add(&engine->total_ops, completed);
             }
         } else {
             /* Ring is contended - skip for now */
@@ -1007,7 +1002,6 @@ int auraio_poll(auraio_engine_t *engine) {
 
             if (completed > 0) {
                 total += completed;
-                atomic_fetch_add(&engine->total_ops, completed);
             }
         }
     }
@@ -1047,7 +1041,6 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
         int n = ring_poll(ring);
         if (n > 0) {
             total += n;
-            atomic_fetch_add(&engine->total_ops, n);
         }
         if (has_pending && first_pending < 0) {
             first_pending = i;
@@ -1066,15 +1059,12 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     {
         int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
         if (completed > 0) {
-            atomic_fetch_add(&engine->total_ops, completed);
-
             /* Also poll other rings that may have completed while we blocked */
             for (int j = 0; j < engine->ring_count; j++) {
                 if (j == first_pending) continue;
                 int more = ring_poll(&engine->rings[j]);
                 if (more > 0) {
                     completed += more;
-                    atomic_fetch_add(&engine->total_ops, more);
                 }
             }
             return completed;
@@ -1161,7 +1151,7 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
             int64_t remaining_ns = deadline_ns - get_time_ns();
             if (remaining_ns <= 0) {
                 errno = ETIMEDOUT;
-                return total;
+                return (-1);
             }
             wait_ms = (int)(remaining_ns / 1000000LL);
             if (wait_ms <= 0) wait_ms = 1;

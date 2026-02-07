@@ -7,10 +7,10 @@ use crate::options::Options;
 use crate::request::RequestHandle;
 use crate::stats::Stats;
 
-use auraio_sys;
 use std::io;
 use std::os::unix::io::RawFd;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
 /// Main AuraIO engine
 ///
@@ -47,14 +47,18 @@ use std::ptr::NonNull;
 /// ```
 pub struct Engine {
     handle: NonNull<auraio_sys::auraio_engine_t>,
+    /// Guards poll/wait/run which must not be called concurrently.
+    /// Submissions (read/write/fsync etc.) do NOT acquire this lock.
+    poll_lock: Mutex<()>,
 }
 
 // Safety: Engine can be sent between threads
-// (the underlying library handles synchronization)
+// (the underlying C library handles synchronization for submissions)
 unsafe impl Send for Engine {}
 
-// Safety: Engine can be shared between threads
-// (all operations are internally synchronized)
+// Safety: Engine can be shared between threads for submissions.
+// Polling (poll/wait/run) is guarded by poll_lock to prevent concurrent
+// CQ access, which the C library does not internally synchronize.
 unsafe impl Sync for Engine {}
 
 impl Engine {
@@ -62,7 +66,10 @@ impl Engine {
     pub fn new() -> Result<Self> {
         let handle = unsafe { auraio_sys::auraio_create() };
         NonNull::new(handle)
-            .map(|h| Self { handle: h })
+            .map(|h| Self {
+                handle: h,
+                poll_lock: Mutex::new(()),
+            })
             .ok_or_else(|| Error::EngineCreate(io::Error::last_os_error()))
     }
 
@@ -70,7 +77,10 @@ impl Engine {
     pub fn with_options(options: &Options) -> Result<Self> {
         let handle = unsafe { auraio_sys::auraio_create_with_options(options.as_ptr()) };
         NonNull::new(handle)
-            .map(|h| Self { handle: h })
+            .map(|h| Self {
+                handle: h,
+                poll_lock: Mutex::new(()),
+            })
             .ok_or_else(|| Error::EngineCreate(io::Error::last_os_error()))
     }
 
@@ -362,9 +372,10 @@ impl Engine {
     ///
     /// # Safety
     ///
-    /// The caller must ensure the iovec buffers remain valid and
-    /// exclusively borrowed until the completion callback fires.
-    /// The borrow checker cannot enforce this across the async boundary.
+    /// The caller must ensure both the iovec **array** and the buffers
+    /// it points to remain valid and exclusively borrowed until the
+    /// completion callback fires. The kernel reads the iovec descriptors
+    /// and accesses the buffers asynchronously after submission.
     pub unsafe fn readv<F>(
         &self,
         fd: RawFd,
@@ -405,9 +416,10 @@ impl Engine {
     ///
     /// # Safety
     ///
-    /// The caller must ensure the iovec buffers remain valid and
-    /// exclusively borrowed until the completion callback fires.
-    /// The borrow checker cannot enforce this across the async boundary.
+    /// The caller must ensure both the iovec **array** and the buffers
+    /// it points to remain valid and exclusively borrowed until the
+    /// completion callback fires. The kernel reads the iovec descriptors
+    /// and accesses the buffers asynchronously after submission.
     pub unsafe fn writev<F>(
         &self,
         fd: RawFd,
@@ -489,7 +501,14 @@ impl Engine {
     /// Process completed operations (non-blocking)
     ///
     /// Returns the number of completions processed.
+    ///
+    /// # Thread Safety
+    ///
+    /// Must not be called concurrently with `wait()` or `run()`.
+    /// This is enforced by an internal lock; concurrent calls will
+    /// serialize rather than cause undefined behavior.
     pub fn poll(&self) -> Result<usize> {
+        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
         let n = unsafe { auraio_sys::auraio_poll(self.handle.as_ptr()) };
         if n >= 0 {
             Ok(n as usize)
@@ -510,7 +529,14 @@ impl Engine {
     ///   - `>0` = wait up to N milliseconds
     ///
     /// Returns the number of completions processed.
+    ///
+    /// # Thread Safety
+    ///
+    /// Must not be called concurrently with `poll()` or `run()`.
+    /// This is enforced by an internal lock; concurrent calls will
+    /// serialize rather than cause undefined behavior.
     pub fn wait(&self, timeout_ms: i32) -> Result<usize> {
+        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
         let n = unsafe { auraio_sys::auraio_wait(self.handle.as_ptr(), timeout_ms) };
         if n >= 0 {
             Ok(n as usize)
@@ -523,7 +549,20 @@ impl Engine {
     ///
     /// Blocks the calling thread, continuously processing completions.
     /// Call `stop()` from a callback or another thread to exit.
+    ///
+    /// # Thread Safety
+    ///
+    /// Must not be called concurrently with `poll()` or `wait()`.
+    /// This is enforced by an internal lock.
+    ///
+    /// # Deadlock Warning
+    ///
+    /// Do **not** call `poll()`, `wait()`, or `run()` from within a
+    /// completion callback while `run()` is active — the internal lock
+    /// is not reentrant and will deadlock. Submissions (read/write/fsync)
+    /// are fine from callbacks.
     pub fn run(&self) {
+        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { auraio_sys::auraio_run(self.handle.as_ptr()) };
     }
 
@@ -548,6 +587,9 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        // No need to acquire poll_lock: Drop receives &mut self, which
+        // guarantees no other references exist (for owned Engine) or that
+        // Arc ref count has reached zero (for Arc<Engine>).
         unsafe { auraio_sys::auraio_destroy(self.handle.as_ptr()) };
     }
 }

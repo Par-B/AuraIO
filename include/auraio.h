@@ -259,7 +259,7 @@ typedef enum {
  */
 typedef struct {
     size_t struct_size;        /**< Set by auraio_options_init(); for ABI forward-compatibility */
-    int queue_depth;           /**< Queue depth per ring (default: 256) */
+    int queue_depth;           /**< Queue depth per ring (0 = default: 256) */
     int ring_count;            /**< Number of rings, 0 = auto (one per CPU) */
     int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4) */
     int min_in_flight;         /**< Minimum in-flight limit (default: 4) */
@@ -600,8 +600,10 @@ auraio_writev(auraio_engine_t *engine, int fd, const struct iovec *iov, int iovc
  * Cancellation is best-effort: if the operation has already completed or
  * is being processed, it may not be cancelled.
  *
- * @param engine Engine handle
- * @param req    Request to cancel (returned by read/write/fsync functions)
+ * @param engine Engine handle (must be the same engine that created the request)
+ * @param req    Request to cancel (returned by read/write/fsync functions).
+ *               Must belong to @p engine; passing a request from a different
+ *               engine is undefined behavior.
  * @return 0 if cancellation was submitted, -1 on error (errno set to EINVAL,
  *         EALREADY, ESHUTDOWN, or ENOMEM)
  *         Note: 0 does not guarantee the operation will be cancelled
@@ -619,7 +621,7 @@ AURAIO_API AURAIO_WARN_UNUSED int auraio_cancel(auraio_engine_t *engine, auraio_
  * @param req Request handle
  * @return true if still in-flight, false if completed or cancelled
  */
-AURAIO_API bool auraio_request_pending(const auraio_request_t *req);
+AURAIO_API bool auraio_request_pending(auraio_request_t *req);
 
 /**
  * Get the file descriptor associated with a request

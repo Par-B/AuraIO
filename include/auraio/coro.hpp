@@ -34,6 +34,7 @@
 #include <auraio/buffer.hpp>
 #include <auraio/request.hpp>
 
+#include <atomic>
 #include <coroutine>
 #include <exception>
 #include <optional>
@@ -102,9 +103,11 @@ template <typename T> class Task {
 
     ~Task() {
         if (handle_) {
-            assert(handle_.done() &&
-                   "Task destroyed while coroutine is still pending. "
-                   "This will cause use-after-free if an I/O callback tries to resume it.");
+            if (!handle_.done()) {
+                // Fatal: destroying a Task with pending I/O causes use-after-free
+                // when the callback tries to resume the destroyed coroutine.
+                std::terminate();
+            }
             handle_.destroy();
         }
     }
@@ -246,9 +249,9 @@ template <> class Task<void> {
 
     ~Task() {
         if (handle_) {
-            assert(handle_.done() &&
-                   "Task<void> destroyed while coroutine is still pending. "
-                   "This will cause use-after-free if an I/O callback tries to resume it.");
+            if (!handle_.done()) {
+                std::terminate();
+            }
             handle_.destroy();
         }
     }
@@ -324,7 +327,10 @@ class IoAwaitable {
 
     ssize_t await_resume() {
         if (result_ < 0) {
-            throw Error(static_cast<int>(-result_), is_write_ ? "async_write" : "async_read");
+            // Kernel error codes are small positive integers (1-4095); clamp to avoid
+            // signed overflow on negation and truncation on cast to int.
+            int err = (-result_ > 0 && -result_ <= 4095) ? static_cast<int>(-result_) : EIO;
+            throw Error(err, is_write_ ? "async_write" : "async_read");
         }
         return result_;
     }
@@ -337,6 +343,8 @@ class IoAwaitable {
     off_t offset_;
     bool is_write_;
     ssize_t result_ = 0;
+    Request request_{nullptr};           ///< Stored for potential cancellation
+    std::atomic<bool> completed_{false}; ///< Race coordination: callback vs await_suspend
 };
 
 /**
@@ -355,7 +363,8 @@ class FsyncAwaitable {
 
     void await_resume() {
         if (result_ < 0) {
-            throw Error(static_cast<int>(-result_), datasync_ ? "async_fdatasync" : "async_fsync");
+            int err = (-result_ > 0 && -result_ <= 4095) ? static_cast<int>(-result_) : EIO;
+            throw Error(err, datasync_ ? "async_fdatasync" : "async_fsync");
         }
     }
 
@@ -364,6 +373,8 @@ class FsyncAwaitable {
     int fd_;
     bool datasync_;
     ssize_t result_ = 0;
+    Request request_{nullptr};           ///< Stored for potential cancellation
+    std::atomic<bool> completed_{false}; ///< Race coordination: callback vs await_suspend
 };
 
 } // namespace auraio
@@ -376,39 +387,43 @@ namespace auraio {
 
 inline bool IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
-        if (is_write_) {
-            (void)engine_.write(fd_, buf_, len_, offset_,
-                                [this, handle](Request &, ssize_t result) {
-                                    result_ = result;
-                                    handle.resume();
-                                });
-        } else {
-            (void)engine_.read(fd_, buf_, len_, offset_, [this, handle](Request &, ssize_t result) {
-                result_ = result;
+        auto callback = [this, handle](Request &, ssize_t result) {
+            result_ = result;
+            // If await_suspend already committed (set completed_=true),
+            // we are responsible for resuming. Otherwise await_suspend
+            // will see completed_=true and return false (don't suspend).
+            if (completed_.exchange(true, std::memory_order_acq_rel)) {
                 handle.resume();
-            });
+            }
+        };
+        if (is_write_) {
+            request_ = engine_.write(fd_, buf_, len_, offset_, std::move(callback));
+        } else {
+            request_ = engine_.read(fd_, buf_, len_, offset_, std::move(callback));
         }
-        return true; // Suspended — callback will resume
+        // If callback already fired, don't suspend (return false).
+        // acq_rel ensures result_ written by callback is visible.
+        return !completed_.exchange(true, std::memory_order_acq_rel);
     } catch (const Error &e) {
         result_ = -e.code();
-        return false; // Don't suspend — resume immediately without stack growth
+        return false;
     }
 }
 
 inline bool FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
+        auto callback = [this, handle](Request &, ssize_t result) {
+            result_ = result;
+            if (completed_.exchange(true, std::memory_order_acq_rel)) {
+                handle.resume();
+            }
+        };
         if (datasync_) {
-            (void)engine_.fdatasync(fd_, [this, handle](Request &, ssize_t result) {
-                result_ = result;
-                handle.resume();
-            });
+            request_ = engine_.fdatasync(fd_, std::move(callback));
         } else {
-            (void)engine_.fsync(fd_, [this, handle](Request &, ssize_t result) {
-                result_ = result;
-                handle.resume();
-            });
+            request_ = engine_.fsync(fd_, std::move(callback));
         }
-        return true;
+        return !completed_.exchange(true, std::memory_order_acq_rel);
     } catch (const Error &e) {
         result_ = -e.code();
         return false;

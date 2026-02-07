@@ -60,6 +60,15 @@ pin_project! {
     /// This future is created by methods like [`AsyncEngine::async_read`].
     /// Poll this future while also ensuring the engine processes completions
     /// (via `engine.wait()` or `engine.poll()`).
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping an `IoFuture` does **not** cancel the underlying I/O operation.
+    /// The kernel will still complete the operation and the callback will fire
+    /// (writing into the shared state that nobody reads). If the buffer passed
+    /// to the I/O call is freed before the operation completes, the kernel will
+    /// write into freed memory. Callers using `select!` or similar cancellation
+    /// patterns must ensure buffers outlive the I/O operation, not just the future.
     pub struct IoFuture {
         state: Arc<Mutex<IoState>>,
     }
@@ -272,12 +281,11 @@ mod tests {
     use std::time::Duration;
 
     // A minimal executor for testing - just polls until complete
-    fn block_on<F: Future>(engine: &Engine, mut future: F) -> F::Output {
+    fn block_on<F: Future>(engine: &Engine, future: F) -> F::Output {
         let waker = std::task::Waker::noop();
         let mut cx = Context::from_waker(&waker);
 
-        // Pin the future
-        let mut future = unsafe { Pin::new_unchecked(&mut future) };
+        let mut future = std::pin::pin!(future);
 
         loop {
             match future.as_mut().poll(&mut cx) {

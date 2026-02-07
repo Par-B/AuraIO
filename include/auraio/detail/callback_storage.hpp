@@ -215,29 +215,35 @@ class CallbackPool {
 /**
  * C callback trampoline function
  *
- * static inline: each TU gets its own copy but the function is only used
- * as a callback pointer, so address identity is irrelevant.  This avoids
- * polluting the global C symbol namespace that extern "C" would require.
+ * extern "C" is required because this function is passed as a C function
+ * pointer (auraio_callback_t) to the C API. Calling a C++ function through
+ * a C function pointer is undefined behavior per [dcl.link].
+ * inline avoids duplicate symbol errors when included from multiple TUs.
  */
-inline void auraio_detail_callback_trampoline(auraio_request_t *req, ssize_t result,
-                                              void *user_data) {
+extern "C" inline void auraio_detail_callback_trampoline(auraio_request_t *req, ssize_t result,
+                                                         void *user_data) {
     auto *ctx = static_cast<auraio::detail::CallbackContext *>(user_data);
     if (ctx && ctx->callback) {
         ctx->request = auraio::Request(req);
         try {
             ctx->callback(ctx->request, result);
         } catch (...) {
-            // Release context before terminating to avoid pool leak
-            if (ctx->on_complete) {
-                ctx->on_complete();
-            }
-            // Exceptions cannot propagate through extern "C" (UB)
+            // Exceptions cannot propagate through extern "C" (UB).
+            // Don't call on_complete here — std::terminate will kill
+            // the process anyway, and running destructors/locks is fragile.
             std::terminate();
         }
     }
-    // Release context immediately via on_complete (O(1) instead of polling)
-    if (ctx && ctx->on_complete) {
-        ctx->on_complete();
+    // Release context: move on_complete out FIRST, then call it.
+    // This avoids UB where the lambda would self-destruct via release()
+    // while still on the call stack (std::function move may destroy the
+    // callable in-place under small-buffer optimization).
+    if (ctx) {
+        auto cleanup = std::move(ctx->on_complete);
+        ctx->on_complete = nullptr;
+        if (cleanup) {
+            cleanup();
+        }
     }
 }
 

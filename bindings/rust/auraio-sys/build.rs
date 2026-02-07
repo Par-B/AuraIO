@@ -80,8 +80,8 @@ fn main() {
         .derive_copy(true)
         // Use core types where possible
         .use_core()
-        // Don't generate layout tests (they can fail across platforms)
-        .layout_tests(false)
+        // Generate layout tests to catch ABI mismatches
+        .layout_tests(true)
         .generate()
         .expect("Unable to generate bindings");
 
