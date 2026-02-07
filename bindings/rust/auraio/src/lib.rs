@@ -316,21 +316,22 @@ mod tests {
     #[test]
     fn test_bufferref_from_slice() {
         let data = [0u8; 1024];
-        let buf_ref: BufferRef = data.as_slice().into();
+        let buf_ref = unsafe { BufferRef::from_slice(data.as_slice()) };
         let _ = buf_ref;
     }
 
     #[test]
     fn test_bufferref_from_mut_slice() {
         let mut data = [0u8; 1024];
-        let buf_ref: BufferRef = data.as_mut_slice().into();
+        let buf_ref = unsafe { BufferRef::from_mut_slice(data.as_mut_slice()) };
         let _ = buf_ref;
     }
 
     #[test]
     fn test_bufferref_from_ptr() {
         let mut data = [0u8; 1024];
-        let buf_ref = BufferRef::from_ptr(data.as_mut_ptr() as *mut std::ffi::c_void);
+        // Safety: data is stack-local and lives for the duration of this test
+        let buf_ref = unsafe { BufferRef::from_ptr(data.as_mut_ptr() as *mut std::ffi::c_void) };
         let _ = buf_ref;
     }
 
@@ -349,7 +350,7 @@ mod tests {
     #[test]
     fn test_bufferref_copy() {
         let data = [0u8; 1024];
-        let buf_ref1: BufferRef = data.as_slice().into();
+        let buf_ref1 = unsafe { BufferRef::from_slice(data.as_slice()) };
         let buf_ref2 = buf_ref1; // Copy
         // Both still valid since it's Copy
         let _ = (buf_ref1, buf_ref2);
@@ -358,7 +359,7 @@ mod tests {
     #[test]
     fn test_bufferref_clone() {
         let data = [0u8; 1024];
-        let buf_ref1: BufferRef = data.as_slice().into();
+        let buf_ref1 = unsafe { BufferRef::from_slice(data.as_slice()) };
         let buf_ref2 = buf_ref1.clone();
         let _ = (buf_ref1, buf_ref2);
     }
@@ -366,7 +367,7 @@ mod tests {
     #[test]
     fn test_bufferref_debug() {
         let data = [0u8; 1024];
-        let buf_ref: BufferRef = data.as_slice().into();
+        let buf_ref = unsafe { BufferRef::from_slice(data.as_slice()) };
         let debug_str = format!("{:?}", buf_ref);
         assert!(debug_str.contains("BufferRef"));
     }
@@ -680,15 +681,18 @@ mod tests {
         let done_clone = done.clone();
         let result_clone = result_bytes.clone();
 
-        engine
-            .readv(fd, &iovecs, 0, move |result| {
-                match result {
-                    Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
-                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
-                }
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        // Safety: iovecs live on the stack until wait() completes
+        unsafe {
+            engine
+                .readv(fd, &iovecs, 0, move |result| {
+                    match result {
+                        Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
+                        Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                    }
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -729,15 +733,18 @@ mod tests {
         let done_clone = done.clone();
         let result_clone = result_bytes.clone();
 
-        engine
-            .writev(fd, &iovecs, 0, move |result| {
-                match result {
-                    Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
-                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
-                }
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+        // Safety: iovecs live on the stack until wait() completes
+        unsafe {
+            engine
+                .writev(fd, &iovecs, 0, move |result| {
+                    match result {
+                        Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
+                        Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                    }
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -968,7 +975,8 @@ mod tests {
         assert!(unsafe { handle.is_pending() });
 
         // Try to cancel
-        let cancel_result = engine.cancel(&handle);
+        // Safety: handle is still valid (callback hasn't run yet)
+        let cancel_result = unsafe { engine.cancel(&handle) };
         // Cancel may or may not succeed depending on timing
         // (operation might have already completed)
 
@@ -1010,7 +1018,8 @@ mod tests {
             .unwrap();
 
         // Try to cancel immediately
-        let cancel_result = engine.cancel(&handle);
+        // Safety: handle is still valid (callback hasn't run yet)
+        let cancel_result = unsafe { engine.cancel(&handle) };
         // Cancel should not error on a valid handle
         // (it might return error if already completed, but that's timing-dependent)
 
@@ -1112,8 +1121,9 @@ mod tests {
         }
 
         // Try to cancel all of them
+        // Safety: handles are still valid (callbacks haven't run yet)
         for handle in &handles {
-            let _ = engine.cancel(handle);
+            let _ = unsafe { engine.cancel(handle) };
         }
 
         // Wait for all completions

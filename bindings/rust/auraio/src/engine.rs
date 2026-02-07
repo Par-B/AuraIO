@@ -97,12 +97,12 @@ impl Engine {
     ///
     /// After registration, use `BufferRef::fixed()` to reference buffers by index.
     ///
-    /// # Safety Note
+    /// # Safety
     ///
     /// The registered buffers must remain valid and at stable addresses
     /// until `unregister_buffers()` is called. The borrow checker cannot
     /// enforce this lifetime across the registration boundary.
-    pub fn register_buffers(&self, buffers: &[&[u8]]) -> Result<()> {
+    pub unsafe fn register_buffers(&self, buffers: &[&[u8]]) -> Result<()> {
         let iovecs: Vec<libc::iovec> = buffers
             .iter()
             .map(|b| libc::iovec {
@@ -345,12 +345,12 @@ impl Engine {
 
     /// Submit an async vectored read operation
     ///
-    /// # Safety Note
+    /// # Safety
     ///
     /// The caller must ensure the iovec buffers remain valid and
     /// exclusively borrowed until the completion callback fires.
     /// The borrow checker cannot enforce this across the async boundary.
-    pub fn readv<F>(
+    pub unsafe fn readv<F>(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
@@ -387,12 +387,12 @@ impl Engine {
 
     /// Submit an async vectored write operation
     ///
-    /// # Safety Note
+    /// # Safety
     ///
     /// The caller must ensure the iovec buffers remain valid and
     /// exclusively borrowed until the completion callback fires.
     /// The borrow checker cannot enforce this across the async boundary.
-    pub fn writev<F>(
+    pub unsafe fn writev<F>(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
@@ -437,7 +437,13 @@ impl Engine {
     /// Cancellation is best-effort: the operation may complete normally instead.
     ///
     /// Returns `Ok(())` if cancellation was submitted, `Err` on failure.
-    pub fn cancel(&self, request: &RequestHandle) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the `RequestHandle` still refers to a valid,
+    /// in-flight request. If the request has already completed, the handle
+    /// may point to freed or reused memory.
+    pub unsafe fn cancel(&self, request: &RequestHandle) -> Result<()> {
         let ret =
             unsafe { auraio_sys::auraio_cancel(self.handle.as_ptr(), request.as_ptr()) };
         if ret == 0 {
@@ -529,6 +535,9 @@ impl Drop for Engine {
 pub fn version() -> &'static str {
     unsafe {
         let ptr = auraio_sys::auraio_version();
+        if ptr.is_null() {
+            return "unknown";
+        }
         std::ffi::CStr::from_ptr(ptr)
             .to_str()
             .unwrap_or("unknown")

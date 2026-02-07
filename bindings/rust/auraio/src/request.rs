@@ -41,7 +41,7 @@ use std::os::unix::io::RawFd;
 ///
 /// // Safe: handle is valid here, before callback runs
 /// if unsafe { handle.is_pending() } {
-///     engine.cancel(&handle)?;
+///     unsafe { engine.cancel(&handle)? };
 /// }
 ///
 /// engine.wait(-1)?;  // Callback runs during wait()

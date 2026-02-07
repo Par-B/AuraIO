@@ -34,7 +34,7 @@
 // Fast thread-local PRNG (xorshift64)
 // ============================================================================
 
-static __thread uint64_t rng_state;
+static _Thread_local uint64_t rng_state;
 
 static void rng_seed(void) {
     struct timespec ts;
@@ -90,7 +90,7 @@ static void stats_init(bench_stats_t *s) {
 }
 
 static void stats_record_latency(bench_stats_t *s, uint64_t latency_ns) {
-    uint64_t bucket = latency_ns / 50000;  // 50us buckets
+    uint64_t bucket = latency_ns / 50000; // 50us buckets
     if (bucket < 200) {
         atomic_fetch_add(&s->latency_hist[bucket], 1);
     } else {
@@ -113,10 +113,10 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
     for (int i = 0; i < 200; i++) {
         cumulative += atomic_load(&s->latency_hist[i]);
         if (cumulative >= p99_threshold) {
-            return (uint64_t)(i + 1) * 50;  // Return upper bound of bucket in us
+            return (uint64_t)(i + 1) * 50; // Return upper bound of bucket in us
         }
     }
-    return 10000;  // Over max (>10ms)
+    return 10000; // Over max (>10ms)
 }
 
 // ============================================================================
@@ -125,12 +125,12 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
 
 #define DEFAULT_TEST_DIR "/tmp/auraio_perf"
 #define NUM_FILES 8
-#define FILE_SIZE (128 * 1024 * 1024)  // 128MB per file
+#define FILE_SIZE (128 * 1024 * 1024) // 128MB per file
 
 static const char *test_dir = DEFAULT_TEST_DIR;
 static int test_fds[NUM_FILES];
 static char *test_paths[NUM_FILES];
-static int apples_mode = 0;  // When set, force ring_count=1 for FIO-comparable runs
+static int apples_mode = 0; // When set, force ring_count=1 for FIO-comparable runs
 
 static int setup_test_files(void) {
     mkdir(test_dir, 0755);
@@ -179,7 +179,7 @@ static int setup_test_files(void) {
         }
     }
 
-    printf("Created %d test files of %d MB each\n", NUM_FILES, FILE_SIZE / (1024*1024));
+    printf("Created %d test files of %d MB each\n", NUM_FILES, FILE_SIZE / (1024 * 1024));
     return 0;
 }
 
@@ -235,8 +235,8 @@ static void read_callback(auraio_request_t *req, ssize_t result, void *user_data
 
 static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size) {
     printf("\n=== Throughput Benchmark ===\n");
-    printf("Duration: %d sec, Max inflight: %d, Buffer: %zu KB\n",
-           duration_sec, max_inflight, buf_size / 1024);
+    printf("Duration: %d sec, Max inflight: %d, Buffer: %zu KB\n", duration_sec, max_inflight,
+           buf_size / 1024);
 
     auraio_options_t opts;
     auraio_options_init(&opts);
@@ -254,7 +254,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
-    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
+    uint64_t drain_deadline = end_time + 2000000000ULL; // 2s drain timeout
 
     // Submit initial batch
     while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
@@ -274,8 +274,8 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
         atomic_fetch_add(&stats.inflight, 1);
 
-        if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
-                        read_callback, ctx) == NULL) {
+        if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset, read_callback,
+                        ctx) == NULL) {
             atomic_fetch_sub(&stats.inflight, 1);
             auraio_buffer_free(engine, buf, buf_size);
             free(ctx);
@@ -286,8 +286,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
         if (now_ns() > drain_deadline) {
             int stuck = atomic_load(&stats.inflight);
-            if (stuck > 0)
-                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            if (stuck > 0) fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
             break;
         }
 
@@ -455,8 +454,8 @@ typedef struct {
 
 static void *buffer_thread_fn(void *arg) {
     buffer_thread_data_t *td = arg;
-    rng_seed();  // Each thread gets unique TLS seed
-    size_t sizes[] = {4096, 8192, 16384, 32768, 65536, 131072};
+    rng_seed(); // Each thread gets unique TLS seed
+    size_t sizes[] = { 4096, 8192, 16384, 32768, 65536, 131072 };
     int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
 
     typedef struct {
@@ -512,13 +511,10 @@ static void bench_buffer_pool(int duration_sec, int num_threads) {
     _Atomic uint64_t total_frees = 0;
     _Atomic int running = 1;
 
-    pthread_t threads[16];  // Max 16 threads
+    pthread_t threads[16]; // Max 16 threads
 
     buffer_thread_data_t tdata = {
-        .engine = engine,
-        .allocs = &total_allocs,
-        .frees = &total_frees,
-        .running = &running
+        .engine = engine, .allocs = &total_allocs, .frees = &total_frees, .running = &running
     };
 
     uint64_t start = now_ns();
@@ -560,7 +556,7 @@ static void bench_scalability(int duration_sec) {
     printf("Testing throughput vs queue depth\n\n");
 
     // Test various in-flight depths (capped at 128 to avoid hangs)
-    int depths[] = {4, 8, 16, 32, 64, 128};
+    int depths[] = { 4, 8, 16, 32, 64, 128 };
     int num_depths = sizeof(depths) / sizeof(depths[0]);
 
     printf("%-12s %-12s %-12s %-12s\n", "Inflight", "IOPS", "MB/s", "P99(us)");
@@ -588,12 +584,11 @@ static void bench_scalability(int duration_sec) {
         uint64_t start = now_ns();
         uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
         // Run benchmark at this depth
-        uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
+        uint64_t drain_deadline = end_time + 2000000000ULL; // 2s drain timeout
         while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
             if (now_ns() > drain_deadline) {
                 int stuck = atomic_load(&stats.inflight);
-                if (stuck > 0)
-                    fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+                if (stuck > 0) fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
                 break;
             }
 
@@ -632,11 +627,8 @@ static void bench_scalability(int duration_sec) {
         uint64_t ops = atomic_load(&stats.ops_completed);
         uint64_t bytes = atomic_load(&stats.bytes_transferred);
 
-        printf("%-12d %-12.0f %-12.2f %-12lu\n",
-               depth,
-               ops / elapsed_sec,
-               (bytes / (1024.0 * 1024.0)) / elapsed_sec,
-               stats_p99_latency_us(&stats));
+        printf("%-12d %-12.0f %-12.2f %-12lu\n", depth, ops / elapsed_sec,
+               (bytes / (1024.0 * 1024.0)) / elapsed_sec, stats_p99_latency_us(&stats));
 
         auraio_destroy(engine);
     }
@@ -664,25 +656,24 @@ static void bench_syscall_batching(int duration_sec) {
     bench_stats_t stats;
     stats_init(&stats);
 
-    size_t buf_size = 4096;  // Small buffers for high IOPS
+    size_t buf_size = 4096; // Small buffers for high IOPS
     int max_inflight = 256;
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
-    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
+    uint64_t drain_deadline = end_time + 2000000000ULL; // 2s drain timeout
 
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
         if (now_ns() > drain_deadline) {
             int stuck = atomic_load(&stats.inflight);
-            if (stuck > 0)
-                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            if (stuck > 0) fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
             break;
         }
 
         // Submit batch
         int submitted = 0;
-        while (atomic_load(&stats.inflight) < max_inflight &&
-               now_ns() < end_time && submitted < 32) {
+        while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time &&
+               submitted < 32) {
             void *buf = auraio_buffer_alloc(engine, buf_size);
             if (!buf) break;
 
@@ -794,13 +785,12 @@ static void bench_mixed_workload(int duration_sec) {
 
     uint64_t start = now_ns();
     uint64_t end_time = start + (uint64_t)duration_sec * 1000000000ULL;
-    uint64_t drain_deadline = end_time + 2000000000ULL;  // 2s drain timeout
+    uint64_t drain_deadline = end_time + 2000000000ULL; // 2s drain timeout
 
     while (now_ns() < end_time || atomic_load(&stats.inflight) > 0) {
         if (now_ns() > drain_deadline) {
             int stuck = atomic_load(&stats.inflight);
-            if (stuck > 0)
-                fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
+            if (stuck > 0) fprintf(stderr, "  [warn] drain timeout, %d ops stuck\n", stuck);
             break;
         }
 
@@ -983,12 +973,8 @@ int main(int argc, char **argv) {
             const char *name;
             int dur;
         } benchmarks[] = {
-            {"throughput",  duration},
-            {"latency",     duration},
-            {"buffer",      duration},
-            {"scalability", duration / 2},
-            {"syscall",     duration},
-            {"mixed",       duration},
+            { "throughput", duration },      { "latency", duration }, { "buffer", duration },
+            { "scalability", duration / 2 }, { "syscall", duration }, { "mixed", duration },
         };
         int num_benchmarks = (int)(sizeof(benchmarks) / sizeof(benchmarks[0]));
         int all_ok = 1;
@@ -1029,21 +1015,21 @@ int main(int argc, char **argv) {
             for (int t = 0; t < timeout_sec * 10; t++) {
                 ret = waitpid(pid, &status, WNOHANG);
                 if (ret != 0) break;
-                usleep(100000);  // 100ms poll
+                usleep(100000); // 100ms poll
             }
             if (ret == 0) {
-                fprintf(stderr, "\n  [warn] %s timed out after %ds, killing\n",
-                        benchmarks[i].name, timeout_sec);
+                fprintf(stderr, "\n  [warn] %s timed out after %ds, killing\n", benchmarks[i].name,
+                        timeout_sec);
                 kill(pid, SIGKILL);
                 waitpid(pid, &status, 0);
                 all_ok = 0;
             } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-                fprintf(stderr, "\n  [warn] %s exited with status %d\n",
-                        benchmarks[i].name, WEXITSTATUS(status));
+                fprintf(stderr, "\n  [warn] %s exited with status %d\n", benchmarks[i].name,
+                        WEXITSTATUS(status));
                 all_ok = 0;
             } else if (WIFSIGNALED(status)) {
-                fprintf(stderr, "\n  [warn] %s killed by signal %d\n",
-                        benchmarks[i].name, WTERMSIG(status));
+                fprintf(stderr, "\n  [warn] %s killed by signal %d\n", benchmarks[i].name,
+                        WTERMSIG(status));
                 all_ok = 0;
             }
         }

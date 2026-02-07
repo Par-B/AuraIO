@@ -150,6 +150,13 @@ void ring_destroy(ring_ctx_t *ctx) {
         return;
     }
 
+    /* Flush any batched-but-not-submitted SQEs before draining.
+     * Without this, ring_wait() would block waiting for CQEs that
+     * correspond to SQEs never submitted to the kernel. */
+    pthread_mutex_lock(&ctx->lock);
+    ring_flush(ctx);
+    pthread_mutex_unlock(&ctx->lock);
+
     /* Wait for pending operations to complete with a timeout.
      * Benign race: pending_count read without lock. Worst case is one extra
      * ring_wait() iteration, which is acceptable during shutdown.
@@ -204,8 +211,8 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->buf_offset = 0;
     req->iov = NULL;
     req->cancel_target = NULL;
-    atomic_init(&req->pending, false);
-    atomic_init(&req->cancel_requested, false);
+    atomic_store_explicit(&req->pending, false, memory_order_relaxed);
+    atomic_store_explicit(&req->cancel_requested, false, memory_order_relaxed);
 
     if (op_idx) {
         *op_idx = idx;
@@ -682,6 +689,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 batch[n].req = io_uring_cqe_get_data(cqe);
                 batch[n].result = cqe->res;
                 io_uring_cqe_seen(&ctx->ring, cqe);
+                TSAN_ACQUIRE(batch[n].req);
                 n++;
             }
             pthread_mutex_unlock(&ctx->cq_lock);
@@ -691,7 +699,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             }
             completed = n;
         } else {
-            /* Nothing available - release lock and do blocking wait */
+            /* Nothing available - release lock and do blocking wait.
+             * We intentionally call io_uring_wait_cqe without holding
+             * cq_lock.  This allows other threads to poll/peek CQEs
+             * concurrently.  After the wait returns, we re-acquire
+             * cq_lock and batch-peek, which handles the case where
+             * another thread consumed the waking CQE first. */
             int ret;
             pthread_mutex_unlock(&ctx->cq_lock);
 
@@ -724,6 +737,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 batch[n].req = io_uring_cqe_get_data(cqe);
                 batch[n].result = cqe->res;
                 io_uring_cqe_seen(&ctx->ring, cqe);
+                TSAN_ACQUIRE(batch[n].req);
                 n++;
             }
             pthread_mutex_unlock(&ctx->cq_lock);

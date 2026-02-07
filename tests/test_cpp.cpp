@@ -647,6 +647,37 @@ TEST(raii_exception_safety) {
 }
 
 // =============================================================================
+// Error Path Tests
+// =============================================================================
+
+TEST(read_invalid_fd_throws) {
+    auraio::Engine engine;
+    auto buffer = engine.allocate_buffer(4096);
+
+    bool threw = false;
+    try {
+        (void)engine.read(-1, buffer, 4096, 0, [](auraio::Request &, ssize_t) {});
+    } catch (const auraio::Error &e) {
+        threw = true;
+        // fd=-1 may produce EBADF or EINVAL depending on kernel/io_uring version
+        ASSERT(e.code() == EBADF || e.code() == EINVAL);
+    }
+    ASSERT(threw);
+}
+
+TEST(buffer_as_null_throws) {
+    auraio::Buffer buf; // Default-constructed — null
+    bool threw = false;
+    try {
+        (void)buf.as<int>();
+    } catch (const auraio::Error &e) {
+        threw = true;
+        ASSERT_EQ(e.code(), EINVAL);
+    }
+    ASSERT(threw);
+}
+
+// =============================================================================
 // Coroutine Tests
 // =============================================================================
 
@@ -802,6 +833,8 @@ int main() {
     RUN_TEST(raii_engine_scope);
     RUN_TEST(raii_buffer_scope);
     RUN_TEST(raii_exception_safety);
+    RUN_TEST(read_invalid_fd_throws);
+    RUN_TEST(buffer_as_null_throws);
 
 #if __has_include(<coroutine>)
     RUN_TEST(async_read_basic);

@@ -37,7 +37,7 @@
 static _Atomic uint64_t pool_generation_counter = 0;
 
 /* Thread-local cache pointer */
-static __thread thread_cache_t *tls_cache = NULL;
+static _Thread_local thread_cache_t *tls_cache = NULL;
 
 /* ============================================================================
  * Size Class Helpers

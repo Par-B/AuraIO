@@ -56,7 +56,7 @@ struct auraio_engine {
     /* Hot path: ring selection (every I/O submission) */
     ring_ctx_t *rings; /**< Array of ring contexts */
     int ring_count; /**< Number of rings */
-    atomic_int next_ring; /**< Round-robin ring selector (randomized init) */
+    _Atomic unsigned int next_ring; /**< Round-robin ring selector (randomized init) */
     _Atomic int avg_ring_pending; /**< Tick-updated average pending across rings */
 
     /* Hot path: shutdown check (every I/O submission) */
@@ -113,9 +113,9 @@ static int get_cpu_count(void) {
 #define SELECT_RING_REFRESH 32
 
 /** Thread-local cached CPU for ring selection. -1 = not yet cached. */
-static __thread int cached_cpu = -1;
+static _Thread_local int cached_cpu = -1;
 /** Countdown to next sched_getcpu() refresh. */
-static __thread int cpu_refresh_counter = 0;
+static _Thread_local int cpu_refresh_counter = 0;
 
 /**
  * Select the CPU-local ring.
@@ -205,10 +205,10 @@ static ring_ctx_t *select_ring(auraio_engine_t *engine) {
         atomic_fetch_add_explicit(&engine->adaptive_spills, 1, memory_order_relaxed);
         unsigned rc = (unsigned)engine->ring_count;
         unsigned local_idx = (unsigned)(local - engine->rings);
-        unsigned a = xorshift_tls() % rc;
-        unsigned b = xorshift_tls() % rc;
-        if (a == local_idx) a = (a + 1) % rc;
-        if (b == local_idx) b = (b + 1) % rc;
+        unsigned a = xorshift_tls() % (rc - 1);
+        if (a >= local_idx) a++;
+        unsigned b = xorshift_tls() % (rc - 1);
+        if (b >= local_idx) b++;
         int pa = atomic_load_explicit(&engine->rings[a].pending_count, memory_order_relaxed);
         int pb = atomic_load_explicit(&engine->rings[b].pending_count, memory_order_relaxed);
         return &engine->rings[pa <= pb ? a : b];
@@ -1075,16 +1075,12 @@ void auraio_run(auraio_engine_t *engine) {
     while (!atomic_load(&engine->stop_requested)) {
         int completed = auraio_wait(engine, 100);
 
-        /* Check if we have any pending work (with locks) */
+        /* Check if we have any pending work.
+         * pending_count is atomic — no lock needed for a simple read. */
         bool has_pending = false;
         for (int i = 0; i < engine->ring_count; i++) {
-            ring_ctx_t *ring = &engine->rings[i];
-            pthread_mutex_lock(&ring->lock);
-            if (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0) {
+            if (atomic_load_explicit(&engine->rings[i].pending_count, memory_order_acquire) > 0) {
                 has_pending = true;
-            }
-            pthread_mutex_unlock(&ring->lock);
-            if (has_pending) {
                 break;
             }
         }
@@ -1142,7 +1138,7 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
             int64_t remaining_ns = deadline_ns - get_time_ns();
             if (remaining_ns <= 0) {
                 errno = ETIMEDOUT;
-                return -1;
+                return total;
             }
             wait_ms = (int)(remaining_ns / 1000000LL);
             if (wait_ms <= 0) wait_ms = 1;

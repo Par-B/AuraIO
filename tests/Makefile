@@ -14,7 +14,7 @@ ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 TESTS = test_engine test_buffer test_ring test_stats test_ring_select
 CPP_TESTS = test_cpp
 
-all: $(TESTS)
+all: $(TESTS) $(CPP_TESTS)
 	@echo "Running all C tests..."
 	@total=0; \
 	for t in $(TESTS); do \
@@ -28,6 +28,13 @@ all: $(TESTS)
 	echo ""; \
 	echo "=== C Tests Summary ==="; \
 	echo "$$total tests passed"
+	@echo ""
+	@echo "Running C++ tests..."
+	@for t in $(CPP_TESTS); do \
+		echo ""; \
+		echo "=== $$t ==="; \
+		./$$t || exit 1; \
+	done
 
 test_engine: test_engine.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)

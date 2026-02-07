@@ -69,7 +69,7 @@ impl Future for IoFuture {
     type Output = Result<usize>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
         // Check if result is ready
         if let Some(result) = state.result.take() {
@@ -94,7 +94,7 @@ fn create_io_future() -> (IoFuture, impl FnOnce(Result<usize>) + Send + 'static)
     let callback_state = state.clone();
     let callback = move |result: Result<usize>| {
         let waker = {
-            let mut state = callback_state.lock().unwrap();
+            let mut state = callback_state.lock().unwrap_or_else(|e| e.into_inner());
             state.result = Some(result);
             state.waker.take()
         };
@@ -176,7 +176,12 @@ pub trait AsyncEngine {
     fn async_fdatasync(&self, fd: RawFd) -> Result<IoFuture>;
 
     /// Submit an async vectored read and return a Future.
-    fn async_readv(
+    ///
+    /// # Safety
+    ///
+    /// The iovec buffers must remain valid and exclusively borrowed
+    /// until the returned Future completes.
+    unsafe fn async_readv(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
@@ -184,7 +189,11 @@ pub trait AsyncEngine {
     ) -> Result<IoFuture>;
 
     /// Submit an async vectored write and return a Future.
-    fn async_writev(
+    ///
+    /// # Safety
+    ///
+    /// The iovec buffers must remain valid until the returned Future completes.
+    unsafe fn async_writev(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
@@ -229,25 +238,25 @@ impl AsyncEngine for Engine {
         Ok(future)
     }
 
-    fn async_readv(
+    unsafe fn async_readv(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
         let (future, callback) = create_io_future();
-        self.readv(fd, iovecs, offset, callback)?;
+        unsafe { self.readv(fd, iovecs, offset, callback)? };
         Ok(future)
     }
 
-    fn async_writev(
+    unsafe fn async_writev(
         &self,
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
         let (future, callback) = create_io_future();
-        self.writev(fd, iovecs, offset, callback)?;
+        unsafe { self.writev(fd, iovecs, offset, callback)? };
         Ok(future)
     }
 }
@@ -388,7 +397,8 @@ mod tests {
             },
         ];
 
-        let future = engine.async_readv(fd, &iovecs, 0).unwrap();
+        // Safety: iovecs point to stack-local buffers that outlive the future
+        let future = unsafe { engine.async_readv(fd, &iovecs, 0) }.unwrap();
         let result = block_on(&engine, future);
 
         assert!(result.is_ok());
@@ -422,7 +432,8 @@ mod tests {
             },
         ];
 
-        let future = engine.async_writev(fd, &iovecs, 0).unwrap();
+        // Safety: iovecs point to stack-local buffers that outlive the future
+        let future = unsafe { engine.async_writev(fd, &iovecs, 0) }.unwrap();
         let result = block_on(&engine, future);
 
         assert!(result.is_ok());

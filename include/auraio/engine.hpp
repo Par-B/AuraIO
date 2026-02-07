@@ -31,8 +31,8 @@ class FsyncAwaitable;
 /**
  * Callback concept for I/O completion handlers
  */
-template<typename F>
-concept Callback = std::invocable<F, Request&, ssize_t>;
+template <typename F>
+concept Callback = std::invocable<F, Request &, ssize_t>;
 
 /**
  * Main AuraIO engine class
@@ -65,7 +65,7 @@ concept Callback = std::invocable<F, Request&, ssize_t>;
  * @endcode
  */
 class Engine {
-public:
+  public:
     /**
      * Create engine with default options
      * @throws Error on failure
@@ -89,7 +89,7 @@ public:
      * @param opts Configuration options
      * @throws Error on failure
      */
-    explicit Engine(const Options& opts) {
+    explicit Engine(const Options &opts) {
         handle_ = auraio_create_with_options(&opts.c_options());
         if (!handle_) {
             throw Error(errno, "auraio_create_with_options");
@@ -106,17 +106,14 @@ public:
     /**
      * Move constructor
      */
-    Engine(Engine&& other) noexcept
-        : handle_(other.handle_)
-        , pool_(std::move(other.pool_))
-    {
+    Engine(Engine &&other) noexcept : handle_(other.handle_), pool_(std::move(other.pool_)) {
         other.handle_ = nullptr;
     }
 
     /**
      * Move assignment
      */
-    Engine& operator=(Engine&& other) noexcept {
+    Engine &operator=(Engine &&other) noexcept {
         if (this != &other) {
             destroy();
             handle_ = other.handle_;
@@ -127,15 +124,13 @@ public:
     }
 
     // Non-copyable
-    Engine(const Engine&) = delete;
-    Engine& operator=(const Engine&) = delete;
+    Engine(const Engine &) = delete;
+    Engine &operator=(const Engine &) = delete;
 
     /**
      * Destructor
      */
-    ~Engine() {
-        destroy();
-    }
+    ~Engine() { destroy(); }
 
     // =========================================================================
     // Core I/O Operations
@@ -153,26 +148,23 @@ public:
      * @return Request handle (valid until callback begins)
      * @throws Error on submission failure
      */
-    template<Callback F>
-    [[nodiscard]] Request* read(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
-        auto* ctx = pool_->allocate();
+    template <Callback F>
+    [[nodiscard]] Request *read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+        auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
-        auraio_request_t* req = auraio_read(
-            handle_, fd, buf.c_buf(), len, offset,
-            auraio_detail_callback_trampoline, ctx
-        );
+        // Set up O(1) cleanup BEFORE submission — the trampoline can fire
+        // on another thread as soon as the C API returns.
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_read(handle_, fd, buf.c_buf(), len, offset,
+                                            auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
             throw Error(errno, "auraio_read");
         }
-
-        // Set up O(1) cleanup via on_complete callback
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
 
         ctx->request = Request(req);
         return &ctx->request;
@@ -190,25 +182,22 @@ public:
      * @return Request handle
      * @throws Error on submission failure
      */
-    template<Callback F>
-    [[nodiscard]] Request* write(int fd, BufferRef buf, size_t len, off_t offset, F&& callback) {
-        auto* ctx = pool_->allocate();
+    template <Callback F>
+    [[nodiscard]] Request *write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+        auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
-        auraio_request_t* req = auraio_write(
-            handle_, fd, buf.c_buf(), len, offset,
-            auraio_detail_callback_trampoline, ctx
-        );
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_write(handle_, fd, buf.c_buf(), len, offset,
+                                             auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
             throw Error(errno, "auraio_write");
         }
 
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
         ctx->request = Request(req);
         return &ctx->request;
     }
@@ -216,39 +205,10 @@ public:
     /**
      * Submit async vectored read operation
      *
-     * @tparam F Callback type
-     * @param fd File descriptor
-     * @param iov IO vector array
-     * @param offset File offset
-     * @param callback Completion callback
-     * @return Request handle
-     * @throws Error on submission failure
-     */
-    template<Callback F>
-    [[nodiscard]] Request* readv(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
-        auto* ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auraio_request_t* req = auraio_readv(
-            handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
-            auraio_detail_callback_trampoline, ctx
-        );
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "auraio_readv");
-        }
-
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
-        ctx->request = Request(req);
-        return &ctx->request;
-    }
-
-    /**
-     * Submit async vectored write operation
+     * @warning The iovec array AND the buffers it points to must remain
+     *          valid until the completion callback fires.  The kernel
+     *          reads the iovec at submission time, but writes into the
+     *          buffers asynchronously.
      *
      * @tparam F Callback type
      * @param fd File descriptor
@@ -258,25 +218,59 @@ public:
      * @return Request handle
      * @throws Error on submission failure
      */
-    template<Callback F>
-    [[nodiscard]] Request* writev(int fd, std::span<const iovec> iov, off_t offset, F&& callback) {
-        auto* ctx = pool_->allocate();
+    template <Callback F>
+    [[nodiscard]] Request *readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+        assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
+        auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
-        auraio_request_t* req = auraio_writev(
-            handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
-            auraio_detail_callback_trampoline, ctx
-        );
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()),
+                                             offset, auraio_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "auraio_readv");
+        }
+
+        ctx->request = Request(req);
+        return &ctx->request;
+    }
+
+    /**
+     * Submit async vectored write operation
+     *
+     * @warning The iovec array AND the buffers it points to must remain
+     *          valid until the completion callback fires.  The kernel
+     *          reads from the buffers asynchronously.
+     *
+     * @tparam F Callback type
+     * @param fd File descriptor
+     * @param iov IO vector array
+     * @param offset File offset
+     * @param callback Completion callback
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request *writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+        assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()),
+                                              offset, auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
             throw Error(errno, "auraio_writev");
         }
 
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
         ctx->request = Request(req);
         return &ctx->request;
     }
@@ -290,24 +284,20 @@ public:
      * @return Request handle
      * @throws Error on submission failure
      */
-    template<Callback F>
-    [[nodiscard]] Request* fsync(int fd, F&& callback) {
-        auto* ctx = pool_->allocate();
+    template <Callback F> [[nodiscard]] Request *fsync(int fd, F &&callback) {
+        auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
-        auraio_request_t* req = auraio_fsync(
-            handle_, fd, auraio_detail_callback_trampoline, ctx
-        );
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_fsync(handle_, fd, auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
             throw Error(errno, "auraio_fsync");
         }
 
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
         ctx->request = Request(req);
         return &ctx->request;
     }
@@ -321,25 +311,21 @@ public:
      * @return Request handle
      * @throws Error on submission failure
      */
-    template<Callback F>
-    [[nodiscard]] Request* fdatasync(int fd, F&& callback) {
-        auto* ctx = pool_->allocate();
+    template <Callback F> [[nodiscard]] Request *fdatasync(int fd, F &&callback) {
+        auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
-        auraio_request_t* req = auraio_fsync_ex(
-            handle_, fd, AURAIO_FSYNC_DATASYNC,
-            auraio_detail_callback_trampoline, ctx
-        );
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        auraio_request_t *req = auraio_fsync_ex(handle_, fd, AURAIO_FSYNC_DATASYNC,
+                                                auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
             throw Error(errno, "auraio_fsync_ex");
         }
 
-        auto* pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() {
-            pool_ptr->release(ctx);
-        };
         ctx->request = Request(req);
         return &ctx->request;
     }
@@ -396,7 +382,7 @@ public:
      * @param req Request to cancel
      * @return True if cancellation was submitted
      */
-    bool cancel(Request* req) noexcept {
+    bool cancel(Request *req) noexcept {
         if (!req || !req->handle()) {
             return false;
         }
@@ -455,18 +441,14 @@ public:
      * Blocks the calling thread. Call stop() from a callback
      * or another thread to exit.
      */
-    void run() {
-        auraio_run(handle_);
-    }
+    void run() { auraio_run(handle_); }
 
     /**
      * Signal event loop to stop
      *
      * Thread-safe. Can be called from callbacks.
      */
-    void stop() noexcept {
-        auraio_stop(handle_);
-    }
+    void stop() noexcept { auraio_stop(handle_); }
 
     /**
      * Drain all pending I/O operations
@@ -497,7 +479,7 @@ public:
      * @throws Error on allocation failure
      */
     [[nodiscard]] Buffer allocate_buffer(size_t size) {
-        void* ptr = auraio_buffer_alloc(handle_, size);
+        void *ptr = auraio_buffer_alloc(handle_, size);
         if (!ptr) {
             throw Error(errno, "auraio_buffer_alloc");
         }
@@ -586,9 +568,7 @@ public:
      * Get the number of io_uring rings
      * @return Number of rings
      */
-    [[nodiscard]] int ring_count() const noexcept {
-        return auraio_get_ring_count(handle_);
-    }
+    [[nodiscard]] int ring_count() const noexcept { return auraio_get_ring_count(handle_); }
 
     /**
      * Get per-ring statistics
@@ -635,13 +615,13 @@ public:
      * Get underlying C engine handle
      * @return Pointer to auraio_engine_t
      */
-    [[nodiscard]] auraio_engine_t* handle() noexcept { return handle_; }
+    [[nodiscard]] auraio_engine_t *handle() noexcept { return handle_; }
 
     /**
      * Get underlying C engine handle (const)
      * @return Pointer to const auraio_engine_t
      */
-    [[nodiscard]] const auraio_engine_t* handle() const noexcept { return handle_; }
+    [[nodiscard]] const auraio_engine_t *handle() const noexcept { return handle_; }
 
     /**
      * Check if engine is valid
@@ -649,7 +629,7 @@ public:
      */
     [[nodiscard]] explicit operator bool() const noexcept { return handle_ != nullptr; }
 
-private:
+  private:
     void destroy() noexcept {
         if (handle_) {
             auraio_destroy(handle_);
@@ -658,7 +638,7 @@ private:
         pool_.reset();
     }
 
-    auraio_engine_t* handle_ = nullptr;
+    auraio_engine_t *handle_ = nullptr;
     std::unique_ptr<detail::CallbackPool> pool_;
 };
 

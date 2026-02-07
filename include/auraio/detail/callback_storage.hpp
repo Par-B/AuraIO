@@ -26,14 +26,19 @@ namespace auraio::detail {
  * Stores the C++ callback and provides a trampoline function
  * that can be passed to the C API.
  */
+/** Sentinel value marking a context as in-use (allocated, not on free list).
+ *  Distinct from -1 (end of free list) to prevent the double-release guard
+ *  from failing when a context is released into an empty free list. */
+inline constexpr int kCallbackInUse = -2;
+
 struct CallbackContext {
-    std::function<void(Request&, ssize_t)> callback;
-    std::function<void()> on_complete;  // Called after callback to release context (O(1) cleanup)
-    auraio_engine_t* engine = nullptr;
-    Request request{nullptr};  // Per-operation Request storage (avoids thread-local static)
-    int next_free = -1;   // Index of next free slot (-1 = in use or end of list)
-    int pool_index = -1;  // Own index within shard (for O(1) release)
-    int shard_index = -1; // Which shard this context belongs to
+    std::function<void(Request &, ssize_t)> callback;
+    std::function<void()> on_complete; // Called after callback to release context (O(1) cleanup)
+    auraio_engine_t *engine = nullptr;
+    Request request{nullptr};       // Per-operation Request storage (avoids thread-local static)
+    int next_free = kCallbackInUse; // Free list link (-1 = end of list, kCallbackInUse = allocated)
+    int pool_index = -1;            // Own index within shard (for O(1) release)
+    int shard_index = -1;           // Which shard this context belongs to
 };
 
 /**
@@ -51,7 +56,7 @@ struct CallbackContext {
  * Thread-safe.
  */
 class CallbackPool {
-public:
+  public:
     /**
      * Number of shards (power of 2 for efficient modulo)
      *
@@ -61,11 +66,10 @@ public:
      * - Large systems (64+ cores): ~8+ threads per shard, still much better than 1 lock
      */
     static constexpr size_t kShardCount = 8;
-    static constexpr size_t kShardMask = kShardCount - 1;  // For fast modulo
+    static constexpr size_t kShardMask = kShardCount - 1; // For fast modulo
 
-    explicit CallbackPool(auraio_engine_t* engine, size_t initial_size_per_shard = 16)
-        : engine_(engine)
-    {
+    explicit CallbackPool(auraio_engine_t *engine, size_t initial_size_per_shard = 16)
+        : engine_(engine) {
         for (size_t s = 0; s < kShardCount; ++s) {
             init_shard(s, initial_size_per_shard);
         }
@@ -78,17 +82,17 @@ public:
      * Thread selection is based on thread ID hash, so threads typically
      * access different shards and don't contend.
      */
-    CallbackContext* allocate() {
+    CallbackContext *allocate() {
         size_t shard_idx = get_shard_index();
-        Shard& shard = shards_[shard_idx];
+        Shard &shard = shards_[shard_idx];
         std::lock_guard<std::mutex> lock(shard.mutex);
 
         // Pop from free list head
         if (shard.free_head >= 0) {
             int idx = shard.free_head;
-            CallbackContext* ctx = &shard.contexts[idx];
+            CallbackContext *ctx = &shard.contexts[idx];
             shard.free_head = ctx->next_free;
-            ctx->next_free = -1;  // Mark as in-use
+            ctx->next_free = kCallbackInUse; // Mark as in-use
             return ctx;
         }
 
@@ -100,16 +104,16 @@ public:
      * Release a callback context back to pool - O(1)
      * @param ctx Context to release (uses stored shard_index for routing)
      */
-    void release(CallbackContext* ctx) {
+    void release(CallbackContext *ctx) {
         if (!ctx || ctx->shard_index < 0) {
             return;
         }
 
-        Shard& shard = shards_[ctx->shard_index];
+        Shard &shard = shards_[ctx->shard_index];
         std::lock_guard<std::mutex> lock(shard.mutex);
 
-        if (ctx->next_free != -1) {
-            return;  // Already released; silently ignore double-release
+        if (ctx->next_free != kCallbackInUse) {
+            return; // Already released; silently ignore double-release
         }
         ctx->callback = nullptr;
         ctx->on_complete = nullptr;
@@ -118,15 +122,15 @@ public:
         shard.free_head = ctx->pool_index;
     }
 
-private:
+  private:
     struct Shard {
-        std::deque<CallbackContext> contexts;  // deque: pointers stable on growth
+        std::deque<CallbackContext> contexts; // deque: pointers stable on growth
         std::mutex mutex;
-        int free_head = -1;  // Index of first free slot (-1 = empty)
+        int free_head = -1; // Index of first free slot (-1 = empty)
     };
 
     void init_shard(size_t shard_idx, size_t initial_size) {
-        Shard& shard = shards_[shard_idx];
+        Shard &shard = shards_[shard_idx];
         if (initial_size == 0) {
             shard.free_head = -1;
             return;
@@ -136,7 +140,7 @@ private:
 
         // Initialize free list: each slot points to the next
         for (size_t i = 0; i < initial_size; ++i) {
-            CallbackContext& ctx = shard.contexts[i];
+            CallbackContext &ctx = shard.contexts[i];
             ctx.engine = engine_;
             ctx.pool_index = static_cast<int>(i);
             ctx.shard_index = static_cast<int>(shard_idx);
@@ -147,14 +151,14 @@ private:
     }
 
     // Must be called with shard.mutex held
-    CallbackContext* grow_shard(Shard& shard, size_t shard_idx) {
+    CallbackContext *grow_shard(Shard &shard, size_t shard_idx) {
         size_t old_size = shard.contexts.size();
         size_t new_size = (old_size == 0) ? 16 : old_size * 2;
         shard.contexts.resize(new_size);
 
         // Initialize new slots as a free list
         for (size_t i = old_size; i < new_size; ++i) {
-            CallbackContext& ctx = shard.contexts[i];
+            CallbackContext &ctx = shard.contexts[i];
             ctx.engine = engine_;
             ctx.pool_index = static_cast<int>(i);
             ctx.shard_index = static_cast<int>(shard_idx);
@@ -164,7 +168,7 @@ private:
 
         // Return first new slot, rest become the free list
         shard.free_head = static_cast<int>(old_size + 1);
-        shard.contexts[old_size].next_free = -1;  // Mark as in-use
+        shard.contexts[old_size].next_free = kCallbackInUse; // Mark as in-use
         return &shard.contexts[old_size];
     }
 
@@ -181,13 +185,17 @@ private:
     }
 
     static size_t compute_shard_index() {
-        // Hash thread ID and mask to shard count
+        // Hash thread ID with bit mixing to avoid clustering
+        // when thread IDs are sequential (common on glibc).
         auto tid = std::this_thread::get_id();
         size_t hash = std::hash<std::thread::id>{}(tid);
+        hash ^= hash >> 16;
+        hash *= 0x45d9f3bU;
+        hash ^= hash >> 16;
         return hash & kShardMask;
     }
 
-    auraio_engine_t* engine_;
+    auraio_engine_t *engine_;
     std::array<Shard, kShardCount> shards_;
 };
 
@@ -199,10 +207,9 @@ private:
  * extern "C" linkage is required because this function pointer is passed
  * to the C API. Using C++ linkage as a C function pointer is technically UB.
  */
-extern "C" inline void auraio_detail_callback_trampoline(
-    auraio_request_t* req, ssize_t result, void* user_data
-) {
-    auto* ctx = static_cast<auraio::detail::CallbackContext*>(user_data);
+extern "C" inline void auraio_detail_callback_trampoline(auraio_request_t *req, ssize_t result,
+                                                         void *user_data) {
+    auto *ctx = static_cast<auraio::detail::CallbackContext *>(user_data);
     if (ctx && ctx->callback) {
         ctx->request = auraio::Request(req);
         try {

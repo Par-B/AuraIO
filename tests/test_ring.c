@@ -1345,16 +1345,13 @@ TEST(stats_null_params) {
  * Integration / Load Tests
  * ============================================================================ */
 
-static volatile int concurrent_callback_count = 0;
-static pthread_mutex_t callback_count_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int concurrent_callback_count = 0;
 
 static void concurrent_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     if (result > 0) {
-        pthread_mutex_lock(&callback_count_lock);
-        concurrent_callback_count++;
-        pthread_mutex_unlock(&callback_count_lock);
+        atomic_fetch_add_explicit(&concurrent_callback_count, 1, memory_order_relaxed);
     }
 }
 

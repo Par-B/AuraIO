@@ -84,7 +84,10 @@ impl Buffer {
 
     /// Create a BufferRef from this buffer
     pub fn to_ref(&self) -> BufferRef {
-        BufferRef::from_ptr(self.ptr.as_ptr() as *mut std::ffi::c_void)
+        // Safety: Buffer owns the pointer and it remains valid for
+        // the Buffer's lifetime. The caller is responsible for ensuring
+        // the BufferRef does not outlive the Buffer.
+        unsafe { BufferRef::from_ptr(self.ptr.as_ptr() as *mut std::ffi::c_void) }
     }
 }
 
@@ -161,20 +164,41 @@ fn make_buf_fixed(index: i32, offset: usize) -> auraio_sys::auraio_buf_t {
 
 impl BufferRef {
     /// Create a buffer reference from a raw pointer
-    pub fn from_ptr(ptr: *mut std::ffi::c_void) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pointer is valid and the pointed-to
+    /// memory remains valid for the duration of any I/O operation
+    /// using this `BufferRef`.
+    pub unsafe fn from_ptr(ptr: *mut std::ffi::c_void) -> Self {
         Self {
             inner: make_buf(ptr),
         }
     }
 
     /// Create a buffer reference from a byte slice
-    pub fn from_slice(slice: &[u8]) -> Self {
-        Self::from_ptr(slice.as_ptr() as *mut std::ffi::c_void)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the slice remains valid and at a stable
+    /// address for the entire duration of any I/O operation using this
+    /// `BufferRef`. The borrow checker cannot enforce this across the
+    /// async submission boundary.
+    pub unsafe fn from_slice(slice: &[u8]) -> Self {
+        // Safety: caller guarantees slice lifetime per from_ptr contract
+        unsafe { Self::from_ptr(slice.as_ptr() as *mut std::ffi::c_void) }
     }
 
     /// Create a buffer reference from a mutable byte slice
-    pub fn from_mut_slice(slice: &mut [u8]) -> Self {
-        Self::from_ptr(slice.as_mut_ptr() as *mut std::ffi::c_void)
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the slice remains valid, at a stable
+    /// address, and exclusively borrowed for the entire duration of
+    /// any I/O operation using this `BufferRef`.
+    pub unsafe fn from_mut_slice(slice: &mut [u8]) -> Self {
+        // Safety: caller guarantees slice lifetime per from_ptr contract
+        unsafe { Self::from_ptr(slice.as_mut_ptr() as *mut std::ffi::c_void) }
     }
 
     /// Create a reference to a registered (fixed) buffer
@@ -209,14 +233,8 @@ impl From<&mut Buffer> for BufferRef {
     }
 }
 
-impl<'a> From<&'a [u8]> for BufferRef {
-    fn from(slice: &'a [u8]) -> Self {
-        Self::from_slice(slice)
-    }
-}
-
-impl<'a> From<&'a mut [u8]> for BufferRef {
-    fn from(slice: &'a mut [u8]) -> Self {
-        Self::from_mut_slice(slice)
-    }
-}
+// From<&[u8]> and From<&mut [u8]> are intentionally omitted.
+// These conversions erase the slice lifetime, making it possible to
+// submit I/O with a BufferRef that outlives the backing memory.
+// Use `unsafe { BufferRef::from_slice(s) }` or `BufferRef::from(&buffer)`
+// instead.

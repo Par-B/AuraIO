@@ -56,67 +56,67 @@
 
 /** Tick interval in milliseconds. The adaptive controller evaluates metrics
  *  and potentially adjusts parameters every 10ms. */
-#define ADAPTIVE_SAMPLE_INTERVAL_MS    10
+#define ADAPTIVE_SAMPLE_INTERVAL_MS 10
 
 /** Warmup samples before establishing baseline. Collect 10 ticks (100ms) of
  *  latency data to establish a reliable minimum P99 baseline. */
-#define ADAPTIVE_WARMUP_SAMPLES        10
+#define ADAPTIVE_WARMUP_SAMPLES 10
 
 /** P99 sliding window size. Track the last 15 P99 samples (150ms) to smooth
  *  out transient spikes and detect sustained latency changes. */
-#define ADAPTIVE_P99_WINDOW            15
+#define ADAPTIVE_P99_WINDOW 15
 
 /** Throughput sliding window size. Track 25 samples (250ms) for throughput
  *  efficiency ratio calculation. Longer than P99 window to reduce noise. */
-#define ADAPTIVE_THROUGHPUT_WINDOW     25
+#define ADAPTIVE_THROUGHPUT_WINDOW 25
 
 /** Baseline tracking window size. Track 50 samples (500ms) of minimum P99
  *  values to maintain a stable baseline even as workload varies. */
-#define ADAPTIVE_BASELINE_WINDOW       50
+#define ADAPTIVE_BASELINE_WINDOW 50
 
 /** Additive increase per tick. Add 1 to in-flight limit each tick during
  *  PROBING phase. Conservative increase avoids overshooting optimal point. */
-#define ADAPTIVE_AIMD_INCREASE         1
+#define ADAPTIVE_AIMD_INCREASE 1
 
 /** Multiplicative decrease factor. Cut in-flight limit by 20% on backoff.
  *  Gentler than TCP's 50% because storage latency is more predictable. */
-#define ADAPTIVE_AIMD_DECREASE         0.80
+#define ADAPTIVE_AIMD_DECREASE 0.80
 
 /** Near-zero efficiency ratio threshold. If efficiency ratio is below 1%,
  *  consider it a plateau (throughput not increasing with more in-flight). */
-#define ADAPTIVE_ER_EPSILON            0.01
+#define ADAPTIVE_ER_EPSILON 0.01
 
 /** Latency guard multiplier. Trigger backoff when P99 exceeds baseline by
  *  this factor. 10x allows normal variation while catching saturation. */
-#define ADAPTIVE_LATENCY_GUARD_MULT    10.0
+#define ADAPTIVE_LATENCY_GUARD_MULT 10.0
 
 /** Ideal completions for valid P99. Need ~100 samples for statistically
  *  meaningful 99th percentile. At low IOPS, use MIN_SAMPLES or time window. */
-#define ADAPTIVE_MIN_SAMPLES_FOR_P99   100
+#define ADAPTIVE_MIN_SAMPLES_FOR_P99 100
 
 /** Minimum samples before making any AIMD decision. Even at low IOPS, need
  *  at least 20 completions to make a reasonable judgment call. */
-#define ADAPTIVE_LOW_IOPS_MIN_SAMPLES  20
+#define ADAPTIVE_LOW_IOPS_MIN_SAMPLES 20
 
 /** Minimum sample window in milliseconds. At low IOPS, wait at least 100ms
  *  before making decisions to accumulate enough samples. */
-#define ADAPTIVE_MIN_SAMPLE_WINDOW_MS  100
+#define ADAPTIVE_MIN_SAMPLE_WINDOW_MS 100
 
 /** Maximum sample window in milliseconds. Don't wait longer than 1 second
  *  even at very low IOPS; make a decision with available data. */
-#define ADAPTIVE_MAX_SAMPLE_WINDOW_MS  1000
+#define ADAPTIVE_MAX_SAMPLE_WINDOW_MS 1000
 
 /** Minimum batch threshold. Never batch fewer than 2 SQEs per submit to
  *  maintain syscall efficiency. */
-#define ADAPTIVE_MIN_BATCH             2
+#define ADAPTIVE_MIN_BATCH 2
 
 /** Target SQEs per submit syscall. Aim for 8 SQEs per io_uring_enter()
  *  to amortize syscall overhead while maintaining responsiveness. */
-#define ADAPTIVE_TARGET_SQE_RATIO      8.0
+#define ADAPTIVE_TARGET_SQE_RATIO 8.0
 
 /** Maximum batch threshold. Cap batching at 64 SQEs to bound worst-case
  *  latency from batch accumulation. */
-#define ADAPTIVE_MAX_BATCH_THRESHOLD   64
+#define ADAPTIVE_MAX_BATCH_THRESHOLD 64
 
 /** Default latency guard in milliseconds. Hard ceiling on acceptable P99.
  *
@@ -130,11 +130,11 @@
 
 /** Settling phase duration in ticks. After backoff, wait 10 ticks (100ms)
  *  for metrics to stabilize before resuming PROBING. */
-#define ADAPTIVE_SETTLING_TICKS        10
+#define ADAPTIVE_SETTLING_TICKS 10
 
 /** Ticks in STEADY before CONVERGED. Stay in STEADY for 500 ticks (5 seconds)
  *  with stable metrics before declaring tuning complete. */
-#define ADAPTIVE_STEADY_THRESHOLD      500
+#define ADAPTIVE_STEADY_THRESHOLD 500
 
 /* Histogram configuration:
  *
@@ -146,15 +146,15 @@
 
 /** Latency bucket width in microseconds. 50µs granularity is sufficient for
  *  P99 calculation and matches NVMe command timing precision. */
-#define LATENCY_BUCKET_WIDTH_US        50
+#define LATENCY_BUCKET_WIDTH_US 50
 
 /** Maximum tracked latency in microseconds. Operations taking longer than
  *  10ms are counted in overflow and trigger latency guard. See rationale
  *  for ADAPTIVE_DEFAULT_LATENCY_GUARD above. */
-#define LATENCY_MAX_US                 10000
+#define LATENCY_MAX_US 10000
 
 /** Number of histogram buckets. Derived from max latency and bucket width. */
-#define LATENCY_BUCKET_COUNT           (LATENCY_MAX_US / LATENCY_BUCKET_WIDTH_US)
+#define LATENCY_BUCKET_COUNT (LATENCY_MAX_US / LATENCY_BUCKET_WIDTH_US)
 
 /* ============================================================================
  * Types
@@ -164,12 +164,12 @@
  * Adaptive phase
  */
 typedef enum {
-    ADAPTIVE_PHASE_BASELINE,    /**< Collecting baseline latency */
-    ADAPTIVE_PHASE_PROBING,     /**< Increasing in-flight limit */
-    ADAPTIVE_PHASE_STEADY,      /**< Maintaining optimal config */
-    ADAPTIVE_PHASE_BACKOFF,     /**< Reducing due to latency spike */
-    ADAPTIVE_PHASE_SETTLING,    /**< Waiting for metrics to stabilize */
-    ADAPTIVE_PHASE_CONVERGED    /**< Tuning complete */
+    ADAPTIVE_PHASE_BASELINE, /**< Collecting baseline latency */
+    ADAPTIVE_PHASE_PROBING,  /**< Increasing in-flight limit */
+    ADAPTIVE_PHASE_STEADY,   /**< Maintaining optimal config */
+    ADAPTIVE_PHASE_BACKOFF,  /**< Reducing due to latency spike */
+    ADAPTIVE_PHASE_SETTLING, /**< Waiting for metrics to stabilize */
+    ADAPTIVE_PHASE_CONVERGED /**< Tuning complete */
 } adaptive_phase_t;
 
 /**
@@ -180,8 +180,8 @@ typedef enum {
  */
 typedef struct {
     _Atomic uint32_t buckets[LATENCY_BUCKET_COUNT]; /**< Latency buckets */
-    _Atomic uint32_t overflow;                       /**< Count > max tracked */
-    _Atomic uint32_t total_count;                    /**< Total samples */
+    _Atomic uint32_t overflow;                      /**< Count > max tracked */
+    _Atomic uint32_t total_count;                   /**< Total samples */
 } adaptive_histogram_t;
 
 /**
@@ -191,8 +191,8 @@ typedef struct {
  * Recording writes to active histogram, tick swaps and clears inactive.
  */
 typedef struct {
-    adaptive_histogram_t histograms[2];  /**< Double buffer */
-    _Atomic int active_index;            /**< Active histogram (0 or 1) */
+    adaptive_histogram_t histograms[2]; /**< Double buffer */
+    _Atomic int active_index;           /**< Active histogram (0 or 1) */
 } adaptive_histogram_pair_t;
 
 /**
@@ -205,29 +205,29 @@ typedef struct {
      * All fields accessed per-op are packed here so both the submission
      * thread (reads limits) and completion thread (updates counters)
      * only need to fetch a single cache line. */
-    _Atomic int current_in_flight_limit;    /**< Current max concurrent ops */
-    _Atomic int current_batch_threshold;    /**< Current batch size before submit */
-    _Atomic int submit_calls;               /**< Submit syscalls this period */
-    _Atomic int sqes_submitted;             /**< SQEs submitted this period */
-    _Atomic int64_t sample_start_ns;        /**< Current sample start time */
-    _Atomic int64_t sample_bytes;           /**< Bytes completed this sample */
-    _Atomic double current_p99_ms;          /**< Current sample P99 */
-    _Atomic double current_throughput_bps;  /**< Current throughput */
-    _Atomic adaptive_phase_t phase;         /**< Current phase */
-    int max_queue_depth;                    /**< Upper bound on in-flight */
-    int min_in_flight;                      /**< Lower bound on in-flight */
+    _Atomic int current_in_flight_limit;   /**< Current max concurrent ops */
+    _Atomic int current_batch_threshold;   /**< Current batch size before submit */
+    _Atomic int submit_calls;              /**< Submit syscalls this period */
+    _Atomic int sqes_submitted;            /**< SQEs submitted this period */
+    _Atomic int64_t sample_start_ns;       /**< Current sample start time */
+    _Atomic int64_t sample_bytes;          /**< Bytes completed this sample */
+    _Atomic double current_p99_ms;         /**< Current sample P99 */
+    _Atomic double current_throughput_bps; /**< Current throughput */
+    _Atomic adaptive_phase_t phase;        /**< Current phase */
+    int max_queue_depth;                   /**< Upper bound on in-flight */
+    int min_in_flight;                     /**< Lower bound on in-flight */
     int prev_in_flight_limit;              /**< Previous limit for efficiency ratio */
 
     /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
-    double baseline_p99_ms;             /**< Minimum observed P99 */
-    double latency_rise_threshold;      /**< Threshold for latency backoff */
-    double max_p99_ms;                  /**< Hard ceiling on P99 (0 = none) */
-    double prev_throughput_bps;         /**< Previous throughput for efficiency ratio */
-    int warmup_count;                   /**< Samples collected in warmup */
-    int plateau_count;                  /**< Consecutive plateau samples */
-    int steady_count;                   /**< Time in STEADY phase */
-    int spike_count;                    /**< Consecutive latency spikes */
-    int settling_timer;                 /**< Time in SETTLING phase */
+    double baseline_p99_ms;        /**< Minimum observed P99 */
+    double latency_rise_threshold; /**< Threshold for latency backoff */
+    double max_p99_ms;             /**< Hard ceiling on P99 (0 = none) */
+    double prev_throughput_bps;    /**< Previous throughput for efficiency ratio */
+    int warmup_count;              /**< Samples collected in warmup */
+    int plateau_count;             /**< Consecutive plateau samples */
+    int steady_count;              /**< Time in STEADY phase */
+    int spike_count;               /**< Consecutive latency spikes */
+    int settling_timer;            /**< Time in SETTLING phase */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;
@@ -240,7 +240,7 @@ typedef struct {
     /* Double-buffered histogram for O(1) reset.
      * Aligned to cacheline boundary to prevent false sharing with
      * the sliding windows above. */
-    adaptive_histogram_pair_t hist_pair __attribute__((aligned(64)));
+    _Alignas(64) adaptive_histogram_pair_t hist_pair;
 } adaptive_controller_t;
 
 /* ============================================================================

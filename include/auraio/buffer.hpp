@@ -208,6 +208,9 @@ class Buffer {
      * @return std::span of T elements
      */
     template <typename T> [[nodiscard]] std::span<T> as() {
+        if (!ptr_) {
+            throw Error(EINVAL, "Buffer is null");
+        }
         if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
             throw Error(EINVAL, "Buffer not aligned for requested type");
         }
@@ -219,10 +222,13 @@ class Buffer {
      * Get buffer as const span of specific type
      * @tparam T Element type
      * @return std::span of const T elements
-     * @throws Error if buffer is not properly aligned for T
+     * @throws Error if buffer is null or not properly aligned for T
      * @note Trailing bytes smaller than sizeof(T) are excluded from the span
      */
     template <typename T> [[nodiscard]] std::span<const T> as() const {
+        if (!ptr_) {
+            throw Error(EINVAL, "Buffer is null");
+        }
         if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
             throw Error(EINVAL, "Buffer not aligned for requested type");
         }
@@ -253,10 +259,10 @@ class Buffer {
      */
     operator BufferRef() noexcept { return ref(); }
 
-    /**
-     * Implicit conversion to BufferRef (const, for write ops)
-     */
-    operator BufferRef() const noexcept { return ref(); }
+    // No implicit const conversion — callers must use ref() explicitly
+    // to avoid accidentally passing a const Buffer to a read operation
+    // (which writes into the buffer).
+    operator BufferRef() const = delete;
 
     /**
      * Check if buffer is valid (non-null)
