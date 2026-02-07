@@ -154,7 +154,7 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
 
 - **Zero Configuration** — Automatically detects cores, tunes queue depth via AIMD
 - **Per-Core Rings** — One io_uring per CPU eliminates cross-core contention
-- **CPU-Aware Routing** — Submissions go to the calling thread's core
+- **Smart Ring Selection** — Three modes: ADAPTIVE (CPU-local with overflow spilling), CPU_LOCAL (strict affinity), ROUND_ROBIN (max scaling)
 - **AIMD Self-Tuning** — Finds optimal concurrency without benchmarking
 - **Scalable Buffer Pool** — Thread-local caches, auto-scaling shards
 - **Triple API** — C for systems, C++ for applications, Rust for safety

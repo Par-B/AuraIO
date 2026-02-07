@@ -120,7 +120,8 @@ AuraIO/
 │   │   ├── quickstart.c      # Minimal read example
 │   │   ├── simple_read.c     # Single file read with stats
 │   │   ├── bulk_reader.c     # High-throughput directory scanner
-│   │   └── write_modes.c     # O_DIRECT vs buffered comparison
+│   │   ├── write_modes.c     # O_DIRECT vs buffered comparison
+│   │   └── cancel_request.c  # In-flight request cancellation demo
 │   ├── cpp/
 │   │   ├── quickstart.cpp    # Minimal C++ async read
 │   │   ├── simple_read.cpp   # C++ version of simple read
@@ -816,6 +817,7 @@ orb -m Caliente-dev bash -c "make bench"           # Performance vs FIO
 | `simple_read.c/cpp/rs` | C/C++/Rust | Read with stats |
 | `bulk_reader.c/cpp/rs` | C/C++/Rust | High-throughput scanner |
 | `write_modes.c/cpp/rs` | C/C++/Rust | O_DIRECT vs buffered |
+| `cancel_request.c` | C | In-flight request cancellation |
 | `coroutine_copy.cpp` | C++20 | Coroutine file copy |
 | `file_copy.rs` | Rust | Synchronous-style copy |
 | `async_copy.rs` | Rust | Future-based async copy |

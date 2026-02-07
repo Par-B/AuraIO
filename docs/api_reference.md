@@ -653,14 +653,14 @@ All stats functions are thread-safe and safe to call during active I/O. See [Obs
 ##### `auraio_get_stats`
 
 ```c
-void auraio_get_stats(auraio_engine_t *engine, auraio_stats_t *stats);
+void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats);
 ```
 
-Get engine-wide aggregate statistics.
+Get engine-wide aggregate statistics. If `engine` or `stats` is `NULL`, the call is a no-op (stats zeroed if only engine is `NULL`).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `const auraio_engine_t *` | Engine handle |
 | `stats` | `auraio_stats_t *` | Output struct |
 
 ---
@@ -668,7 +668,7 @@ Get engine-wide aggregate statistics.
 ##### `auraio_get_ring_count`
 
 ```c
-int auraio_get_ring_count(auraio_engine_t *engine);
+int auraio_get_ring_count(const auraio_engine_t *engine);
 ```
 
 **Returns:** Number of io_uring rings, or 0 if engine is `NULL`.
@@ -678,7 +678,7 @@ int auraio_get_ring_count(auraio_engine_t *engine);
 ##### `auraio_get_ring_stats`
 
 ```c
-int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
+int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx,
                           auraio_ring_stats_t *stats);
 ```
 
@@ -686,7 +686,7 @@ Get per-ring statistics.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `const auraio_engine_t *` | Engine handle |
 | `ring_idx` | `int` | Ring index (0 to `auraio_get_ring_count()-1`) |
 | `stats` | `auraio_ring_stats_t *` | Output struct |
 
@@ -697,7 +697,7 @@ Get per-ring statistics.
 ##### `auraio_get_histogram`
 
 ```c
-int auraio_get_histogram(auraio_engine_t *engine, int ring_idx,
+int auraio_get_histogram(const auraio_engine_t *engine, int ring_idx,
                          auraio_histogram_t *hist);
 ```
 
@@ -705,7 +705,7 @@ Get a latency histogram snapshot for a ring. The snapshot is approximate — see
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `const auraio_engine_t *` | Engine handle |
 | `ring_idx` | `int` | Ring index (0 to `auraio_get_ring_count()-1`) |
 | `hist` | `auraio_histogram_t *` | Output struct |
 
@@ -716,14 +716,14 @@ Get a latency histogram snapshot for a ring. The snapshot is approximate — see
 ##### `auraio_get_buffer_stats`
 
 ```c
-int auraio_get_buffer_stats(auraio_engine_t *engine, auraio_buffer_stats_t *stats);
+int auraio_get_buffer_stats(const auraio_engine_t *engine, auraio_buffer_stats_t *stats);
 ```
 
 Get buffer pool statistics. Lockless — reads atomic counters.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `const auraio_engine_t *` | Engine handle |
 | `stats` | `auraio_buffer_stats_t *` | Output struct |
 
 **Returns:** 0 on success, -1 if engine or stats is `NULL`.

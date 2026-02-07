@@ -22,12 +22,17 @@ A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
   - **ROUND_ROBIN**: Always selects via `atomic_fetch_add(&next_ring) % ring_count`. Maximum single-thread scaling across all rings.
 
 ### 3. Adaptive Controller (`adaptive_controller_t`)
-A robust control system embedded within each ring that tunes `queue_depth` and batching behavior in real-time.
+A robust control system embedded within each ring that tunes in-flight limits and batching behavior in real-time.
 - **Goal**: Maximize throughput while maintaining latency within a defined P99 envelope (default 10ms).
-- **Algorithm**: **AIMD (Additive Increase Multiplicative Decrease)**.
-    - *Probing Phase*: Linearly increases in-flight limit (`+N` per tick) while throughput increases.
-    - *Backoff Phase*: Multiplicatively reduces limit (`* 0.8`) if P99 latency violates strict guards.
-    - *Steady State*: Holds configuration when throughput plateaus to avoid unnecessary oscillation.
+- **Algorithm**: **AIMD (Additive Increase Multiplicative Decrease)** — a six-phase state machine:
+    1. *Baseline*: Collects initial latency samples (~100ms warmup) to establish the P99 floor.
+    2. *Probing*: Linearly increases in-flight limit (`+1` per 10ms tick) while throughput improves.
+    3. *Steady*: Holds configuration when throughput plateaus (efficiency ratio drops below threshold) to avoid unnecessary oscillation.
+    4. *Backoff*: Multiplicatively reduces limit (`× 0.80`) if P99 latency exceeds the guard threshold (10× baseline or 10ms hard ceiling).
+    5. *Settling*: Post-backoff stabilization (~100ms) to let the pipeline drain before re-evaluating.
+    6. *Converged*: Optimal depth found — stable for 5+ seconds with no further adjustments.
+- **Inner loop**: A batch threshold optimizer tunes the number of SQEs accumulated before calling `io_uring_submit()`, amortizing syscall cost without adding latency.
+- **Spill tracking**: In ADAPTIVE ring selection mode, `auraio_stats_t.adaptive_spills` counts submissions that overflowed to a non-local ring.
 
 ### 4. Memory Pool (`buffer_pool_t`)
 A zero-copy-ready slab allocator designed to reduce `malloc/free` overhead and ensure `O_DIRECT` alignment (4KB).

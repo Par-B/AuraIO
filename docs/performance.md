@@ -43,6 +43,10 @@ AuraIO provides three ring selection modes to balance cache locality against thr
 - NUMA system, locality-critical → **CPU_LOCAL**
 - Few threads, high per-thread IOPS → **ROUND_ROBIN**
 
+**Startup behavior**: During the first ~10ms (before the tick thread computes `avg_ring_pending`), ADAPTIVE mode skips the outlier check and spills purely on the congestion threshold. This is conservative — if a ring fills quickly at startup, it spills to genuinely idle rings.
+
+**NUMA note**: ADAPTIVE mode's power-of-two random choice is not NUMA-aware — it may spill across NUMA nodes. For NUMA-sensitive workloads, use CPU_LOCAL to guarantee node-local ring access.
+
 ### Cache Efficiency
 Cache misses are expensive. AuraIO ensures that data stays hot in the L1/L2 cache of the CPU core processing it.
 - **Submission**: In CPU_LOCAL and ADAPTIVE modes, each thread maintains a TLS-cached CPU ID (via `sched_getcpu()`, refreshed every 32 submissions). I/O operations route to the `io_uring` instance dedicated to that core, avoiding cross-core contention without a syscall on every request.
