@@ -47,7 +47,10 @@ pub(crate) extern "C" fn callback_trampoline(
 
     if let Some(callback) = ctx.callback {
         let rust_result = if result < 0 {
-            Err(Error::from_raw_os_error(-result as i32))
+            // Use wrapping_neg to avoid overflow panic on isize::MIN in debug builds
+            let neg = result.wrapping_neg();
+            let errno = i32::try_from(neg).unwrap_or(5); // EIO if out of i32 range
+            Err(Error::from_raw_os_error(errno))
         } else {
             Ok(result as usize)
         };

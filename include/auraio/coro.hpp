@@ -101,7 +101,12 @@ template <typename T> class Task {
     }
 
     ~Task() {
-        if (handle_) handle_.destroy();
+        if (handle_) {
+            assert(handle_.done() &&
+                   "Task destroyed while coroutine is still pending. "
+                   "This will cause use-after-free if an I/O callback tries to resume it.");
+            handle_.destroy();
+        }
     }
 
     // Non-copyable
@@ -240,7 +245,12 @@ template <> class Task<void> {
     }
 
     ~Task() {
-        if (handle_) handle_.destroy();
+        if (handle_) {
+            assert(handle_.done() &&
+                   "Task<void> destroyed while coroutine is still pending. "
+                   "This will cause use-after-free if an I/O callback tries to resume it.");
+            handle_.destroy();
+        }
     }
 
     Task(const Task &) = delete;
@@ -302,13 +312,15 @@ template <> class Task<void> {
  * Returned by Engine::async_read, async_write, async_fsync.
  */
 class IoAwaitable {
-  public:
+    friend class Engine;
+
     IoAwaitable(Engine &engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write)
         : engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write) {}
 
+  public:
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> handle);
+    bool await_suspend(std::coroutine_handle<> handle);
 
     ssize_t await_resume() {
         if (result_ < 0) {
@@ -331,13 +343,15 @@ class IoAwaitable {
  * Awaitable for async fsync operations
  */
 class FsyncAwaitable {
-  public:
+    friend class Engine;
+
     FsyncAwaitable(Engine &engine, int fd, bool datasync = false)
         : engine_(engine), fd_(fd), datasync_(datasync) {}
 
+  public:
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> handle);
+    bool await_suspend(std::coroutine_handle<> handle);
 
     void await_resume() {
         if (result_ < 0) {
@@ -360,7 +374,7 @@ class FsyncAwaitable {
 
 namespace auraio {
 
-inline void IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
+inline bool IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
         if (is_write_) {
             (void)engine_.write(fd_, buf_, len_, offset_,
@@ -374,13 +388,14 @@ inline void IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
                 handle.resume();
             });
         }
+        return true; // Suspended — callback will resume
     } catch (const Error &e) {
         result_ = -e.code();
-        handle.resume();
+        return false; // Don't suspend — resume immediately without stack growth
     }
 }
 
-inline void FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
+inline bool FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
         if (datasync_) {
             (void)engine_.fdatasync(fd_, [this, handle](Request &, ssize_t result) {
@@ -393,9 +408,10 @@ inline void FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
                 handle.resume();
             });
         }
+        return true;
     } catch (const Error &e) {
         result_ = -e.code();
-        handle.resume();
+        return false;
     }
 }
 

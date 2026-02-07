@@ -158,7 +158,11 @@ class Options {
     [[nodiscard]] bool enable_sqpoll() const noexcept { return opts_.enable_sqpoll; }
     [[nodiscard]] int sqpoll_idle_ms() const noexcept { return opts_.sqpoll_idle_ms; }
     [[nodiscard]] RingSelect ring_select() const noexcept {
-        return static_cast<RingSelect>(opts_.ring_select);
+        auto raw = opts_.ring_select;
+        if (raw >= AURAIO_SELECT_ADAPTIVE && raw <= AURAIO_SELECT_ROUND_ROBIN) {
+            return static_cast<RingSelect>(raw);
+        }
+        return RingSelect::Adaptive; // Defensive fallback
     }
 
     /**

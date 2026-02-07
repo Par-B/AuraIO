@@ -52,6 +52,29 @@
 //! - [`Options`] - Engine configuration
 //! - [`Stats`] - Runtime statistics
 //! - [`RequestHandle`] - Handle to a pending operation
+//!
+//! # Soundness Limitations
+//!
+//! These bindings wrap a C library and have inherent soundness limitations
+//! that cannot be fully expressed in Rust's type system:
+//!
+//! - **Buffer lifetime**: [`Buffer`] stores a raw pointer to the [`Engine`]
+//!   that allocated it. Dropping a `Buffer` after its `Engine` is destroyed
+//!   is undefined behavior. The compiler cannot enforce this ordering.
+//!
+//! - **BufferRef lifetime**: [`BufferRef`] is `Copy` and carries no lifetime
+//!   parameter. The compiler cannot enforce that the underlying memory
+//!   outlives the I/O operation. Callers must manually ensure buffers
+//!   remain valid until the completion callback fires.
+//!
+//! - **RequestHandle validity**: [`RequestHandle`] wraps a raw pointer that
+//!   becomes invalid once the completion callback begins. Using it after
+//!   that point is undefined behavior.
+//!
+//! These limitations match the underlying C API's ownership model. In
+//! practice, following the documented usage patterns (keep the Engine
+//! alive until all Buffers are dropped, don't use RequestHandles after
+//! callbacks) avoids all issues.
 
 mod buffer;
 mod callback;
@@ -776,7 +799,7 @@ mod tests {
     fn test_poll_no_ops() {
         let engine = Engine::new().unwrap();
         // Poll should return 0 when nothing is pending
-        let count = engine.poll();
+        let count = engine.poll().unwrap();
         assert_eq!(count, 0);
     }
 

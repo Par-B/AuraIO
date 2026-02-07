@@ -190,15 +190,22 @@ class Buffer {
      * Get buffer as span of bytes
      * @return std::span over buffer contents
      */
-    [[nodiscard]] std::span<std::byte> span() noexcept {
+    [[nodiscard]] std::span<std::byte> span() {
+        if (!ptr_) {
+            throw Error(EINVAL, "Buffer is null");
+        }
         return {static_cast<std::byte *>(ptr_), size_};
     }
 
     /**
      * Get buffer as const span of bytes
      * @return std::span over buffer contents (const)
+     * @throws Error if buffer is null
      */
-    [[nodiscard]] std::span<const std::byte> span() const noexcept {
+    [[nodiscard]] std::span<const std::byte> span() const {
+        if (!ptr_) {
+            throw Error(EINVAL, "Buffer is null");
+        }
         return {static_cast<const std::byte *>(ptr_), size_};
     }
 

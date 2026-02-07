@@ -566,11 +566,15 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
      * This is acceptable: the caller handles EAGAIN gracefully, and the
      * count is corrected immediately after callback returns. */
     pthread_mutex_lock(&ctx->lock);
-    ctx->ops_completed++;
-    atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    if (result > 0) {
-        ctx->bytes_completed += result;
+    /* Don't count cancel operations in ops_completed — they are
+     * internal bookkeeping, not user I/O operations. */
+    if (req->op_type != AURAIO_OP_CANCEL) {
+        ctx->ops_completed++;
+        if (result > 0) {
+            ctx->bytes_completed += result;
+        }
     }
+    atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ring_put_request(ctx, op_idx);
     pthread_mutex_unlock(&ctx->lock);
 }

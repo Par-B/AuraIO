@@ -102,7 +102,7 @@ impl Engine {
     /// The registered buffers must remain valid and at stable addresses
     /// until `unregister_buffers()` is called. The borrow checker cannot
     /// enforce this lifetime across the registration boundary.
-    pub unsafe fn register_buffers(&self, buffers: &[&[u8]]) -> Result<()> {
+    pub unsafe fn register_buffers(&self, buffers: &[&mut [u8]]) -> Result<()> {
         let iovecs: Vec<libc::iovec> = buffers
             .iter()
             .map(|b| libc::iovec {
@@ -208,6 +208,11 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Safety Contract
+    ///
+    /// The memory referenced by `buf` must remain valid and exclusively
+    /// borrowed until the callback fires. `BufferRef` carries no lifetime,
+    /// so the compiler cannot enforce this. See [`BufferRef`] docs.
     pub fn read<F>(
         &self,
         fd: RawFd,
@@ -235,11 +240,12 @@ impl Engine {
         };
 
         if req.is_null() {
-            // Free the context on error
+            // Capture errno before drop, which could clobber it
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -248,6 +254,12 @@ impl Engine {
     /// Submit an async write operation
     ///
     /// The callback is invoked when the write completes.
+    ///
+    /// # Safety Contract
+    ///
+    /// The memory referenced by `buf` must remain valid until the callback
+    /// fires. `BufferRef` carries no lifetime, so the compiler cannot
+    /// enforce this. See [`BufferRef`] docs.
     pub fn write<F>(
         &self,
         fd: RawFd,
@@ -275,10 +287,11 @@ impl Engine {
         };
 
         if req.is_null() {
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -304,10 +317,11 @@ impl Engine {
         };
 
         if req.is_null() {
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -334,10 +348,11 @@ impl Engine {
         };
 
         if req.is_null() {
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -376,10 +391,11 @@ impl Engine {
         };
 
         if req.is_null() {
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -418,10 +434,11 @@ impl Engine {
         };
 
         if req.is_null() {
+            let err = io::Error::last_os_error();
             unsafe {
                 drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
             }
-            Err(Error::Submission(io::Error::last_os_error()))
+            Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
         }
@@ -472,9 +489,13 @@ impl Engine {
     /// Process completed operations (non-blocking)
     ///
     /// Returns the number of completions processed.
-    pub fn poll(&self) -> usize {
+    pub fn poll(&self) -> Result<usize> {
         let n = unsafe { auraio_sys::auraio_poll(self.handle.as_ptr()) };
-        n.max(0) as usize
+        if n >= 0 {
+            Ok(n as usize)
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
     }
 
     /// Wait for completions

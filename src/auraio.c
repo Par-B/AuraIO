@@ -207,8 +207,17 @@ static ring_ctx_t *select_ring(auraio_engine_t *engine) {
         unsigned local_idx = (unsigned)(local - engine->rings);
         unsigned a = xorshift_tls() % (rc - 1);
         if (a >= local_idx) a++;
-        unsigned b = xorshift_tls() % (rc - 1);
-        if (b >= local_idx) b++;
+        unsigned b;
+        if (rc - 1 >= 2) {
+            /* Pick b != local_idx and b != a */
+            b = xorshift_tls() % (rc - 2);
+            unsigned skip1 = local_idx < a ? local_idx : a;
+            unsigned skip2 = local_idx < a ? a : local_idx;
+            if (b >= skip1) b++;
+            if (b >= skip2) b++;
+        } else {
+            b = a; /* Only one non-local ring */
+        }
         int pa = atomic_load_explicit(&engine->rings[a].pending_count, memory_order_relaxed);
         int pb = atomic_load_explicit(&engine->rings[b].pending_count, memory_order_relaxed);
         return &engine->rings[pa <= pb ? a : b];
@@ -385,6 +394,12 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
         options = &default_opts;
     }
 
+    /* Validate struct_size for ABI forward-compatibility */
+    if (options->struct_size != sizeof(auraio_options_t)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     /* Validate options */
     if (options->queue_depth < 0 || options->queue_depth > 32768) {
         errno = EINVAL;
@@ -395,7 +410,7 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
         errno = EINVAL; /* Must be power of 2 */
         return NULL;
     }
-    if (options->ring_count < 0 || options->ring_count > 256) {
+    if (options->ring_count < 0 || options->ring_count > AURAIO_MAX_RINGS) {
         errno = EINVAL;
         return NULL;
     }
@@ -535,7 +550,12 @@ void auraio_destroy(auraio_engine_t *engine) {
     /* Stop event loop if running */
     auraio_stop(engine);
 
-    /* Unregister buffers and files before destroying rings */
+    /* Drain all pending I/O before unregistering buffers/files.
+     * Without draining first, unregistering would invalidate fixed
+     * buffers still referenced by in-flight operations. */
+    auraio_drain(engine, -1);
+
+    /* Unregister buffers and files (safe now that I/O is drained) */
     if (engine->buffers_registered) {
         auraio_unregister_buffers(engine);
     }
@@ -548,7 +568,7 @@ void auraio_destroy(auraio_engine_t *engine) {
         close(engine->event_fd);
     }
 
-    /* Destroy all rings (waits for pending ops) */
+    /* Destroy all rings */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_destroy(&engine->rings[i]);
     }
@@ -868,8 +888,11 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
         return (-1);
     }
 
-    /* Submit cancel */
+    /* Submit cancel — clear callback/user_data so process_completion()
+     * does not invoke a stale callback from this slot's previous use. */
     cancel_req->ring_idx = ring->ring_idx;
+    cancel_req->callback = NULL;
+    cancel_req->user_data = NULL;
     if (ring_submit_cancel(ring, cancel_req, req) != 0) {
         ring_put_request(ring, op_idx);
         pthread_mutex_unlock(&ring->lock);

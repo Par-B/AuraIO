@@ -664,6 +664,11 @@ AURAIO_API int auraio_get_poll_fd(auraio_engine_t *engine);
  * Checks for completions without blocking and invokes callbacks for any
  * completed operations.
  *
+ * THREADING MODEL: auraio_poll(), auraio_wait(), and auraio_run() must
+ * NOT be called concurrently on the same engine. These functions are
+ * designed for single-threaded event loop patterns. Multiple threads
+ * may submit I/O concurrently, but only one thread should poll/wait.
+ *
  * @param engine Engine handle
  * @return Number of completions processed
  */
@@ -673,6 +678,8 @@ AURAIO_API int auraio_poll(auraio_engine_t *engine);
  * Wait for at least one completion
  *
  * Blocks until at least one operation completes or timeout expires.
+ * Must NOT be called concurrently with auraio_poll() or auraio_run()
+ * on the same engine (see auraio_poll() threading model note).
  *
  * @param engine     Engine handle
  * @param timeout_ms Maximum wait time in milliseconds (-1 = forever, 0 = don't
@@ -746,13 +753,14 @@ AURAIO_API AURAIO_WARN_UNUSED void *auraio_buffer_alloc(auraio_engine_t *engine,
  * Return a buffer to the engine's pool
  *
  * The buffer must have been allocated by auraio_buffer_alloc() on the same
- * engine. The size must match the original allocation size.
+ * engine. The size parameter MUST match the original allocation size exactly;
+ * passing a different size causes undefined behavior (pool corruption).
  *
  * Thread-safe: may be called from any thread.
  *
  * @param engine Engine handle
  * @param buf    Buffer to free (may be NULL)
- * @param size   Size of the buffer (must match allocation size)
+ * @param size   Size of the buffer (MUST match allocation size exactly)
  */
 AURAIO_API void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t size);
 

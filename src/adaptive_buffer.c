@@ -221,6 +221,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
      * our first check and the CAS, destroy already walked the list and
      * missed our cache — it would leak. Detect and clean up. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        free(cache);
         tls_cache = NULL;
         return NULL;
     }
@@ -447,6 +448,10 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
                 free(cache->buffers[class_idx][i]);
             }
         }
+
+        /* Null the pool pointer so other threads' fast-path check
+         * (cache->pool == pool) fails instead of reading freed memory. */
+        cache->pool = NULL;
 
         /* Clear TLS if it points to this cache */
         if (tls_cache == cache) {

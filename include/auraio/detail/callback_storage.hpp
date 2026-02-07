@@ -109,17 +109,28 @@ class CallbackPool {
             return;
         }
 
-        Shard &shard = shards_[ctx->shard_index];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        // Move captured state out before locking to avoid running
+        // destructors (which may re-enter the pool) under the mutex.
+        std::function<void(Request &, ssize_t)> moved_cb;
+        std::function<void()> moved_oc;
 
-        if (ctx->next_free != kCallbackInUse) {
-            return; // Already released; silently ignore double-release
+        {
+            Shard &shard = shards_[ctx->shard_index];
+            std::lock_guard<std::mutex> lock(shard.mutex);
+
+            if (ctx->next_free != kCallbackInUse) {
+                return; // Already released; silently ignore double-release
+            }
+            moved_cb = std::move(ctx->callback);
+            moved_oc = std::move(ctx->on_complete);
+            ctx->callback = nullptr;
+            ctx->on_complete = nullptr;
+            ctx->request = Request(nullptr); // Clear stale handle to prevent use-after-free
+            // Push to free list head
+            ctx->next_free = shard.free_head;
+            shard.free_head = ctx->pool_index;
         }
-        ctx->callback = nullptr;
-        ctx->on_complete = nullptr;
-        // Push to free list head
-        ctx->next_free = shard.free_head;
-        shard.free_head = ctx->pool_index;
+        // moved_cb and moved_oc destruct here, outside the lock
     }
 
   private:
@@ -204,11 +215,12 @@ class CallbackPool {
 /**
  * C callback trampoline function
  *
- * extern "C" linkage is required because this function pointer is passed
- * to the C API. Using C++ linkage as a C function pointer is technically UB.
+ * static inline: each TU gets its own copy but the function is only used
+ * as a callback pointer, so address identity is irrelevant.  This avoids
+ * polluting the global C symbol namespace that extern "C" would require.
  */
-extern "C" inline void auraio_detail_callback_trampoline(auraio_request_t *req, ssize_t result,
-                                                         void *user_data) {
+inline void auraio_detail_callback_trampoline(auraio_request_t *req, ssize_t result,
+                                              void *user_data) {
     auto *ctx = static_cast<auraio::detail::CallbackContext *>(user_data);
     if (ctx && ctx->callback) {
         ctx->request = auraio::Request(req);

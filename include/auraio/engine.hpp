@@ -149,7 +149,7 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request *read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+    [[nodiscard]] Request read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -166,8 +166,7 @@ class Engine {
             throw Error(errno, "auraio_read");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     /**
@@ -183,7 +182,7 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request *write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+    [[nodiscard]] Request write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -198,8 +197,7 @@ class Engine {
             throw Error(errno, "auraio_write");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     /**
@@ -219,7 +217,7 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request *readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+    [[nodiscard]] Request readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
         assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
@@ -235,8 +233,7 @@ class Engine {
             throw Error(errno, "auraio_readv");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     /**
@@ -255,7 +252,7 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request *writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+    [[nodiscard]] Request writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
         assert(iov.size() <= static_cast<size_t>(INT_MAX) && "iov count exceeds INT_MAX");
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
@@ -271,8 +268,7 @@ class Engine {
             throw Error(errno, "auraio_writev");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     /**
@@ -284,7 +280,7 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request *fsync(int fd, F &&callback) {
+    template <Callback F> [[nodiscard]] Request fsync(int fd, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -298,8 +294,7 @@ class Engine {
             throw Error(errno, "auraio_fsync");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     /**
@@ -311,7 +306,7 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request *fdatasync(int fd, F &&callback) {
+    template <Callback F> [[nodiscard]] Request fdatasync(int fd, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
@@ -326,8 +321,7 @@ class Engine {
             throw Error(errno, "auraio_fsync_ex");
         }
 
-        ctx->request = Request(req);
-        return &ctx->request;
+        return Request(req);
     }
 
     // =========================================================================
@@ -382,11 +376,11 @@ class Engine {
      * @param req Request to cancel
      * @return True if cancellation was submitted
      */
-    bool cancel(Request *req) noexcept {
-        if (!req || !req->handle()) {
+    bool cancel(Request &req) noexcept {
+        if (!req.handle()) {
             return false;
         }
-        return auraio_cancel(handle_, req->handle()) == 0;
+        return auraio_cancel(handle_, req.handle()) == 0;
     }
 
     // =========================================================================
