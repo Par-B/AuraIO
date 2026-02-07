@@ -250,6 +250,7 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -277,6 +278,7 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -304,6 +306,7 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -331,6 +334,7 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -358,6 +362,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -385,6 +390,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -415,6 +421,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
     req->cancel_target = target;
     req->submit_time_ns = 0; /* Cancel ops skip latency tracking */
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -444,6 +451,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -471,6 +479,7 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
 
     ctx->queued_sqes++;
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
@@ -592,6 +601,7 @@ int ring_poll(ring_ctx_t *ctx) {
             batch[n].req = io_uring_cqe_get_data(cqe);
             batch[n].result = cqe->res;
             io_uring_cqe_seen(&ctx->ring, cqe);
+            TSAN_ACQUIRE(batch[n].req);
             n++;
         }
         pthread_mutex_unlock(&ctx->cq_lock);
@@ -641,6 +651,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             batch[n].req = io_uring_cqe_get_data(cqe);
             batch[n].result = cqe->res;
             io_uring_cqe_seen(&ctx->ring, cqe);
+            TSAN_ACQUIRE(batch[n].req);
             n++;
         }
         pthread_mutex_unlock(&ctx->cq_lock);
@@ -662,6 +673,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             batch[0].req = io_uring_cqe_get_data(cqe);
             batch[0].result = cqe->res;
             io_uring_cqe_seen(&ctx->ring, cqe);
+            TSAN_ACQUIRE(batch[0].req);
             n = 1;
             while (n < RING_POLL_BATCH) {
                 if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
