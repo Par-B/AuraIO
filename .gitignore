@@ -13,6 +13,7 @@ tests/test_ring
 tests/test_cpp
 tests/test_stats
 tests/test_ring_select
+tests/test_concurrency_stress
 tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan
