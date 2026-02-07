@@ -12,6 +12,7 @@ tests/test_buffer
 tests/test_ring
 tests/test_cpp
 tests/test_stats
+tests/test_ring_select
 tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan
@@ -26,6 +27,7 @@ examples/C/simple_read
 examples/C/bulk_reader
 examples/C/write_modes
 examples/C/quickstart
+examples/C/cancel_request
 
 # Example binaries (C++)
 examples/cpp/quickstart
