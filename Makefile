@@ -147,6 +147,18 @@ exporters: all
 		-o exporters/prometheus/prometheus_example \
 		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
 
+# Build BFFIO benchmark tool
+BFFIO: all
+	$(MAKE) -C tools/BFFIO
+
+# Run BFFIO functional tests
+BFFIO-test: BFFIO
+	$(MAKE) -C tools/BFFIO test
+
+# Run BFFIO vs FIO baseline comparison
+BFFIO-baseline: BFFIO
+	$(MAKE) -C tools/BFFIO baseline
+
 # Build examples
 examples: all
 	$(MAKE) -C examples
@@ -244,6 +256,7 @@ clean: rust-clean
 	rm -rf lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples clean 2>/dev/null || true
+	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	rm -f exporters/prometheus/prometheus_example
 
 # Debug build
@@ -723,6 +736,11 @@ help:
 	@echo "  make lint-clang-tidy Run clang-tidy"
 	@echo "  make compdb         Generate compile_commands.json"
 	@echo ""
+	@echo "BFFIO (Better Faster FIO):"
+	@echo "  make BFFIO          Build BFFIO benchmark tool"
+	@echo "  make BFFIO-test     Run BFFIO functional tests"
+	@echo "  make BFFIO-baseline Run BFFIO vs FIO comparison"
+	@echo ""
 	@echo "Exporters:"
 	@echo "  make exporters      Build metrics exporters (Prometheus)"
 	@echo ""
@@ -736,4 +754,5 @@ help:
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
         bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
         lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
-        exporters
+        exporters \
+        BFFIO BFFIO-test BFFIO-baseline

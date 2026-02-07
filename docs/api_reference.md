@@ -27,7 +27,7 @@ typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result, void *u
 
 Passing `NULL` as a callback is permitted — the I/O executes but no completion notification is delivered.
 
-Callbacks execute in the context of `auraio_poll()` or `auraio_wait()`. Callbacks may submit new I/O but must not call `auraio_destroy()`.
+Callbacks execute in the context of `auraio_poll()` or `auraio_wait()`. Since these functions drain completions from **all** rings, a callback may fire on **any thread** that calls `auraio_wait()` — not necessarily the thread that submitted the I/O. Do not use thread-local storage to identify the originating context; instead, pass all necessary state through `user_data`. The `user_data` pointer (and any memory it references) must remain valid until the callback has executed. Callbacks may submit new I/O but must not call `auraio_destroy()`.
 
 ### Configuration
 

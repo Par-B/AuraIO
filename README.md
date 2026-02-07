@@ -385,10 +385,23 @@ Synchronous and async code coexist—call `auraio_wait()` immediately after subm
 4. **Batch submissions** — Submit multiple ops before waiting
 5. **Use vectored I/O** — Combine buffers with `readv`/`writev`
 
+## BFFIO — FIO-Compatible Benchmark
+
+AuraIO ships with **BFFIO** (Better Faster FIO), a drop-in FIO-compatible benchmark that uses AuraIO as its I/O engine. It accepts the same CLI flags and `.fio` job files as FIO, but replaces the static io_uring engine with AuraIO's AIMD adaptive tuning — automatically finding the optimal queue depth for your hardware.
+
+```bash
+make BFFIO
+./tools/BFFIO/BFFIO --name=test --rw=randread --bs=4k --size=1G \
+    --directory=/tmp/bffio --direct=1 --runtime=10 --time_based
+```
+
+See [docs/BFFIO.md](docs/BFFIO.md) for full usage, supported parameters, and baseline comparison instructions.
+
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
 - [API Reference](docs/) — Full function documentation
+- [BFFIO Benchmark](docs/BFFIO.md) — FIO-compatible benchmark tool
 - [Examples](examples/) — Working code samples
 
 ## Contributing

@@ -34,6 +34,11 @@ examples/cpp/bulk_reader
 examples/cpp/write_modes
 examples/cpp/coroutine_copy
 
+# BFFIO benchmark tool
+tools/BFFIO/BFFIO
+tools/BFFIO/*.o
+tools/BFFIO/baseline_results/
+
 # Exporter binaries
 exporters/prometheus/prometheus_example
 

@@ -64,9 +64,11 @@ graph TD
 
 ### Completion Flow
 1. User calls `auraio_poll()` or `auraio_wait()`.
-2. Library drains Completion Queue (CQ) entries under the ring's completion lock.
+2. Library iterates over **all** rings, draining each Completion Queue under that ring's completion lock.
 3. For each CQE: invokes user callback, then returns the request slot to the free stack.
 4. Adaptive controller records latency sample and updates throughput counters.
+
+**Thread affinity note:** Because step 2 drains all rings, a callback for I/O submitted on Core N may execute on whichever thread called `auraio_wait()` — which may be running on Core M. Applications must not assume callbacks run on the submitting thread. Pass all per-operation state through the `user_data` pointer rather than thread-local storage.
 
 ## Design Decisions & Trade-offs
 

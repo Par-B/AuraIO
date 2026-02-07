@@ -136,6 +136,16 @@ AuraIO/
 │   │       ├── async_copy.rs     # Future-based async file copy
 │   │       └── write_modes.rs    # O_DIRECT vs buffered comparison
 │   └── Makefile
+├── tools/
+│   └── BFFIO/                   # FIO-compatible I/O benchmark (powered by AuraIO)
+│       ├── main.c               # CLI entry point, engine lifecycle
+│       ├── job_parser.h/.c      # .fio INI parser + CLI arg parser
+│       ├── workload.h/.c        # I/O loop, worker threads, file management
+│       ├── stats.h/.c           # Latency histograms, percentiles, aggregation
+│       ├── output.h/.c          # FIO-compatible text + JSON formatters
+│       ├── test_BFFIO.sh        # Functional test suite (14 tests)
+│       ├── run_baseline.sh      # FIO vs BFFIO comparison with delta report
+│       └── Makefile
 ├── tests/
 │   ├── test_engine.c         # AIMD algorithm tests
 │   ├── test_ring.c           # Ring management tests
@@ -323,6 +333,38 @@ libauraio.so (C library)
 - Histogram sum is estimated using bucket midpoints (not exact)
 - On overflow, returns `-written * 2 + 4096` as conservative retry estimate
 - Example server is demo-quality (not production-grade)
+
+---
+
+### BFFIO Benchmark Tool (`tools/BFFIO/`)
+
+**Purpose**: FIO-compatible I/O benchmark that uses AuraIO as its sole engine, demonstrating AIMD adaptive tuning advantages over fixed-depth io_uring
+
+**Entry point**: `tools/BFFIO/main.c`
+
+| File | Purpose |
+|------|---------|
+| `main.c` | CLI entry point, engine lifecycle, job dispatch |
+| `job_parser.h/.c` | Config structs, .fio INI parser, CLI `--flag=value` parser |
+| `workload.h/.c` | I/O submit loop, worker threads, file setup/teardown |
+| `stats.h/.c` | Per-thread atomic stats, latency histogram, percentiles, aggregation |
+| `output.h/.c` | FIO-compatible text + FIO 3.36 JSON formatters |
+| `test_BFFIO.sh` | Functional test suite (14 tests) |
+| `run_baseline.sh` | FIO vs BFFIO comparison with delta report |
+
+**Key Design Patterns**:
+- One fresh AuraIO engine per job — clean AIMD convergence per workload
+- Pre-allocated `io_ctx_pool_t` per thread — zero malloc on I/O hot path
+- Per-thread `thread_stats_t` with atomics — no shared lock for stats
+- Callbacks pass state via `user_data` (cross-thread safe)
+
+**FIO Compatibility**:
+- Accepts `.fio` job files with `[global]` and `[job]` sections
+- Supports all common CLI flags (`--rw`, `--bs`, `--size`, `--direct`, etc.)
+- JSON output matches FIO 3.36 structure (`jobs[].read/write` with percentiles)
+- Adds `"AuraIO"` section in JSON with `final_depth`, `phase`, `p99_ms`
+
+See [docs/BFFIO.md](BFFIO.md) for full usage documentation.
 
 ---
 
@@ -618,6 +660,11 @@ make test-all          # C + C++ + Rust with unified summary
 # Sanitizers
 make test-sanitizers   # Valgrind + TSan + ASan combined summary
 
+# BFFIO benchmark tool
+make BFFIO             # Build BFFIO
+make BFFIO-test        # Run BFFIO functional tests (14 tests)
+make BFFIO-baseline    # FIO vs BFFIO comparison with delta report
+
 # Benchmarks
 make bench             # FIO comparison (5s/test)
 make bench-quick       # Quick (3s/test)
@@ -678,6 +725,13 @@ make deps-check        # Verify availability
 5. Add awaitable in `include/auraio/coro.hpp` if applicable
 6. Add Rust method in `bindings/rust/auraio/src/engine.rs`
 7. Add async variant in `bindings/rust/auraio/src/async_io.rs` if applicable
+
+**To add a new BFFIO feature**:
+1. Add config field to `job_config_t` in `tools/BFFIO/job_parser.h`
+2. Parse it in `job_parser.c` (both CLI and .fio file paths)
+3. Use it in `workload.c` I/O loop
+4. Output it in `output.c` (both normal text and JSON)
+5. Add test case in `test_BFFIO.sh`
 
 **To add Prometheus metrics**:
 1. Add stat to public API in `include/auraio.h` (if new)
