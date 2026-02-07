@@ -18,68 +18,78 @@ static int tests_passed = 0;
 static int tests_failed = 0;
 
 #define TEST(name) void test_##name()
-#define RUN_TEST(name) do { \
-    printf("  %-40s", #name); \
-    fflush(stdout); \
-    try { \
-        test_##name(); \
-        printf(" OK\n"); \
-        tests_passed++; \
-    } catch (const std::exception& e) { \
-        printf(" FAIL: %s\n", e.what()); \
-        tests_failed++; \
-    } catch (...) { \
-        printf(" FAIL: unknown exception\n"); \
-        tests_failed++; \
-    } \
-} while(0)
+#define RUN_TEST(name)                                                                             \
+    do {                                                                                           \
+        printf("  %-40s", #name);                                                                  \
+        fflush(stdout);                                                                            \
+        try {                                                                                      \
+            test_##name();                                                                         \
+            printf(" OK\n");                                                                       \
+            tests_passed++;                                                                        \
+        } catch (const std::exception &e) {                                                        \
+            printf(" FAIL: %s\n", e.what());                                                       \
+            tests_failed++;                                                                        \
+        } catch (...) {                                                                            \
+            printf(" FAIL: unknown exception\n");                                                  \
+            tests_failed++;                                                                        \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT(cond) do { \
-    if (!(cond)) { \
-        throw std::runtime_error("Assertion failed: " #cond); \
-    } \
-} while(0)
+#define ASSERT(cond)                                                                               \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            throw std::runtime_error("Assertion failed: " #cond);                                  \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { \
-        throw std::runtime_error("Assertion failed: " #a " == " #b); \
-    } \
-} while(0)
+#define ASSERT_EQ(a, b)                                                                            \
+    do {                                                                                           \
+        if ((a) != (b)) {                                                                          \
+            throw std::runtime_error("Assertion failed: " #a " == " #b);                           \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT_NE(a, b) do { \
-    if ((a) == (b)) { \
-        throw std::runtime_error("Assertion failed: " #a " != " #b); \
-    } \
-} while(0)
+#define ASSERT_NE(a, b)                                                                            \
+    do {                                                                                           \
+        if ((a) == (b)) {                                                                          \
+            throw std::runtime_error("Assertion failed: " #a " != " #b);                           \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT_GT(a, b) do { \
-    if (!((a) > (b))) { \
-        throw std::runtime_error("Assertion failed: " #a " > " #b); \
-    } \
-} while(0)
+#define ASSERT_GT(a, b)                                                                            \
+    do {                                                                                           \
+        if (!((a) > (b))) {                                                                        \
+            throw std::runtime_error("Assertion failed: " #a " > " #b);                            \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT_GE(a, b) do { \
-    if (!((a) >= (b))) { \
-        throw std::runtime_error("Assertion failed: " #a " >= " #b); \
-    } \
-} while(0)
+#define ASSERT_GE(a, b)                                                                            \
+    do {                                                                                           \
+        if (!((a) >= (b))) {                                                                       \
+            throw std::runtime_error("Assertion failed: " #a " >= " #b);                           \
+        }                                                                                          \
+    } while (0)
 
-#define ASSERT_THROWS(expr, exc_type) do { \
-    bool caught = false; \
-    try { expr; } \
-    catch (const exc_type&) { caught = true; } \
-    catch (...) { } \
-    if (!caught) { \
-        throw std::runtime_error("Expected exception " #exc_type " not thrown"); \
-    } \
-} while(0)
+#define ASSERT_THROWS(expr, exc_type)                                                              \
+    do {                                                                                           \
+        bool caught = false;                                                                       \
+        try {                                                                                      \
+            expr;                                                                                  \
+        } catch (const exc_type &) {                                                               \
+            caught = true;                                                                         \
+        } catch (...) {                                                                            \
+        }                                                                                          \
+        if (!caught) {                                                                             \
+            throw std::runtime_error("Expected exception " #exc_type " not thrown");               \
+        }                                                                                          \
+    } while (0)
 
 // =============================================================================
 // Helper: create a temporary file with test data
 // =============================================================================
 
 class TempFile {
-public:
+  public:
     TempFile(size_t size = 4096) {
         snprintf(path_, sizeof(path_), "/tmp/auraio_test_XXXXXX");
         fd_ = mkstemp(path_);
@@ -105,7 +115,7 @@ public:
     }
 
     int fd() const { return fd_; }
-    const char* path() const { return path_; }
+    const char *path() const { return path_; }
 
     // Reopen with flags (e.g., O_DIRECT)
     int reopen(int flags) {
@@ -114,7 +124,7 @@ public:
         return fd_;
     }
 
-private:
+  private:
     char path_[64];
     int fd_ = -1;
 };
@@ -130,9 +140,7 @@ TEST(engine_default_construct) {
 
 TEST(engine_with_options) {
     auraio::Options opts;
-    opts.queue_depth(64)
-        .ring_count(2)
-        .disable_adaptive(false);
+    opts.queue_depth(64).ring_count(2).disable_adaptive(false);
 
     auraio::Engine engine(opts);
     ASSERT(engine.handle() != nullptr);
@@ -140,7 +148,7 @@ TEST(engine_with_options) {
 
 TEST(engine_move_construct) {
     auraio::Engine engine1;
-    auto* handle = engine1.handle();
+    auto *handle = engine1.handle();
 
     auraio::Engine engine2(std::move(engine1));
     ASSERT_EQ(engine2.handle(), handle);
@@ -151,7 +159,7 @@ TEST(engine_move_assign) {
     auraio::Engine engine1;
     auraio::Engine engine2;
 
-    auto* handle1 = engine1.handle();
+    auto *handle1 = engine1.handle();
     engine2 = std::move(engine1);
 
     ASSERT_EQ(engine2.handle(), handle1);
@@ -170,11 +178,11 @@ TEST(engine_poll_fd_valid) {
 
 TEST(options_default_values) {
     auraio::Options opts;
-    const auto& c = opts.c_options();
+    const auto &c = opts.c_options();
 
     // Verify defaults match auraio_options_init
     ASSERT_EQ(c.queue_depth, 256);
-    ASSERT_EQ(c.ring_count, 0);  // 0 = auto-detect
+    ASSERT_EQ(c.ring_count, 0); // 0 = auto-detect
     ASSERT_EQ(c.disable_adaptive, false);
 }
 
@@ -182,7 +190,7 @@ TEST(options_builder_chain) {
     auraio::Options opts;
 
     // Verify chaining returns reference to same object
-    auto& ref = opts.queue_depth(128);
+    auto &ref = opts.queue_depth(128);
     ASSERT_EQ(&ref, &opts);
 
     ref.ring_count(2).disable_adaptive(true);
@@ -201,7 +209,7 @@ TEST(options_all_setters) {
         .disable_adaptive(false)
         .enable_sqpoll(false);
 
-    const auto& c = opts.c_options();
+    const auto &c = opts.c_options();
     ASSERT_EQ(c.queue_depth, 512);
     ASSERT_EQ(c.ring_count, 8);
     ASSERT_EQ(c.initial_in_flight, 16);
@@ -209,6 +217,25 @@ TEST(options_all_setters) {
     ASSERT(c.max_p99_latency_ms > 4.9 && c.max_p99_latency_ms < 5.1);
     ASSERT_EQ(c.disable_adaptive, false);
     ASSERT_EQ(c.enable_sqpoll, false);
+}
+
+TEST(options_ring_select) {
+    // Default should be Adaptive
+    auraio::Options opts;
+    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::Adaptive);
+
+    // Round-trip each mode
+    opts.ring_select(auraio::RingSelect::CpuLocal);
+    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::CpuLocal);
+
+    opts.ring_select(auraio::RingSelect::RoundRobin);
+    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::RoundRobin);
+
+    opts.ring_select(auraio::RingSelect::Adaptive);
+    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::Adaptive);
+
+    // Verify C struct mapping
+    ASSERT_EQ(opts.c_options().ring_select, AURAIO_SELECT_ADAPTIVE);
 }
 
 // =============================================================================
@@ -229,7 +256,7 @@ TEST(buffer_allocate) {
 TEST(buffer_move_construct) {
     auraio::Engine engine;
     auto buffer1 = engine.allocate_buffer(4096);
-    void* ptr = buffer1.data();
+    void *ptr = buffer1.data();
 
     auraio::Buffer buffer2(std::move(buffer1));
     ASSERT_EQ(buffer2.data(), ptr);
@@ -241,7 +268,7 @@ TEST(buffer_move_assign) {
     auto buffer1 = engine.allocate_buffer(4096);
     auto buffer2 = engine.allocate_buffer(4096);
 
-    void* ptr1 = buffer1.data();
+    void *ptr1 = buffer1.data();
     buffer2 = std::move(buffer1);
 
     ASSERT_EQ(buffer2.data(), ptr1);
@@ -253,7 +280,7 @@ TEST(buffer_wrap_no_free) {
     alignas(4096) char stack_buf[4096];
 
     auto buffer = auraio::Buffer::wrap(stack_buf, sizeof(stack_buf));
-    ASSERT_EQ(buffer.data(), static_cast<void*>(stack_buf));
+    ASSERT_EQ(buffer.data(), static_cast<void *>(stack_buf));
     ASSERT_EQ(buffer.size(), sizeof(stack_buf));
     // Destructor should not try to free stack memory
 }
@@ -264,7 +291,7 @@ TEST(buffer_span_access) {
 
     auto span = buffer.span();
     ASSERT_EQ(span.size(), 4096u);
-    ASSERT_EQ(span.data(), static_cast<std::byte*>(buffer.data()));
+    ASSERT_EQ(span.data(), static_cast<std::byte *>(buffer.data()));
 }
 
 // =============================================================================
@@ -276,7 +303,7 @@ TEST(bufferref_from_ptr) {
     auraio::BufferRef ref(buf);
 
     auto c = ref.c_buf();
-    ASSERT_EQ(c.u.ptr, static_cast<void*>(buf));
+    ASSERT_EQ(c.u.ptr, static_cast<void *>(buf));
     ASSERT_EQ(c.type, AURAIO_BUF_UNREGISTERED);
 }
 
@@ -284,7 +311,7 @@ TEST(bufferref_from_buffer) {
     auraio::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
-    auraio::BufferRef ref = buffer;  // Implicit conversion
+    auraio::BufferRef ref = buffer; // Implicit conversion
     auto c = ref.c_buf();
     ASSERT_EQ(c.u.ptr, buffer.data());
 }
@@ -366,7 +393,7 @@ TEST(read_basic) {
     bool completed = false;
     ssize_t bytes_read = 0;
 
-    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request &, ssize_t result) {
         completed = true;
         bytes_read = result;
     });
@@ -376,7 +403,7 @@ TEST(read_basic) {
     ASSERT_EQ(bytes_read, 4096);
 
     // Verify data
-    char* data = static_cast<char*>(buffer.data());
+    char *data = static_cast<char *>(buffer.data());
     ASSERT_EQ(data[0], 'A');
     ASSERT_EQ(data[1], 'B');
 }
@@ -391,10 +418,11 @@ TEST(read_with_capture) {
     std::string captured_message = "not set";
     int captured_value = 0;
 
-    (void)engine.read(file.fd(), buffer, 4096, 0, [&captured_message, &captured_value](auraio::Request&, ssize_t result) {
-        captured_message = "completed";
-        captured_value = static_cast<int>(result);
-    });
+    (void)engine.read(file.fd(), buffer, 4096, 0,
+                      [&captured_message, &captured_value](auraio::Request &, ssize_t result) {
+                          captured_message = "completed";
+                          captured_value = static_cast<int>(result);
+                      });
 
     engine.wait();
     ASSERT_EQ(captured_message, "completed");
@@ -414,7 +442,7 @@ TEST(write_basic) {
     bool completed = false;
     ssize_t bytes_written = 0;
 
-    (void)engine.write(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t result) {
+    (void)engine.write(file.fd(), buffer, 4096, 0, [&](auraio::Request &, ssize_t result) {
         completed = true;
         bytes_written = result;
     });
@@ -431,7 +459,7 @@ TEST(fsync_basic) {
     auraio::Engine engine;
     bool completed = false;
 
-    (void)engine.fsync(file.fd(), [&](auraio::Request&, ssize_t result) {
+    (void)engine.fsync(file.fd(), [&](auraio::Request &, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -447,7 +475,7 @@ TEST(fdatasync_basic) {
     auraio::Engine engine;
     bool completed = false;
 
-    (void)engine.fdatasync(file.fd(), [&](auraio::Request&, ssize_t result) {
+    (void)engine.fdatasync(file.fd(), [&](auraio::Request &, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -464,18 +492,16 @@ TEST(readv_basic) {
     auto buf1 = engine.allocate_buffer(4096);
     auto buf2 = engine.allocate_buffer(4096);
 
-    iovec iov[2] = {
-        { buf1.data(), 4096 },
-        { buf2.data(), 4096 }
-    };
+    iovec iov[2] = {{buf1.data(), 4096}, {buf2.data(), 4096}};
 
     bool completed = false;
     ssize_t total_read = 0;
 
-    (void)engine.readv(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
-        completed = true;
-        total_read = result;
-    });
+    (void)engine.readv(file.fd(), std::span<const iovec>(iov, 2), 0,
+                       [&](auraio::Request &, ssize_t result) {
+                           completed = true;
+                           total_read = result;
+                       });
 
     engine.wait();
     ASSERT(completed);
@@ -493,18 +519,16 @@ TEST(writev_basic) {
     std::memset(buf1.data(), 'Y', 4096);
     std::memset(buf2.data(), 'Z', 4096);
 
-    iovec iov[2] = {
-        { buf1.data(), 4096 },
-        { buf2.data(), 4096 }
-    };
+    iovec iov[2] = {{buf1.data(), 4096}, {buf2.data(), 4096}};
 
     bool completed = false;
     ssize_t total_written = 0;
 
-    (void)engine.writev(file.fd(), std::span<const iovec>(iov, 2), 0, [&](auraio::Request&, ssize_t result) {
-        completed = true;
-        total_written = result;
-    });
+    (void)engine.writev(file.fd(), std::span<const iovec>(iov, 2), 0,
+                        [&](auraio::Request &, ssize_t result) {
+                            completed = true;
+                            total_written = result;
+                        });
 
     engine.wait();
     ASSERT(completed);
@@ -523,9 +547,8 @@ TEST(poll_processes_completions) {
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
-    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
-        completed = true;
-    });
+    (void)engine.read(file.fd(), buffer, 4096, 0,
+                      [&](auraio::Request &, ssize_t) { completed = true; });
 
     // Poll until complete (bounded to prevent hang)
     for (int i = 0; i < 5000 && !completed; i++) {
@@ -544,9 +567,8 @@ TEST(wait_blocks) {
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
-    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request&, ssize_t) {
-        completed = true;
-    });
+    (void)engine.read(file.fd(), buffer, 4096, 0,
+                      [&](auraio::Request &, ssize_t) { completed = true; });
 
     // wait() should block until at least one completion
     int n = engine.wait();
@@ -566,10 +588,13 @@ TEST(multiple_concurrent_ops) {
 
     int completed = 0;
 
-    (void)engine.read(file.fd(), buf1, 4096, 0, [&](auraio::Request&, ssize_t) { completed++; });
-    (void)engine.read(file.fd(), buf2, 4096, 4096, [&](auraio::Request&, ssize_t) { completed++; });
-    (void)engine.read(file.fd(), buf3, 4096, 8192, [&](auraio::Request&, ssize_t) { completed++; });
-    (void)engine.read(file.fd(), buf4, 4096, 12288, [&](auraio::Request&, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf1, 4096, 0, [&](auraio::Request &, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf2, 4096, 4096,
+                      [&](auraio::Request &, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf3, 4096, 8192,
+                      [&](auraio::Request &, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf4, 4096, 12288,
+                      [&](auraio::Request &, ssize_t) { completed++; });
 
     // Wait for all (bounded to prevent hang)
     for (int i = 0; i < 100 && completed < 4; i++) {
@@ -584,7 +609,7 @@ TEST(multiple_concurrent_ops) {
 // =============================================================================
 
 TEST(raii_engine_scope) {
-    auraio_engine_t* raw = nullptr;
+    auraio_engine_t *raw = nullptr;
     {
         auraio::Engine engine;
         raw = engine.handle();
@@ -612,7 +637,7 @@ TEST(raii_exception_safety) {
     try {
         auto buffer = engine.allocate_buffer(4096);
         throw std::runtime_error("simulated exception");
-    } catch (const std::runtime_error&) {
+    } catch (const std::runtime_error &) {
         // Buffer should be cleaned up
     }
 
@@ -627,12 +652,14 @@ TEST(raii_exception_safety) {
 
 #if __has_include(<coroutine>)
 
-auraio::Task<ssize_t> async_read_task(auraio::Engine& engine, int fd, auraio::Buffer& buf, size_t len, off_t off) {
+auraio::Task<ssize_t> async_read_task(auraio::Engine &engine, int fd, auraio::Buffer &buf,
+                                      size_t len, off_t off) {
     ssize_t result = co_await engine.async_read(fd, buf, len, off);
     co_return result;
 }
 
-auraio::Task<void> async_write_task(auraio::Engine& engine, int fd, auraio::Buffer& buf, size_t len, off_t off) {
+auraio::Task<void> async_write_task(auraio::Engine &engine, int fd, auraio::Buffer &buf, size_t len,
+                                    off_t off) {
     co_await engine.async_write(fd, buf, len, off);
 }
 
@@ -676,10 +703,10 @@ TEST(async_write_basic) {
     }
 
     // If we get here without exception, write succeeded
-    task.get();  // May throw if there was an error
+    task.get(); // May throw if there was an error
 }
 
-auraio::Task<void> async_fsync_task(auraio::Engine& engine, int fd) {
+auraio::Task<void> async_fsync_task(auraio::Engine &engine, int fd) {
     co_await engine.async_fsync(fd);
 }
 
@@ -701,7 +728,7 @@ TEST(async_fsync_basic) {
     task.get();
 }
 
-auraio::Task<ssize_t> async_sequential_reads(auraio::Engine& engine, int fd, auraio::Buffer& buf) {
+auraio::Task<ssize_t> async_sequential_reads(auraio::Engine &engine, int fd, auraio::Buffer &buf) {
     ssize_t total = 0;
     total += co_await engine.async_read(fd, buf, 1024, 0);
     total += co_await engine.async_read(fd, buf, 1024, 1024);
@@ -748,6 +775,7 @@ int main() {
     RUN_TEST(options_default_values);
     RUN_TEST(options_builder_chain);
     RUN_TEST(options_all_setters);
+    RUN_TEST(options_ring_select);
     RUN_TEST(buffer_allocate);
     RUN_TEST(buffer_move_construct);
     RUN_TEST(buffer_move_assign);

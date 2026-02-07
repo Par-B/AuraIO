@@ -27,12 +27,12 @@ namespace auraio {
  * This is a value type with no ownership semantics.
  */
 class BufferRef {
-public:
+  public:
     /**
      * Construct from raw pointer (unregistered buffer)
      * @param ptr Buffer pointer
      */
-    BufferRef(void* ptr) noexcept : buf_(auraio_buf(ptr)) {}
+    BufferRef(void *ptr) noexcept : buf_(auraio_buf(ptr)) {}
 
     /**
      * Construct from const raw pointer (for write operations only)
@@ -42,8 +42,7 @@ public:
      *
      * @param ptr Buffer pointer (must not be used with read operations)
      */
-    explicit BufferRef(const void* ptr) noexcept
-        : buf_(auraio_buf(const_cast<void*>(ptr))) {}
+    explicit BufferRef(const void *ptr) noexcept : buf_(auraio_buf(const_cast<void *>(ptr))) {}
 
     /**
      * Construct for registered buffer
@@ -61,9 +60,7 @@ public:
      * Check if this is a registered buffer
      * @return True if registered buffer
      */
-    [[nodiscard]] bool is_registered() const noexcept {
-        return buf_.type == AURAIO_BUF_REGISTERED;
-    }
+    [[nodiscard]] bool is_registered() const noexcept { return buf_.type == AURAIO_BUF_REGISTERED; }
 
     /**
      * Get underlying C buffer descriptor
@@ -71,7 +68,7 @@ public:
      */
     [[nodiscard]] auraio_buf_t c_buf() const noexcept { return buf_; }
 
-private:
+  private:
     BufferRef() noexcept = default;
     auraio_buf_t buf_{};
 };
@@ -81,7 +78,7 @@ private:
  * @param ptr Buffer pointer
  * @return BufferRef for unregistered buffer
  */
-inline BufferRef buf(void* ptr) noexcept {
+inline BufferRef buf(void *ptr) noexcept {
     return BufferRef(ptr);
 }
 
@@ -109,7 +106,7 @@ inline BufferRef buf_fixed(int index, size_t offset = 0) noexcept {
  * @endcode
  */
 class Buffer {
-public:
+  public:
     /**
      * Default constructor - creates empty buffer
      */
@@ -118,12 +115,8 @@ public:
     /**
      * Move constructor
      */
-    Buffer(Buffer&& other) noexcept
-        : engine_(other.engine_)
-        , ptr_(other.ptr_)
-        , size_(other.size_)
-        , owned_(other.owned_)
-    {
+    Buffer(Buffer &&other) noexcept
+        : engine_(other.engine_), ptr_(other.ptr_), size_(other.size_), owned_(other.owned_) {
         other.engine_ = nullptr;
         other.ptr_ = nullptr;
         other.size_ = 0;
@@ -133,7 +126,7 @@ public:
     /**
      * Move assignment
      */
-    Buffer& operator=(Buffer&& other) noexcept {
+    Buffer &operator=(Buffer &&other) noexcept {
         if (this != &other) {
             release_internal();
             engine_ = other.engine_;
@@ -149,15 +142,13 @@ public:
     }
 
     // Non-copyable
-    Buffer(const Buffer&) = delete;
-    Buffer& operator=(const Buffer&) = delete;
+    Buffer(const Buffer &) = delete;
+    Buffer &operator=(const Buffer &) = delete;
 
     /**
      * Destructor - returns buffer to pool if owned
      */
-    ~Buffer() {
-        release_internal();
-    }
+    ~Buffer() { release_internal(); }
 
     /**
      * Wrap existing memory (non-owning)
@@ -169,7 +160,7 @@ public:
      * @param size Size of memory region
      * @return Non-owning Buffer wrapper
      */
-    [[nodiscard]] static Buffer wrap(void* ptr, size_t size) noexcept {
+    [[nodiscard]] static Buffer wrap(void *ptr, size_t size) noexcept {
         Buffer buf;
         buf.ptr_ = ptr;
         buf.size_ = size;
@@ -181,13 +172,13 @@ public:
      * Get buffer data pointer
      * @return Pointer to buffer data
      */
-    [[nodiscard]] void* data() noexcept { return ptr_; }
+    [[nodiscard]] void *data() noexcept { return ptr_; }
 
     /**
      * Get buffer data pointer (const)
      * @return Const pointer to buffer data
      */
-    [[nodiscard]] const void* data() const noexcept { return ptr_; }
+    [[nodiscard]] const void *data() const noexcept { return ptr_; }
 
     /**
      * Get buffer size
@@ -200,7 +191,7 @@ public:
      * @return std::span over buffer contents
      */
     [[nodiscard]] std::span<std::byte> span() noexcept {
-        return {static_cast<std::byte*>(ptr_), size_};
+        return {static_cast<std::byte *>(ptr_), size_};
     }
 
     /**
@@ -208,7 +199,7 @@ public:
      * @return std::span over buffer contents (const)
      */
     [[nodiscard]] std::span<const std::byte> span() const noexcept {
-        return {static_cast<const std::byte*>(ptr_), size_};
+        return {static_cast<const std::byte *>(ptr_), size_};
     }
 
     /**
@@ -216,13 +207,12 @@ public:
      * @tparam T Element type
      * @return std::span of T elements
      */
-    template<typename T>
-    [[nodiscard]] std::span<T> as() {
+    template <typename T> [[nodiscard]] std::span<T> as() {
         if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
             throw Error(EINVAL, "Buffer not aligned for requested type");
         }
         // Truncates: a 4097-byte buffer as<uint32_t>() returns 1024 elements
-        return {static_cast<T*>(ptr_), size_ / sizeof(T)};
+        return {static_cast<T *>(ptr_), size_ / sizeof(T)};
     }
 
     /**
@@ -232,36 +222,47 @@ public:
      * @throws Error if buffer is not properly aligned for T
      * @note Trailing bytes smaller than sizeof(T) are excluded from the span
      */
-    template<typename T>
-    [[nodiscard]] std::span<const T> as() const {
+    template <typename T> [[nodiscard]] std::span<const T> as() const {
         if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) {
             throw Error(EINVAL, "Buffer not aligned for requested type");
         }
-        return {static_cast<const T*>(ptr_), size_ / sizeof(T)};
+        return {static_cast<const T *>(ptr_), size_ / sizeof(T)};
     }
 
     /**
-     * Convert to BufferRef for I/O operations
+     * Convert to BufferRef for I/O operations (mutable)
+     * @return BufferRef pointing to this buffer
+     */
+    [[nodiscard]] BufferRef ref() noexcept { return BufferRef(ptr_); }
+
+    /**
+     * Convert to BufferRef for write operations (const)
+     *
+     * Uses the explicit const-pointer constructor; the resulting BufferRef
+     * must only be used with write operations (the kernel reads from the
+     * buffer, not into it).
+     *
      * @return BufferRef pointing to this buffer
      */
     [[nodiscard]] BufferRef ref() const noexcept {
-        return BufferRef(ptr_);
+        return BufferRef(static_cast<const void *>(ptr_));
     }
 
     /**
-     * Implicit conversion to BufferRef
+     * Implicit conversion to BufferRef (mutable)
      */
-    operator BufferRef() const noexcept {
-        return ref();
-    }
+    operator BufferRef() noexcept { return ref(); }
+
+    /**
+     * Implicit conversion to BufferRef (const, for write ops)
+     */
+    operator BufferRef() const noexcept { return ref(); }
 
     /**
      * Check if buffer is valid (non-null)
      * @return True if buffer has valid data
      */
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return ptr_ != nullptr;
-    }
+    [[nodiscard]] explicit operator bool() const noexcept { return ptr_ != nullptr; }
 
     /**
      * Check if buffer is owned (will be freed on destruction)
@@ -273,9 +274,9 @@ public:
      * Result of releasing buffer ownership
      */
     struct ReleasedBuffer {
-        void* data;               /**< Buffer pointer */
-        size_t size;              /**< Buffer size in bytes */
-        auraio_engine_t* engine;  /**< Engine that owns the pool (nullptr if not pool-allocated) */
+        void *data;              /**< Buffer pointer */
+        size_t size;             /**< Buffer size in bytes */
+        auraio_engine_t *engine; /**< Engine that owns the pool (nullptr if not pool-allocated) */
     };
 
     /**
@@ -296,21 +297,17 @@ public:
         return released;
     }
 
-private:
+  private:
     friend class Engine;
 
     // Private constructor for Engine::allocate_buffer
-    Buffer(auraio_engine_t* engine, void* ptr, size_t size) noexcept
-        : engine_(engine)
-        , ptr_(ptr)
-        , size_(size)
-        , owned_(true)
-    {}
+    Buffer(auraio_engine_t *engine, void *ptr, size_t size) noexcept
+        : engine_(engine), ptr_(ptr), size_(size), owned_(true) {}
 
     void release_internal() noexcept;
 
-    auraio_engine_t* engine_ = nullptr;
-    void* ptr_ = nullptr;
+    auraio_engine_t *engine_ = nullptr;
+    void *ptr_ = nullptr;
     size_t size_ = 0;
     bool owned_ = false;
 };

@@ -900,8 +900,8 @@ mod tests {
             })
             .unwrap();
 
-        // Check fd matches
-        assert_eq!(handle.fd(), fd);
+        // Check fd matches (safe: callback hasn't run yet)
+        assert_eq!(unsafe { handle.fd() }, fd);
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();
@@ -964,8 +964,8 @@ mod tests {
             })
             .unwrap();
 
-        // Request should be pending initially
-        assert!(handle.is_pending());
+        // Request should be pending initially (safe: callback hasn't run yet)
+        assert!(unsafe { handle.is_pending() });
 
         // Try to cancel
         let cancel_result = engine.cancel(&handle);
@@ -1044,10 +1044,10 @@ mod tests {
             })
             .unwrap();
 
-        // Before completion, handle should be pending
+        // Before completion, handle should be pending (safe: callback hasn't run yet)
         // Note: This is a race condition - the I/O might complete before we check
         // So we only test that is_pending() doesn't crash
-        let _ = handle.is_pending();
+        let _ = unsafe { handle.is_pending() };
 
         // Wait for completion
         while !completed.load(Ordering::SeqCst) {

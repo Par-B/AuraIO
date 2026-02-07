@@ -96,6 +96,12 @@ impl Engine {
     /// Register buffers with the kernel for zero-copy I/O
     ///
     /// After registration, use `BufferRef::fixed()` to reference buffers by index.
+    ///
+    /// # Safety Note
+    ///
+    /// The registered buffers must remain valid and at stable addresses
+    /// until `unregister_buffers()` is called. The borrow checker cannot
+    /// enforce this lifetime across the registration boundary.
     pub fn register_buffers(&self, buffers: &[&[u8]]) -> Result<()> {
         let iovecs: Vec<libc::iovec> = buffers
             .iter()
@@ -338,6 +344,12 @@ impl Engine {
     }
 
     /// Submit an async vectored read operation
+    ///
+    /// # Safety Note
+    ///
+    /// The caller must ensure the iovec buffers remain valid and
+    /// exclusively borrowed until the completion callback fires.
+    /// The borrow checker cannot enforce this across the async boundary.
     pub fn readv<F>(
         &self,
         fd: RawFd,
@@ -374,6 +386,12 @@ impl Engine {
     }
 
     /// Submit an async vectored write operation
+    ///
+    /// # Safety Note
+    ///
+    /// The caller must ensure the iovec buffers remain valid and
+    /// exclusively borrowed until the completion callback fires.
+    /// The borrow checker cannot enforce this across the async boundary.
     pub fn writev<F>(
         &self,
         fd: RawFd,

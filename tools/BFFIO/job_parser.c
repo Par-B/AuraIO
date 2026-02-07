@@ -25,8 +25,26 @@
  * Constants
  * ============================================================================ */
 
-#define INITIAL_JOBS_CAPACITY   8
-#define LINE_MAX_LEN            1024
+#define INITIAL_JOBS_CAPACITY 8
+#define LINE_MAX_LEN 1024
+
+#include <errno.h>
+#include <limits.h>
+
+/**
+ * Parse an integer value with validation.
+ * Returns 0 on success, -1 on error (not a number, overflow, trailing junk).
+ */
+static int parse_int(const char *s, int *out) {
+    if (!s || !*s) return -1;
+    char *end;
+    errno = 0;
+    long val = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0') return -1;
+    if (val < INT_MIN || val > INT_MAX) return -1;
+    *out = (int)val;
+    return 0;
+}
 
 /* ============================================================================
  * Utility Helpers
@@ -57,9 +75,15 @@ uint64_t parse_size(const char *str) {
 
     if (endp && *endp) {
         switch (tolower((unsigned char)*endp)) {
-        case 'k': val *= 1024ULL; break;
-        case 'm': val *= 1048576ULL; break;
-        case 'g': val *= 1073741824ULL; break;
+        case 'k':
+            val *= 1024ULL;
+            break;
+        case 'm':
+            val *= 1048576ULL;
+            break;
+        case 'g':
+            val *= 1073741824ULL;
+            break;
         default:
             return 0;
         }
@@ -81,11 +105,11 @@ double parse_latency(const char *str) {
 
     if (endp && *endp) {
         if (strncasecmp(endp, "us", 2) == 0) {
-            val /= 1000.0;  /* microseconds → milliseconds */
+            val /= 1000.0; /* microseconds → milliseconds */
         } else if (strncasecmp(endp, "ms", 2) == 0) {
             /* already milliseconds */
         } else if (tolower((unsigned char)*endp) == 's') {
-            val *= 1000.0;  /* seconds → milliseconds */
+            val *= 1000.0; /* seconds → milliseconds */
         } else {
             return -1.0;
         }
@@ -100,16 +124,12 @@ double parse_latency(const char *str) {
  * ============================================================================ */
 
 static const struct {
-    const char     *name;
-    rw_pattern_t    pattern;
+    const char *name;
+    rw_pattern_t pattern;
 } rw_table[] = {
-    { "read",       RW_READ      },
-    { "write",      RW_WRITE     },
-    { "randread",   RW_RANDREAD  },
-    { "randwrite",  RW_RANDWRITE },
-    { "readwrite",  RW_READWRITE },
-    { "rw",         RW_READWRITE },
-    { "randrw",     RW_RANDRW    },
+    { "read", RW_READ },           { "write", RW_WRITE },         { "randread", RW_RANDREAD },
+    { "randwrite", RW_RANDWRITE }, { "readwrite", RW_READWRITE }, { "rw", RW_READWRITE },
+    { "randrw", RW_RANDRW },
 };
 
 #define RW_TABLE_SIZE (sizeof(rw_table) / sizeof(rw_table[0]))
@@ -128,12 +148,18 @@ int parse_rw(const char *str, rw_pattern_t *out) {
 
 const char *rw_pattern_name(rw_pattern_t rw) {
     switch (rw) {
-    case RW_READ:       return "read";
-    case RW_WRITE:      return "write";
-    case RW_RANDREAD:   return "randread";
-    case RW_RANDWRITE:  return "randwrite";
-    case RW_READWRITE:  return "readwrite";
-    case RW_RANDRW:     return "randrw";
+    case RW_READ:
+        return "read";
+    case RW_WRITE:
+        return "write";
+    case RW_RANDREAD:
+        return "randread";
+    case RW_RANDWRITE:
+        return "randwrite";
+    case RW_READWRITE:
+        return "readwrite";
+    case RW_RANDRW:
+        return "randrw";
     }
     return "unknown";
 }
@@ -145,12 +171,12 @@ const char *rw_pattern_name(rw_pattern_t rw) {
 void job_config_defaults(job_config_t *job) {
     memset(job, 0, sizeof(*job));
     snprintf(job->name, sizeof(job->name), "default");
-    job->bs          = 4096;
-    job->direct      = 0;
-    job->numjobs     = 1;
-    job->iodepth     = 256;
-    job->rwmixread   = 50;
-    job->rw_set      = false;
+    job->bs = 4096;
+    job->direct = 0;
+    job->numjobs = 1;
+    job->iodepth = 256;
+    job->rwmixread = 50;
+    job->rw_set = false;
 }
 
 /* ============================================================================
@@ -167,8 +193,7 @@ static int bench_config_grow(bench_config_t *config) {
     int new_cap = config->jobs_capacity * 2;
     if (new_cap < INITIAL_JOBS_CAPACITY) new_cap = INITIAL_JOBS_CAPACITY;
 
-    job_config_t *new_jobs = realloc(config->jobs,
-                                     (size_t)new_cap * sizeof(job_config_t));
+    job_config_t *new_jobs = realloc(config->jobs, (size_t)new_cap * sizeof(job_config_t));
     if (!new_jobs) {
         fprintf(stderr, "BFFIO: out of memory allocating jobs\n");
         return -1;
@@ -241,48 +266,101 @@ static int apply_param(job_config_t *job, const char *key, const char *value) {
     }
 
     if (strcmp(key, "direct") == 0) {
-        job->direct = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->direct = v;
         return 0;
     }
 
     if (strcmp(key, "runtime") == 0) {
-        job->runtime_sec = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 0) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->runtime_sec = v;
         return 0;
     }
 
     if (strcmp(key, "time_based") == 0) {
         /* bare flag or explicit value */
-        job->time_based = (!value || !*value) ? 1 : atoi(value);
+        if (!value || !*value) {
+            job->time_based = 1;
+        } else {
+            int v;
+            if (parse_int(value, &v) != 0) {
+                fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+                return -1;
+            }
+            job->time_based = v;
+        }
         return 0;
     }
 
     if (strcmp(key, "ramp_time") == 0) {
-        job->ramp_time_sec = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 0) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->ramp_time_sec = v;
         return 0;
     }
 
     if (strcmp(key, "numjobs") == 0) {
-        job->numjobs = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 1) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->numjobs = v;
         return 0;
     }
 
     if (strcmp(key, "iodepth") == 0) {
-        job->iodepth = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 1) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->iodepth = v;
         return 0;
     }
 
     if (strcmp(key, "rwmixread") == 0) {
-        job->rwmixread = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 0 || v > 100) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s' (0-100)\n", key, value);
+            return -1;
+        }
+        job->rwmixread = v;
         return 0;
     }
 
     if (strcmp(key, "group_reporting") == 0) {
-        job->group_reporting = (!value || !*value) ? 1 : atoi(value);
+        if (!value || !*value) {
+            job->group_reporting = 1;
+        } else {
+            int v;
+            if (parse_int(value, &v) != 0) {
+                fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+                return -1;
+            }
+            job->group_reporting = v;
+        }
         return 0;
     }
 
     if (strcmp(key, "fsync") == 0) {
-        job->fsync_freq = atoi(value);
+        int v;
+        if (parse_int(value, &v) != 0 || v < 0) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->fsync_freq = v;
         return 0;
     }
 
@@ -298,6 +376,23 @@ static int apply_param(job_config_t *job, const char *key, const char *value) {
             return -1;
         }
         job->target_p99_ms = ms;
+        return 0;
+    }
+
+    if (strcmp(key, "ring_select") == 0 || strcmp(key, "ring-select") == 0) {
+        if (strcasecmp(value, "adaptive") == 0) {
+            job->ring_select = 0;
+        } else if (strcasecmp(value, "cpu_local") == 0) {
+            job->ring_select = 1;
+        } else if (strcasecmp(value, "round_robin") == 0) {
+            job->ring_select = 2;
+        } else {
+            fprintf(stderr,
+                    "BFFIO: unknown ring-select mode '%s' "
+                    "(use: adaptive, cpu_local, round_robin)\n",
+                    value);
+            return -1;
+        }
         return 0;
     }
 
@@ -342,8 +437,7 @@ int job_parse_file(const char *path, bench_config_t *config) {
         if (*line == '[') {
             char *close = strchr(line, ']');
             if (!close) {
-                fprintf(stderr, "BFFIO: %s:%d: malformed section header\n",
-                        path, line_num);
+                fprintf(stderr, "BFFIO: %s:%d: malformed section header\n", path, line_num);
                 fclose(fp);
                 return -1;
             }
@@ -364,7 +458,7 @@ int job_parse_file(const char *path, bench_config_t *config) {
             }
 
             current = &config->jobs[config->num_jobs];
-            *current = global;  /* inherit global defaults */
+            *current = global; /* inherit global defaults */
             snprintf(current->name, sizeof(current->name), "%s", section_name);
             config->num_jobs++;
             continue;
@@ -482,8 +576,7 @@ int job_parse_cli(int argc, char **argv, bench_config_t *config) {
         }
 
         if (strcmp(key, "output") == 0) {
-            snprintf(config->output_file, sizeof(config->output_file),
-                     "%s", value);
+            snprintf(config->output_file, sizeof(config->output_file), "%s", value);
             continue;
         }
 
@@ -492,7 +585,7 @@ int job_parse_cli(int argc, char **argv, bench_config_t *config) {
             if (bench_config_grow(config) < 0) return -1;
 
             current = &config->jobs[config->num_jobs];
-            *current = global;  /* inherit global defaults */
+            *current = global; /* inherit global defaults */
             snprintf(current->name, sizeof(current->name), "%s", value);
             config->num_jobs++;
             continue;
@@ -525,44 +618,43 @@ int job_parse_cli(int argc, char **argv, bench_config_t *config) {
 
 int job_config_validate(const job_config_t *job) {
     if (!job->rw_set) {
-        fprintf(stderr, "BFFIO: job '%s': 'rw' parameter is required\n",
-                job->name);
+        fprintf(stderr, "BFFIO: job '%s': 'rw' parameter is required\n", job->name);
         return -1;
     }
 
     if (job->size == 0 && !(job->runtime_sec > 0 && job->time_based)) {
-        fprintf(stderr, "BFFIO: job '%s': must specify 'size' or "
-                "'runtime' with 'time_based'\n", job->name);
+        fprintf(stderr,
+                "BFFIO: job '%s': must specify 'size' or "
+                "'runtime' with 'time_based'\n",
+                job->name);
         return -1;
     }
 
     if (job->filename[0] == '\0' && job->directory[0] == '\0') {
-        fprintf(stderr, "BFFIO: job '%s': must specify 'filename' or "
-                "'directory'\n", job->name);
+        fprintf(stderr,
+                "BFFIO: job '%s': must specify 'filename' or "
+                "'directory'\n",
+                job->name);
         return -1;
     }
 
     if (job->numjobs < 1) {
-        fprintf(stderr, "BFFIO: job '%s': numjobs must be >= 1\n",
-                job->name);
+        fprintf(stderr, "BFFIO: job '%s': numjobs must be >= 1\n", job->name);
         return -1;
     }
 
     if (job->iodepth < 1) {
-        fprintf(stderr, "BFFIO: job '%s': iodepth must be >= 1\n",
-                job->name);
+        fprintf(stderr, "BFFIO: job '%s': iodepth must be >= 1\n", job->name);
         return -1;
     }
 
     if (job->rwmixread < 0 || job->rwmixread > 100) {
-        fprintf(stderr, "BFFIO: job '%s': rwmixread must be 0-100\n",
-                job->name);
+        fprintf(stderr, "BFFIO: job '%s': rwmixread must be 0-100\n", job->name);
         return -1;
     }
 
     if (job->bs == 0) {
-        fprintf(stderr, "BFFIO: job '%s': block size must be > 0\n",
-                job->name);
+        fprintf(stderr, "BFFIO: job '%s': block size must be > 0\n", job->name);
         return -1;
     }
 

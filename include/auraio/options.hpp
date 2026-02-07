@@ -11,6 +11,17 @@
 namespace auraio {
 
 /**
+ * Ring selection mode
+ *
+ * Controls how submissions are distributed across io_uring rings.
+ */
+enum class RingSelect {
+    Adaptive = AURAIO_SELECT_ADAPTIVE,     ///< CPU-local with overflow spilling (default)
+    CpuLocal = AURAIO_SELECT_CPU_LOCAL,    ///< CPU-affinity only (best NUMA locality)
+    RoundRobin = AURAIO_SELECT_ROUND_ROBIN ///< Atomic round-robin (max single-thread scaling)
+};
+
+/**
  * Engine configuration options
  *
  * Uses builder pattern for fluent configuration.
@@ -20,26 +31,25 @@ namespace auraio {
  * auraio::Options opts;
  * opts.queue_depth(512)
  *     .ring_count(4)
- *     .enable_sqpoll(true);
+ *     .ring_select(auraio::RingSelect::Adaptive);
  *
  * auraio::Engine engine(opts);
  * @endcode
  */
 class Options {
-public:
+  public:
     /**
      * Initialize with default options
      */
-    Options() noexcept {
-        auraio_options_init(&opts_);
-    }
+    Options() noexcept { auraio_options_init(&opts_); }
 
     /**
      * Set queue depth per ring
-     * @param depth Queue depth (default: 256)
+     * @param depth Queue depth (default: 256, valid range: 1-32768)
      * @return Reference to this for chaining
+     * @note Validated at engine creation time; invalid values cause Engine() to fail
      */
-    Options& queue_depth(int depth) noexcept {
+    Options &queue_depth(int depth) noexcept {
         opts_.queue_depth = depth;
         return *this;
     }
@@ -49,7 +59,7 @@ public:
      * @param count Number of rings (0 = auto, one per CPU)
      * @return Reference to this for chaining
      */
-    Options& ring_count(int count) noexcept {
+    Options &ring_count(int count) noexcept {
         opts_.ring_count = count;
         return *this;
     }
@@ -59,7 +69,7 @@ public:
      * @param limit Initial limit
      * @return Reference to this for chaining
      */
-    Options& initial_in_flight(int limit) noexcept {
+    Options &initial_in_flight(int limit) noexcept {
         opts_.initial_in_flight = limit;
         return *this;
     }
@@ -69,7 +79,7 @@ public:
      * @param limit Minimum limit
      * @return Reference to this for chaining
      */
-    Options& min_in_flight(int limit) noexcept {
+    Options &min_in_flight(int limit) noexcept {
         opts_.min_in_flight = limit;
         return *this;
     }
@@ -79,7 +89,7 @@ public:
      * @param ms Maximum P99 latency in milliseconds (0 = auto)
      * @return Reference to this for chaining
      */
-    Options& max_p99_latency_ms(double ms) noexcept {
+    Options &max_p99_latency_ms(double ms) noexcept {
         opts_.max_p99_latency_ms = ms;
         return *this;
     }
@@ -89,7 +99,7 @@ public:
      * @param align Buffer alignment in bytes (default: 4096)
      * @return Reference to this for chaining
      */
-    Options& buffer_alignment(size_t align) noexcept {
+    Options &buffer_alignment(size_t align) noexcept {
         opts_.buffer_alignment = align;
         return *this;
     }
@@ -99,7 +109,7 @@ public:
      * @param disable True to disable adaptive tuning
      * @return Reference to this for chaining
      */
-    Options& disable_adaptive(bool disable = true) noexcept {
+    Options &disable_adaptive(bool disable = true) noexcept {
         opts_.disable_adaptive = disable;
         return *this;
     }
@@ -112,7 +122,7 @@ public:
      * @param enable True to enable SQPOLL mode
      * @return Reference to this for chaining
      */
-    Options& enable_sqpoll(bool enable = true) noexcept {
+    Options &enable_sqpoll(bool enable = true) noexcept {
         opts_.enable_sqpoll = enable;
         return *this;
     }
@@ -122,8 +132,18 @@ public:
      * @param ms Idle timeout in milliseconds
      * @return Reference to this for chaining
      */
-    Options& sqpoll_idle_ms(int ms) noexcept {
+    Options &sqpoll_idle_ms(int ms) noexcept {
         opts_.sqpoll_idle_ms = ms;
+        return *this;
+    }
+
+    /**
+     * Set ring selection mode
+     * @param mode Ring selection mode (default: Adaptive)
+     * @return Reference to this for chaining
+     */
+    Options &ring_select(RingSelect mode) noexcept {
+        opts_.ring_select = static_cast<auraio_ring_select_t>(mode);
         return *this;
     }
 
@@ -137,14 +157,17 @@ public:
     [[nodiscard]] bool disable_adaptive() const noexcept { return opts_.disable_adaptive; }
     [[nodiscard]] bool enable_sqpoll() const noexcept { return opts_.enable_sqpoll; }
     [[nodiscard]] int sqpoll_idle_ms() const noexcept { return opts_.sqpoll_idle_ms; }
+    [[nodiscard]] RingSelect ring_select() const noexcept {
+        return static_cast<RingSelect>(opts_.ring_select);
+    }
 
     /**
      * Get underlying C options struct
      * @return Reference to auraio_options_t
      */
-    [[nodiscard]] const auraio_options_t& c_options() const noexcept { return opts_; }
+    [[nodiscard]] const auraio_options_t &c_options() const noexcept { return opts_; }
 
-private:
+  private:
     auraio_options_t opts_;
 };
 

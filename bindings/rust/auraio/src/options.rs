@@ -2,6 +2,29 @@
 
 use auraio_sys;
 
+/// Ring selection mode
+///
+/// Controls how submissions are distributed across io_uring rings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RingSelect {
+    /// CPU-local with overflow spilling (default)
+    Adaptive,
+    /// CPU-affinity only (best NUMA locality)
+    CpuLocal,
+    /// Atomic round-robin across all rings (max single-thread scaling)
+    RoundRobin,
+}
+
+impl RingSelect {
+    fn to_c(self) -> u32 {
+        match self {
+            RingSelect::Adaptive => auraio_sys::auraio_ring_select_t_AURAIO_SELECT_ADAPTIVE,
+            RingSelect::CpuLocal => auraio_sys::auraio_ring_select_t_AURAIO_SELECT_CPU_LOCAL,
+            RingSelect::RoundRobin => auraio_sys::auraio_ring_select_t_AURAIO_SELECT_ROUND_ROBIN,
+        }
+    }
+}
+
 /// Engine configuration options
 ///
 /// Use the builder pattern to customize engine behavior:
@@ -86,6 +109,12 @@ impl Options {
     /// Set SQPOLL idle timeout in milliseconds (default: 1000)
     pub fn sqpoll_idle_ms(mut self, timeout: i32) -> Self {
         self.inner.sqpoll_idle_ms = timeout;
+        self
+    }
+
+    /// Set ring selection mode (default: Adaptive)
+    pub fn ring_select(mut self, mode: RingSelect) -> Self {
+        self.inner.ring_select = mode.to_c();
         self
     }
 

@@ -29,9 +29,23 @@ All buffers are automatically aligned to 4096 bytes (or custom alignment) to ens
 
 ## 3. CPU Locality & Cache Efficiency
 
-### The "Sticky Ring" Strategy
+### Ring Selection Modes
+AuraIO provides three ring selection modes to balance cache locality against throughput scaling:
+
+- **ADAPTIVE** (default, `AURAIO_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load exceeds 2x the global average, the thread is an outlier (most rings are idle) and stays local. Otherwise, system-wide pressure is detected and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `auraio_stats_t.adaptive_spills`.
+
+- **CPU_LOCAL** (`AURAIO_SELECT_CPU_LOCAL`): Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring's capacity.
+
+- **ROUND_ROBIN** (`AURAIO_SELECT_ROUND_ROBIN`): Always distributes via atomic round-robin across all rings. Best for single-thread event loops that need to saturate multiple rings, or for benchmarks measuring peak aggregate throughput.
+
+**When to use each mode:**
+- Many threads, each doing moderate I/O → **ADAPTIVE** (default)
+- NUMA system, locality-critical → **CPU_LOCAL**
+- Few threads, high per-thread IOPS → **ROUND_ROBIN**
+
+### Cache Efficiency
 Cache misses are expensive. AuraIO ensures that data stays hot in the L1/L2 cache of the CPU core processing it.
-- **Submission**: Each thread maintains a TLS-cached CPU ID (via `sched_getcpu()`, refreshed every 32 submissions). I/O operations route to the `io_uring` instance dedicated to that core, avoiding cross-core contention without a syscall on every request.
+- **Submission**: In CPU_LOCAL and ADAPTIVE modes, each thread maintains a TLS-cached CPU ID (via `sched_getcpu()`, refreshed every 32 submissions). I/O operations route to the `io_uring` instance dedicated to that core, avoiding cross-core contention without a syscall on every request.
 - **Completion**: With cooperative task delivery (`IORING_SETUP_COOP_TASKRUN`, enabled automatically on kernel 5.19+), completions are processed on the submitting core rather than via interrupts. This maximizes the chance that the user thread reads CQE data from L2 cache.
 
 ## 4. Adaptive Congestion Control (The "Brain")

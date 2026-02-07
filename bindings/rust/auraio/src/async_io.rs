@@ -93,9 +93,14 @@ fn create_io_future() -> (IoFuture, impl FnOnce(Result<usize>) + Send + 'static)
 
     let callback_state = state.clone();
     let callback = move |result: Result<usize>| {
-        let mut state = callback_state.lock().unwrap();
-        state.result = Some(result);
-        if let Some(waker) = state.waker.take() {
+        let waker = {
+            let mut state = callback_state.lock().unwrap();
+            state.result = Some(result);
+            state.waker.take()
+        };
+        // Wake outside the lock to avoid deadlock if the executor
+        // re-enters poll() on the same thread.
+        if let Some(waker) = waker {
             waker.wake();
         }
     };

@@ -63,7 +63,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         if (options->sqpoll_idle_ms > 0) {
             params.sq_thread_idle = options->sqpoll_idle_ms;
         } else {
-            params.sq_thread_idle = 1000;  /* Default 1 second */
+            params.sq_thread_idle = 1000; /* Default 1 second */
         }
     }
 
@@ -156,7 +156,8 @@ void ring_destroy(ring_ctx_t *ctx) {
      * Timeout after 10 seconds to avoid infinite hang on stuck ops
      * (e.g., hung NFS mount, stuck SCSI device). */
     int drain_attempts = 0;
-    while (ctx->pending_count > 0 && drain_attempts < 100) {
+    while (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0 &&
+           drain_attempts < 100) {
         ring_wait(ctx, 100);
         drain_attempts++;
     }
@@ -246,12 +247,12 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
     return (0);
@@ -273,12 +274,12 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
     return (0);
@@ -300,12 +301,12 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READV;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
     return (0);
@@ -327,12 +328,12 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITEV;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
     return (0);
@@ -354,12 +355,12 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FSYNC;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
 }
@@ -381,12 +382,12 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FDATASYNC;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
 }
@@ -412,11 +413,11 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
 
     req->op_type = AURAIO_OP_CANCEL;
     req->cancel_target = target;
-    req->submit_time_ns = 0;  /* Cancel ops skip latency tracking */
+    req->submit_time_ns = 0; /* Cancel ops skip latency tracking */
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
 }
@@ -440,12 +441,12 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ_FIXED;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
     return (0);
@@ -467,12 +468,12 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE_FIXED;
-    req->submit_time_ns = (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0
-                          ? get_time_ns() : 0;
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
 
     ctx->queued_sqes++;
-    ctx->pending_count++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
     return (0);
@@ -550,7 +551,7 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
      * count is corrected immediately after callback returns. */
     pthread_mutex_lock(&ctx->lock);
     ctx->ops_completed++;
-    ctx->pending_count--;
+    atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     if (result > 0) {
         ctx->bytes_completed += result;
     }
@@ -615,7 +616,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         return (-1);
     }
 
-    if (ctx->pending_count == 0) {
+    if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) == 0) {
         return (0);
     }
 
@@ -735,7 +736,7 @@ bool ring_can_submit(ring_ctx_t *ctx) {
     }
 
     int limit = adaptive_get_inflight_limit(&ctx->adaptive);
-    return ctx->pending_count < limit;
+    return atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) < limit;
 }
 
 bool ring_should_flush(ring_ctx_t *ctx) {

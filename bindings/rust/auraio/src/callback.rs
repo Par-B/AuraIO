@@ -51,7 +51,16 @@ pub(crate) extern "C" fn callback_trampoline(
         } else {
             Ok(result as usize)
         };
-        callback(rust_result);
+
+        // catch_unwind prevents panics from unwinding across the FFI boundary,
+        // which would be undefined behavior.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            callback(rust_result);
+        }))
+        .is_err()
+        {
+            eprintln!("auraio: panic in I/O callback (caught at FFI boundary)");
+        }
     }
     // Context is dropped here, freeing the memory
 }

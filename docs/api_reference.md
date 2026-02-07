@@ -44,6 +44,7 @@ typedef struct {
   bool disable_adaptive;
   bool enable_sqpoll;
   int sqpoll_idle_ms;
+  auraio_ring_select_t ring_select;
 } auraio_options_t;
 ```
 
@@ -58,6 +59,23 @@ typedef struct {
 | `disable_adaptive` | `bool` | false | Disable AIMD adaptive tuning |
 | `enable_sqpoll` | `bool` | false | Use kernel-side submission polling (requires root or `CAP_SYS_NICE`) |
 | `sqpoll_idle_ms` | `int` | 1000 | SQPOLL idle timeout before kernel thread sleeps |
+| `ring_select` | `auraio_ring_select_t` | `AURAIO_SELECT_ADAPTIVE` | Ring selection mode (see below) |
+
+#### `auraio_ring_select_t`
+
+```c
+typedef enum {
+  AURAIO_SELECT_ADAPTIVE = 0,   /* CPU-local with overflow spilling (default) */
+  AURAIO_SELECT_CPU_LOCAL,      /* CPU-affinity only (best NUMA locality) */
+  AURAIO_SELECT_ROUND_ROBIN     /* Atomic round-robin across all rings */
+} auraio_ring_select_t;
+```
+
+| Mode | When to use |
+|------|-------------|
+| `AURAIO_SELECT_ADAPTIVE` | Default. Uses CPU-local ring until congested (>75% of in-flight limit). If local load > 2x average, stays local (outlier). Otherwise, spills via power-of-two random choice to the lighter of two non-local rings. Best for most workloads. |
+| `AURAIO_SELECT_CPU_LOCAL` | Strict CPU affinity. Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring. |
+| `AURAIO_SELECT_ROUND_ROBIN` | Always distributes via atomic round-robin. Best for single-thread event loops or benchmarks that need maximum ring utilization from fewer threads. |
 
 Always initialize with `auraio_options_init()` before modifying fields.
 
@@ -108,6 +126,7 @@ typedef enum {
 | `current_in_flight` | `int` | Current total in-flight operations |
 | `optimal_in_flight` | `int` | AIMD-tuned aggregate in-flight limit |
 | `optimal_batch_size` | `int` | AIMD-tuned aggregate batch size |
+| `adaptive_spills` | `uint64_t` | ADAPTIVE mode: count of submissions that spilled to another ring |
 
 #### `auraio_ring_stats_t` — Per-Ring Stats
 
@@ -820,6 +839,9 @@ auraio::Engine engine(opts);
 | `disable_adaptive(bool)` | disable | Disable AIMD tuning |
 | `enable_sqpoll(bool)` | enable | Enable SQPOLL mode |
 | `sqpoll_idle_ms(int)` | ms | SQPOLL idle timeout |
+| `ring_select(RingSelect)` | mode | Ring selection mode |
+
+`RingSelect` enum: `auraio::RingSelect::Adaptive`, `CpuLocal`, `RoundRobin`.
 
 **Getters** (all `[[nodiscard]] noexcept`): same names as setters, no arguments.
 
@@ -987,6 +1009,7 @@ Defined in `<auraio/stats.hpp>`. Aggregate engine stats snapshot. All getters `[
 | `current_in_flight()` | `int` | `current_in_flight` |
 | `optimal_in_flight()` | `int` | `optimal_in_flight` |
 | `optimal_batch_size()` | `int` | `optimal_batch_size` |
+| `adaptive_spills()` | `uint64_t` | `adaptive_spills` |
 | `c_stats()` | `const auraio_stats_t&` | Full C struct |
 
 ---

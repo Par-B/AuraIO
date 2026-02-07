@@ -16,9 +16,10 @@ The high-level container that manages the lifecycle of the entire runtime.
 A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 - **Placement**: Typically pinned or logically associated with a specific CPU core.
 - **Locking**: Uses a fine-grained `pthread_mutex` for submission. While `io_uring` is lock-free, the library layer adds a lightweight lock to ensure thread safety when multiple application threads submit to the same core's ring.
-- **Assignment Strategy**:
-  1.  **Ideal**: Submission thread is on Core N -> Use Ring N (via TLS-cached `sched_getcpu()`, refreshed every 32 submissions).
-  2.  **Fallback**: `sched_getcpu()` unavailable -> Sticky assignment to Ring `(pthread_self() % ring_count)`.
+- **Ring Selection Modes** (`auraio_ring_select_t`):
+  - **ADAPTIVE** (default): Uses CPU-local ring normally. When the local ring is congested (>75% of in-flight limit), a two-gate check decides whether to spill: if the local ring's load is more than 2x the global average, the thread is an outlier and stays local for cache benefits. Otherwise, system-wide pressure is detected and a power-of-two random choice picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced.
+  - **CPU_LOCAL**: Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Fallback: `pthread_self() % ring_count`. Best for NUMA-sensitive workloads.
+  - **ROUND_ROBIN**: Always selects via `atomic_fetch_add(&next_ring) % ring_count`. Maximum single-thread scaling across all rings.
 
 ### 3. Adaptive Controller (`adaptive_controller_t`)
 A robust control system embedded within each ring that tunes `queue_depth` and batching behavior in real-time.

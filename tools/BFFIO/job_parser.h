@@ -2,7 +2,7 @@
 #define BFFIO_JOB_PARSER_H
 
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE
+#    define _GNU_SOURCE
 #endif
 
 #include <stdint.h>
@@ -11,48 +11,49 @@
 
 /* I/O pattern */
 typedef enum {
-    RW_READ,        /* rw=read       - sequential read */
-    RW_WRITE,       /* rw=write      - sequential write */
-    RW_RANDREAD,    /* rw=randread   - random read */
-    RW_RANDWRITE,   /* rw=randwrite  - random write */
-    RW_READWRITE,   /* rw=readwrite  - sequential mixed */
-    RW_RANDRW,      /* rw=randrw     - random mixed */
+    RW_READ,      /* rw=read       - sequential read */
+    RW_WRITE,     /* rw=write      - sequential write */
+    RW_RANDREAD,  /* rw=randread   - random read */
+    RW_RANDWRITE, /* rw=randwrite  - random write */
+    RW_READWRITE, /* rw=readwrite  - sequential mixed */
+    RW_RANDRW,    /* rw=randrw     - random mixed */
 } rw_pattern_t;
 
 /* Output format */
 typedef enum {
-    OUTPUT_NORMAL,  /* FIO-style text summary */
-    OUTPUT_JSON,    /* FIO-compatible JSON */
+    OUTPUT_NORMAL, /* FIO-style text summary */
+    OUTPUT_JSON,   /* FIO-compatible JSON */
 } output_format_t;
 
 /* Single job configuration */
 typedef struct {
-    char        name[128];
+    char name[128];
     rw_pattern_t rw;
-    bool        rw_set;             /* true if rw was explicitly set */
-    uint64_t    bs;                 /* block size in bytes (default 4096) */
-    uint64_t    size;               /* file size in bytes */
-    char        filename[PATH_MAX]; /* explicit file/device path */
-    char        directory[PATH_MAX];/* auto-create files here */
-    int         direct;             /* O_DIRECT (0 or 1) */
-    int         runtime_sec;        /* max runtime in seconds */
-    int         time_based;         /* run for fixed time */
-    int         ramp_time_sec;      /* warmup seconds (stats discarded) */
-    int         numjobs;            /* worker thread count */
-    int         iodepth;            /* max in-flight cap */
-    int         rwmixread;          /* read percentage for mixed (0-100) */
-    int         group_reporting;    /* aggregate stats across threads */
-    int         fsync_freq;         /* fsync every N writes (0=never) */
-    double      target_p99_ms;      /* P99 latency ceiling (0=disabled) */
+    bool rw_set;              /* true if rw was explicitly set */
+    uint64_t bs;              /* block size in bytes (default 4096) */
+    uint64_t size;            /* file size in bytes */
+    char filename[PATH_MAX];  /* explicit file/device path */
+    char directory[PATH_MAX]; /* auto-create files here */
+    int direct;               /* O_DIRECT (0 or 1) */
+    int runtime_sec;          /* max runtime in seconds */
+    int time_based;           /* run for fixed time */
+    int ramp_time_sec;        /* warmup seconds (stats discarded) */
+    int numjobs;              /* worker thread count */
+    int iodepth;              /* max in-flight cap */
+    int rwmixread;            /* read percentage for mixed (0-100) */
+    int group_reporting;      /* aggregate stats across threads */
+    int fsync_freq;           /* fsync every N writes (0=never) */
+    double target_p99_ms;     /* P99 latency ceiling (0=disabled) */
+    int ring_select;          /* ring selection mode (0=adaptive, 1=cpu_local, 2=round_robin) */
 } job_config_t;
 
 /* Top-level benchmark config */
 typedef struct {
-    job_config_t   *jobs;
-    int             num_jobs;
-    int             jobs_capacity;
+    job_config_t *jobs;
+    int num_jobs;
+    int jobs_capacity;
     output_format_t output_format;
-    char            output_file[PATH_MAX];
+    char output_file[PATH_MAX];
 } bench_config_t;
 
 /* Initialize job config with FIO-compatible defaults */

@@ -2,7 +2,7 @@
 
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -std=c11 -g -I../include -I../src
+CFLAGS = -Wall -Wextra -Wpedantic -std=c11 -g -I../include -I../src
 CXXFLAGS = -Wall -Wextra -Wshadow -Wpedantic -std=c++20 -g -I../include -fcoroutines
 LDFLAGS = -L../lib -lauraio -luring -lpthread
 RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
@@ -11,7 +11,7 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring test_stats
+TESTS = test_engine test_buffer test_ring test_stats test_ring_select
 CPP_TESTS = test_cpp
 
 all: $(TESTS)
@@ -50,6 +50,16 @@ test_cpp: test_cpp.cpp ../lib/libauraio.so
 
 cpp-test: test_cpp
 	./test_cpp
+
+# ============================================================================
+# Ring Selection Test Utility
+# ============================================================================
+
+test_ring_select: test_ring_select.c ../lib/libauraio.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+ring-select: test_ring_select
+	./test_ring_select
 
 # ============================================================================
 # Stress Test
@@ -161,8 +171,9 @@ valgrind-quick: $(TESTS)
 	@echo "Running quick valgrind tests..."
 	@for t in $(TESTS); do \
 		echo "=== $$t ==="; \
-		valgrind --leak-check=summary --error-exitcode=1 ./$$t 2>&1 | \
-			grep -E "(ERROR SUMMARY|definitely lost|indirectly lost)" || exit 1; \
+		valgrind --leak-check=summary --error-exitcode=1 ./$$t 2>&1; \
+		status=$$?; \
+		if [ $$status -ne 0 ]; then echo "FAIL: $$t (valgrind exit $$status)"; exit 1; fi; \
 	done
 	@echo "All quick valgrind tests passed!"
 
@@ -245,7 +256,7 @@ test_stats_asan: test_stats.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench test_ring_select $(TSAN_TESTS) $(ASAN_TESTS)
 
 # ============================================================================
 # Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)
@@ -261,7 +272,7 @@ deep-analysis-no-valgrind: perf_bench
 	./run_deep_analysis.sh --skip-valgrind
 
 .PHONY: all clean valgrind valgrind-quick tsan asan cpp-test stress stress-full \
-        bench bench-throughput bench-latency bench-scalability \
+        ring-select bench bench-throughput bench-latency bench-scalability \
         check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
         analyze analyze-quick analyze-full analyze-no-fio \
         deep-analysis deep-analysis-quick deep-analysis-no-valgrind

@@ -50,4 +50,9 @@ impl Stats {
     pub fn optimal_batch_size(&self) -> i32 {
         self.inner.optimal_batch_size
     }
+
+    /// Number of times ADAPTIVE mode spilled to a non-local ring
+    pub fn adaptive_spills(&self) -> u64 {
+        self.inner.adaptive_spills
+    }
 }

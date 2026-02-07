@@ -39,15 +39,15 @@
 #define AURAIO_VERSION_PATCH 1
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
-#define AURAIO_VERSION \
-  (AURAIO_VERSION_MAJOR * 10000 + AURAIO_VERSION_MINOR * 100 + AURAIO_VERSION_PATCH)
+#define AURAIO_VERSION                                                                             \
+    (AURAIO_VERSION_MAJOR * 10000 + AURAIO_VERSION_MINOR * 100 + AURAIO_VERSION_PATCH)
 
 /** Version as a string */
 #define AURAIO_VERSION_STRING "1.0.1"
 
 /* Ensure version components stay within packed integer limits */
 #if AURAIO_VERSION_MINOR > 99 || AURAIO_VERSION_PATCH > 99
-#  error "Version minor/patch must be 0-99 for packed AURAIO_VERSION integer"
+#    error "Version minor/patch must be 0-99 for packed AURAIO_VERSION integer"
 #endif
 
 /* ============================================================================
@@ -59,11 +59,11 @@
  */
 
 #if defined(AURAIO_SHARED_BUILD)
-#  define AURAIO_API __attribute__((visibility("default")))
+#    define AURAIO_API __attribute__((visibility("default")))
 #elif defined(AURAIO_STATIC_BUILD)
-#  define AURAIO_API
+#    define AURAIO_API
 #else
-#  define AURAIO_API
+#    define AURAIO_API
 #endif
 
 /**
@@ -73,9 +73,9 @@
  * Ignoring these return values is almost always a bug.
  */
 #if defined(__GNUC__) || defined(__clang__)
-#  define AURAIO_WARN_UNUSED __attribute__((warn_unused_result))
+#    define AURAIO_WARN_UNUSED __attribute__((warn_unused_result))
 #else
-#  define AURAIO_WARN_UNUSED
+#    define AURAIO_WARN_UNUSED
 #endif
 
 #include <stddef.h>
@@ -142,8 +142,7 @@ typedef struct auraio_request auraio_request_t;
  * - Callbacks should complete quickly to avoid blocking other completions
  * - The request handle (req) becomes invalid after the callback returns
  */
-typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result,
-                                  void *user_data);
+typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result, void *user_data);
 
 /**
  * Engine statistics
@@ -151,13 +150,15 @@ typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result,
  * Retrieved via auraio_get_stats() for monitoring and debugging.
  */
 typedef struct {
-  int64_t ops_completed;         /**< Total operations completed */
-  int64_t bytes_transferred;     /**< Total bytes read/written */
-  double current_throughput_bps; /**< Current throughput (bytes/sec) */
-  double p99_latency_ms;         /**< 99th percentile latency (ms) */
-  int current_in_flight;         /**< Current in-flight operations */
-  int optimal_in_flight;         /**< Tuned optimal in-flight limit */
-  int optimal_batch_size;        /**< Tuned optimal batch size */
+    int64_t ops_completed;         /**< Total operations completed */
+    int64_t bytes_transferred;     /**< Total bytes read/written */
+    double current_throughput_bps; /**< Current throughput (bytes/sec) */
+    double p99_latency_ms;         /**< 99th percentile latency (ms) */
+    int current_in_flight;         /**< Current in-flight operations */
+    int optimal_in_flight;         /**< Tuned optimal in-flight limit */
+    int optimal_batch_size;        /**< Tuned optimal batch size */
+    uint64_t adaptive_spills;      /**< ADAPTIVE mode: times a submission spilled to another ring */
+    uint32_t _reserved[4];         /**< Reserved for future use; must be zero */
 } auraio_stats_t;
 
 /**
@@ -167,25 +168,25 @@ typedef struct {
  * Retrieved via auraio_get_ring_stats().
  */
 typedef struct {
-    int64_t ops_completed;      /**< Total operations completed on this ring */
-    int64_t bytes_transferred;  /**< Total bytes transferred through this ring */
-    int pending_count;          /**< Current in-flight operations */
-    int in_flight_limit;        /**< Current AIMD-tuned in-flight limit */
-    int batch_threshold;        /**< Current AIMD-tuned batch threshold */
-    double p99_latency_ms;      /**< Current P99 latency for this ring (ms) */
-    double throughput_bps;      /**< Current throughput for this ring (bytes/sec) */
-    int aimd_phase;             /**< Current AIMD phase (see AURAIO_PHASE_* constants) */
-    int queue_depth;            /**< Maximum queue depth */
+    int64_t ops_completed;     /**< Total operations completed on this ring */
+    int64_t bytes_transferred; /**< Total bytes transferred through this ring */
+    int pending_count;         /**< Current in-flight operations */
+    int in_flight_limit;       /**< Current AIMD-tuned in-flight limit */
+    int batch_threshold;       /**< Current AIMD-tuned batch threshold */
+    double p99_latency_ms;     /**< Current P99 latency for this ring (ms) */
+    double throughput_bps;     /**< Current throughput for this ring (bytes/sec) */
+    int aimd_phase;            /**< Current AIMD phase (see AURAIO_PHASE_* constants) */
+    int queue_depth;           /**< Maximum queue depth */
     uint32_t _reserved[4];     /**< Reserved for future use; must be zero */
 } auraio_ring_stats_t;
 
 /** AIMD controller phase constants for auraio_ring_stats_t.aimd_phase */
-#define AURAIO_PHASE_BASELINE   0  /**< Collecting baseline latency */
-#define AURAIO_PHASE_PROBING    1  /**< Increasing in-flight limit */
-#define AURAIO_PHASE_STEADY     2  /**< Maintaining optimal config */
-#define AURAIO_PHASE_BACKOFF    3  /**< Reducing due to latency spike */
-#define AURAIO_PHASE_SETTLING   4  /**< Waiting for metrics to stabilize */
-#define AURAIO_PHASE_CONVERGED  5  /**< Tuning complete */
+#define AURAIO_PHASE_BASELINE 0  /**< Collecting baseline latency */
+#define AURAIO_PHASE_PROBING 1   /**< Increasing in-flight limit */
+#define AURAIO_PHASE_STEADY 2    /**< Maintaining optimal config */
+#define AURAIO_PHASE_BACKOFF 3   /**< Reducing due to latency spike */
+#define AURAIO_PHASE_SETTLING 4  /**< Waiting for metrics to stabilize */
+#define AURAIO_PHASE_CONVERGED 5 /**< Tuning complete */
 
 /**
  * Latency histogram snapshot
@@ -205,16 +206,16 @@ typedef struct {
  *
  * Retrieved via auraio_get_histogram().
  */
-#define AURAIO_HISTOGRAM_BUCKETS         200
-#define AURAIO_HISTOGRAM_BUCKET_WIDTH_US  50
+#define AURAIO_HISTOGRAM_BUCKETS 200
+#define AURAIO_HISTOGRAM_BUCKET_WIDTH_US 50
 
 typedef struct {
     uint32_t buckets[AURAIO_HISTOGRAM_BUCKETS]; /**< Latency frequency buckets */
-    uint32_t overflow;          /**< Count of operations exceeding max_tracked_us */
-    uint32_t total_count;       /**< Total samples in this snapshot */
-    int bucket_width_us;        /**< Width of each bucket in microseconds */
-    int max_tracked_us;         /**< Maximum tracked latency in microseconds */
-    uint32_t _reserved[2];     /**< Reserved for future use; must be zero */
+    uint32_t overflow;                          /**< Count of operations exceeding max_tracked_us */
+    uint32_t total_count;                       /**< Total samples in this snapshot */
+    int bucket_width_us;                        /**< Width of each bucket in microseconds */
+    int max_tracked_us;                         /**< Maximum tracked latency in microseconds */
+    uint32_t _reserved[2];                      /**< Reserved for future use; must be zero */
 } auraio_histogram_t;
 
 /**
@@ -226,8 +227,29 @@ typedef struct {
     size_t total_allocated_bytes; /**< Total bytes currently allocated from pool */
     size_t total_buffers;         /**< Total buffer count currently allocated */
     int shard_count;              /**< Number of pool shards */
-    uint32_t _reserved[4];       /**< Reserved for future use; must be zero */
+    uint32_t _reserved[4];        /**< Reserved for future use; must be zero */
 } auraio_buffer_stats_t;
+
+/**
+ * Ring selection mode
+ *
+ * Controls how submissions are distributed across io_uring rings.
+ */
+typedef enum {
+    AURAIO_SELECT_ADAPTIVE = 0, /**< CPU-local with power-of-two spilling (default).
+                                     Stays on the CPU-local ring when uncongested.
+                                     When local ring exceeds 75% of its in-flight limit
+                                     and load is within 2x of the global average (broad
+                                     pressure), spills to the lighter of two randomly
+                                     chosen non-local rings. */
+    AURAIO_SELECT_CPU_LOCAL,    /**< CPU-affinity only. Each thread submits to the
+                                     ring matching its current CPU (sched_getcpu).
+                                     Best cache locality and NUMA friendliness.
+                                     Single-threaded workloads use only one ring. */
+    AURAIO_SELECT_ROUND_ROBIN   /**< Atomic round-robin across all rings. Maximum
+                                     single-thread scaling. Best for benchmarks or
+                                     single-thread event loops. */
+} auraio_ring_select_t;
 
 /**
  * Engine configuration options
@@ -236,26 +258,29 @@ typedef struct {
  * Initialize with auraio_options_init() before modifying.
  */
 typedef struct {
-  size_t struct_size;        /**< Set by auraio_options_init(); for ABI forward-compatibility */
-  int queue_depth;           /**< Queue depth per ring (default: 256) */
-  int ring_count;            /**< Number of rings, 0 = auto (one per CPU) */
-  int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4) */
-  int min_in_flight;         /**< Minimum in-flight limit (default: 4) */
-  double max_p99_latency_ms; /**< Target max P99 latency, 0 = auto */
-  size_t buffer_alignment;   /**< Buffer alignment (default: system page size) */
-  bool disable_adaptive;     /**< Disable adaptive tuning */
+    size_t struct_size;        /**< Set by auraio_options_init(); for ABI forward-compatibility */
+    int queue_depth;           /**< Queue depth per ring (default: 256) */
+    int ring_count;            /**< Number of rings, 0 = auto (one per CPU) */
+    int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4) */
+    int min_in_flight;         /**< Minimum in-flight limit (default: 4) */
+    double max_p99_latency_ms; /**< Target max P99 latency, 0 = auto */
+    size_t buffer_alignment;   /**< Buffer alignment (default: system page size) */
+    bool disable_adaptive;     /**< Disable adaptive tuning */
 
-  /* Advanced io_uring features (Phase 5) */
-  bool enable_sqpoll;        /**< Enable SQPOLL mode (requires root/CAP_SYS_NICE) */
-  int sqpoll_idle_ms;        /**< SQPOLL idle timeout in ms (default: 1000) */
+    /* Advanced io_uring features (Phase 5) */
+    bool enable_sqpoll; /**< Enable SQPOLL mode (requires root/CAP_SYS_NICE) */
+    int sqpoll_idle_ms; /**< SQPOLL idle timeout in ms (default: 1000) */
+
+    /* Ring selection */
+    auraio_ring_select_t ring_select; /**< Ring selection mode (default: ADAPTIVE) */
 } auraio_options_t;
 
 /**
  * Fsync flags for auraio_fsync_ex()
  */
 typedef enum {
-  AURAIO_FSYNC_DEFAULT = 0,      /**< Full fsync (metadata + data) */
-  AURAIO_FSYNC_DATASYNC = 1,     /**< fdatasync (data only, skip metadata if possible) */
+    AURAIO_FSYNC_DEFAULT = 0,  /**< Full fsync (metadata + data) */
+    AURAIO_FSYNC_DATASYNC = 1, /**< fdatasync (data only, skip metadata if possible) */
 } auraio_fsync_flags_t;
 
 /* ============================================================================
@@ -267,8 +292,8 @@ typedef enum {
  * Buffer type indicator
  */
 typedef enum {
-  AURAIO_BUF_UNREGISTERED = 0, /**< Regular user-provided buffer */
-  AURAIO_BUF_REGISTERED = 1    /**< Pre-registered buffer (zero-copy) */
+    AURAIO_BUF_UNREGISTERED = 0, /**< Regular user-provided buffer */
+    AURAIO_BUF_REGISTERED = 1    /**< Pre-registered buffer (zero-copy) */
 } auraio_buf_type_t;
 
 /**
@@ -292,14 +317,14 @@ typedef enum {
  * @endcode
  */
 typedef struct {
-  auraio_buf_type_t type; /**< Buffer type discriminator */
-  union {
-    void *ptr; /**< Direct buffer pointer (AURAIO_BUF_UNREGISTERED) */
-    struct {
-      int index;      /**< Registered buffer index */
-      size_t offset;  /**< Offset within registered buffer */
-    } fixed;          /**< Registered buffer reference (AURAIO_BUF_REGISTERED) */
-  } u;
+    auraio_buf_type_t type; /**< Buffer type discriminator */
+    union {
+        void *ptr; /**< Direct buffer pointer (AURAIO_BUF_UNREGISTERED) */
+        struct {
+            int index;     /**< Registered buffer index */
+            size_t offset; /**< Offset within registered buffer */
+        } fixed;           /**< Registered buffer reference (AURAIO_BUF_REGISTERED) */
+    } u;
 } auraio_buf_t;
 
 /**
@@ -309,11 +334,11 @@ typedef struct {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf(void *ptr) {
-  auraio_buf_t buf;
-  memset(&buf, 0, sizeof(buf));
-  buf.type = AURAIO_BUF_UNREGISTERED;
-  buf.u.ptr = ptr;
-  return buf;
+    auraio_buf_t buf;
+    memset(&buf, 0, sizeof(buf));
+    buf.type = AURAIO_BUF_UNREGISTERED;
+    buf.u.ptr = ptr;
+    return buf;
 }
 
 /**
@@ -326,17 +351,17 @@ static inline auraio_buf_t auraio_buf(void *ptr) {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
-  auraio_buf_t buf;
-  memset(&buf, 0, sizeof(buf));
-  if (index < 0) {
-    /* Return zeroed AURAIO_BUF_UNREGISTERED buffer with ptr=NULL.
-     * Submitting this to an I/O function will fail with EINVAL. */
+    auraio_buf_t buf;
+    memset(&buf, 0, sizeof(buf));
+    if (index < 0) {
+        /* Return zeroed AURAIO_BUF_UNREGISTERED buffer with ptr=NULL.
+         * Submitting this to an I/O function will fail with EINVAL. */
+        return buf;
+    }
+    buf.type = AURAIO_BUF_REGISTERED;
+    buf.u.fixed.index = index;
+    buf.u.fixed.offset = offset;
     return buf;
-  }
-  buf.type = AURAIO_BUF_REGISTERED;
-  buf.u.fixed.index = index;
-  buf.u.fixed.offset = offset;
-  return buf;
 }
 
 /**
@@ -348,7 +373,7 @@ static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf_fixed_idx(int index) {
-  return auraio_buf_fixed(index, 0);
+    return auraio_buf_fixed(index, 0);
 }
 
 /* ============================================================================
@@ -386,7 +411,8 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_engine_t *auraio_create(void);
  * @param options Configuration options (initialize with auraio_options_init first)
  * @return Engine handle, or NULL on failure (errno set)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_engine_t *auraio_create_with_options(const auraio_options_t *options);
+AURAIO_API AURAIO_WARN_UNUSED auraio_engine_t *
+auraio_create_with_options(const auraio_options_t *options);
 
 /**
  * Destroy an async I/O engine
@@ -451,9 +477,9 @@ AURAIO_API void auraio_destroy(auraio_engine_t *engine);
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
-                               size_t len, off_t offset,
-                               auraio_callback_t callback, void *user_data);
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *
+auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf, size_t len, off_t offset,
+            auraio_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous write operation
@@ -480,9 +506,9 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_read(auraio_engine_t *eng
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf,
-                                size_t len, off_t offset,
-                                auraio_callback_t callback, void *user_data);
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *
+auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf, size_t len, off_t offset,
+             auraio_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous fsync operation
@@ -496,8 +522,8 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_write(auraio_engine_t *en
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
-                                auraio_callback_t callback, void *user_data);
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *
+auraio_fsync(auraio_engine_t *engine, int fd, auraio_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous fsync with flags
@@ -511,8 +537,9 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync(auraio_engine_t *en
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
 AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd,
-                                   auraio_fsync_flags_t flags,
-                                   auraio_callback_t callback, void *user_data);
+                                                                auraio_fsync_flags_t flags,
+                                                                auraio_callback_t callback,
+                                                                void *user_data);
 
 /* ============================================================================
  * Vectored I/O Operations
@@ -535,10 +562,9 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_fsync_ex(auraio_engine_t 
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd,
-                                const struct iovec *iov, int iovcnt,
-                                off_t offset, auraio_callback_t callback,
-                                void *user_data);
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *
+auraio_readv(auraio_engine_t *engine, int fd, const struct iovec *iov, int iovcnt, off_t offset,
+             auraio_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous vectored write operation
@@ -556,10 +582,9 @@ AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_readv(auraio_engine_t *en
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd,
-                                 const struct iovec *iov, int iovcnt,
-                                 off_t offset, auraio_callback_t callback,
-                                 void *user_data);
+AURAIO_API AURAIO_WARN_UNUSED auraio_request_t *
+auraio_writev(auraio_engine_t *engine, int fd, const struct iovec *iov, int iovcnt, off_t offset,
+              auraio_callback_t callback, void *user_data);
 
 /* ============================================================================
  * Cancellation
@@ -772,7 +797,8 @@ AURAIO_API void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t si
  * @param count  Number of buffers
  * @return 0 on success, -1 on error (errno set)
  */
-AURAIO_API AURAIO_WARN_UNUSED int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, int count);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_register_buffers(auraio_engine_t *engine,
+                                                          const struct iovec *iovs, int count);
 
 /**
  * Unregister previously registered buffers
@@ -806,7 +832,8 @@ AURAIO_API int auraio_unregister_buffers(auraio_engine_t *engine);
  * @param count  Number of file descriptors
  * @return 0 on success, -1 on error (errno set)
  */
-AURAIO_API AURAIO_WARN_UNUSED int auraio_register_files(auraio_engine_t *engine, const int *fds, int count);
+AURAIO_API AURAIO_WARN_UNUSED int auraio_register_files(auraio_engine_t *engine, const int *fds,
+                                                        int count);
 
 /**
  * Update a registered file descriptor
@@ -858,7 +885,7 @@ AURAIO_API void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *
  * @param engine Engine handle
  * @return Number of rings, or 0 if engine is NULL
  */
-AURAIO_API int auraio_get_ring_count(auraio_engine_t *engine);
+AURAIO_API int auraio_get_ring_count(const auraio_engine_t *engine);
 
 /**
  * Get statistics for a specific ring
@@ -872,8 +899,8 @@ AURAIO_API int auraio_get_ring_count(auraio_engine_t *engine);
  * @param stats    Output statistics structure
  * @return 0 on success, -1 on error (NULL engine/stats or invalid ring_idx)
  */
-AURAIO_API int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
-                                      auraio_ring_stats_t *stats);
+AURAIO_API int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx,
+                                     auraio_ring_stats_t *stats);
 
 /**
  * Get a latency histogram snapshot for a specific ring
@@ -890,8 +917,8 @@ AURAIO_API int auraio_get_ring_stats(auraio_engine_t *engine, int ring_idx,
  * @param hist     Output histogram structure
  * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
  */
-AURAIO_API int auraio_get_histogram(auraio_engine_t *engine, int ring_idx,
-                                     auraio_histogram_t *hist);
+AURAIO_API int auraio_get_histogram(const auraio_engine_t *engine, int ring_idx,
+                                    auraio_histogram_t *hist);
 
 /**
  * Get buffer pool statistics
@@ -903,8 +930,7 @@ AURAIO_API int auraio_get_histogram(auraio_engine_t *engine, int ring_idx,
  * @param stats  Output statistics structure
  * @return 0 on success, -1 on error (NULL engine or stats)
  */
-AURAIO_API int auraio_get_buffer_stats(auraio_engine_t *engine,
-                                        auraio_buffer_stats_t *stats);
+AURAIO_API int auraio_get_buffer_stats(const auraio_engine_t *engine, auraio_buffer_stats_t *stats);
 
 /**
  * Get human-readable name for an AIMD phase value

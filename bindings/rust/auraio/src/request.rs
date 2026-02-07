@@ -40,7 +40,7 @@ use std::os::unix::io::RawFd;
 /// })?;
 ///
 /// // Safe: handle is valid here, before callback runs
-/// if handle.is_pending() {
+/// if unsafe { handle.is_pending() } {
 ///     engine.cancel(&handle)?;
 /// }
 ///
@@ -63,7 +63,7 @@ use std::os::unix::io::RawFd;
 /// # let fd = file.as_raw_fd();
 /// let handle = engine.read(fd, (&buf).into(), 4096, 0, |_| {})?;
 /// engine.wait(-1)?;  // Callback executes here
-/// handle.is_pending();  // ❌ UNDEFINED BEHAVIOR - handle is dangling!
+/// unsafe { handle.is_pending() };  // ❌ UNDEFINED BEHAVIOR - handle is dangling!
 /// # Ok(())
 /// # }
 /// ```
@@ -86,12 +86,24 @@ impl RequestHandle {
     ///
     /// Returns `true` if the operation is still in-flight, `false` if it
     /// has completed or was cancelled.
-    pub fn is_pending(&self) -> bool {
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked). See the struct-level docs for
+    /// the validity timeline.
+    pub unsafe fn is_pending(&self) -> bool {
         unsafe { auraio_sys::auraio_request_pending(self.inner) }
     }
 
     /// Get the file descriptor associated with this request
-    pub fn fd(&self) -> RawFd {
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked). See the struct-level docs for
+    /// the validity timeline.
+    pub unsafe fn fd(&self) -> RawFd {
         unsafe { auraio_sys::auraio_request_fd(self.inner) }
     }
 

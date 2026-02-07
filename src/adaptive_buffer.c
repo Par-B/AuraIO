@@ -63,11 +63,11 @@ static inline int size_to_class(size_t size) {
     /* Fast path: cascade covers classes 0-6 (4KB to 256KB).
      * These are the typical I/O buffer sizes. Ordered by expected
      * frequency: 4K (most common), then 64K, 8K, etc. */
-    if (size <= 4096)   return 0;
-    if (size <= 8192)   return 1;
-    if (size <= 16384)  return 2;
-    if (size <= 32768)  return 3;
-    if (size <= 65536)  return 4;
+    if (size <= 4096) return 0;
+    if (size <= 8192) return 1;
+    if (size <= 16384) return 2;
+    if (size <= 32768) return 3;
+    if (size <= 65536) return 4;
     if (size <= 131072) return 5;
     if (size <= 262144) return 6;
 
@@ -77,6 +77,7 @@ static inline int size_to_class(size_t size) {
     int highest_bit = (int)(sizeof(unsigned long) * 8) - leading_zeros;
     int class_idx = highest_bit - 12;
 
+    if (class_idx < 0) return 0;
     if (class_idx >= BUFFER_SIZE_CLASSES) {
         return BUFFER_SIZE_CLASSES - 1;
     }
@@ -216,6 +217,14 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
         cache->next = old_head;
     } while (!atomic_compare_exchange_weak(&pool->thread_caches, &old_head, cache));
 
+    /* Re-check liveness after registration. If pool was destroyed between
+     * our first check and the CAS, destroy already walked the list and
+     * missed our cache — it would leak. Detect and clean up. */
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        tls_cache = NULL;
+        return NULL;
+    }
+
     tls_cache = cache;
     return cache;
 }
@@ -240,7 +249,7 @@ static int cache_refill(buffer_pool_t *pool, thread_cache_t *cache, int class_id
     while (transferred < THREAD_CACHE_BATCH_SIZE && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
         buffer_slot_t *slot = shard->size_buckets[class_idx];
         if (!slot) {
-            break;  /* Shard empty for this class */
+            break; /* Shard empty for this class */
         }
 
         /* Pop from shard */
@@ -274,7 +283,8 @@ static int cache_refill(buffer_pool_t *pool, thread_cache_t *cache, int class_id
  * @param bucket_size Size of buffers in this class
  * @return Number of buffers transferred (negative means buffers were freed)
  */
-static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx, size_t bucket_size) {
+static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx,
+                       size_t bucket_size) {
     buffer_shard_t *shard = &pool->shards[cache->shard_id];
     int transferred = 0;
 
@@ -488,8 +498,8 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
 
     /* Slow path: shard also empty, or no thread cache */
     /* Pick a shard - use cache's shard or round-robin for no-cache case */
-    int shard_id = cache ? cache->shard_id :
-                   (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
+    int shard_id =
+        cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
     buffer_shard_t *shard = &pool->shards[shard_id];
 
     pthread_mutex_lock(&shard->lock);
@@ -516,7 +526,7 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     void *buf = NULL;
     int ret = posix_memalign(&buf, pool->alignment, bucket_size);
     if (ret != 0) {
-        errno = ret;  /* posix_memalign returns error code, not via errno */
+        errno = ret; /* posix_memalign returns error code, not via errno */
         return NULL;
     }
 
@@ -553,8 +563,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     }
 
     /* Slow path: no thread cache or flush failed, go directly to shard */
-    int shard_id = cache ? cache->shard_id :
-                   (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
+    int shard_id =
+        cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
     buffer_shard_t *shard = &pool->shards[shard_id];
 
     pthread_mutex_lock(&shard->lock);

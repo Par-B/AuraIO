@@ -9,6 +9,14 @@ use std::ptr::NonNull;
 /// Automatically returned to the pool when dropped.
 /// Provides page-aligned memory suitable for O_DIRECT I/O.
 ///
+/// # Lifetime Contract
+///
+/// The `Buffer` must not outlive the `Engine` that allocated it.
+/// Dropping a `Buffer` after its `Engine` has been destroyed is
+/// undefined behavior (the engine pointer stored internally would
+/// be dangling). In practice, keep the `Engine` alive for at least
+/// as long as any `Buffer` allocated from it.
+///
 /// # Example
 ///
 /// ```no_run
@@ -111,6 +119,14 @@ impl AsMut<[u8]> for Buffer {
 /// - A registered buffer by index
 ///
 /// This is a small value type that can be copied cheaply.
+///
+/// # Lifetime Warning
+///
+/// `BufferRef` is `Copy` and carries no lifetime parameter, so the
+/// compiler cannot enforce that the referenced memory outlives the
+/// I/O operation. The caller must ensure the underlying buffer
+/// remains valid and exclusively borrowed until the completion
+/// callback fires. This matches the C API's ownership model.
 #[derive(Clone, Copy)]
 pub struct BufferRef {
     inner: auraio_sys::auraio_buf_t,

@@ -18,12 +18,13 @@
 static int test_count = 0;
 
 #define TEST(name) static void test_##name(void)
-#define RUN_TEST(name) do { \
-    printf("  %-45s", #name); \
-    test_##name(); \
-    printf(" OK\n"); \
-    test_count++; \
-} while(0)
+#define RUN_TEST(name)            \
+    do {                          \
+        printf("  %-45s", #name); \
+        test_##name();            \
+        printf(" OK\n");          \
+        test_count++;             \
+    } while (0)
 
 /* ============================================================================
  * Helpers for I/O tests
@@ -378,8 +379,8 @@ TEST(aggregate_stats_sanity) {
     /* Submit a single I/O */
     void *buf = auraio_buffer_alloc(engine, 4096);
     callback_called = 0;
-    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf),
-                                         4096, 0, test_callback, NULL);
+    auraio_request_t *req =
+        auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
     auraio_wait(engine, 1000);
     assert(callback_called == 1);
@@ -423,8 +424,8 @@ TEST(ring_stats_after_io) {
     /* Submit and complete a read */
     void *buf = auraio_buffer_alloc(engine, 4096);
     callback_called = 0;
-    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf),
-                                         4096, 0, test_callback, NULL);
+    auraio_request_t *req =
+        auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
     auraio_wait(engine, 1000);
     assert(callback_called == 1);
@@ -455,8 +456,8 @@ TEST(histogram_after_io) {
     for (int i = 0; i < 16; i++) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
-        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf),
-                                             4096, 0, test_callback, NULL);
+        auraio_request_t *req =
+            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
         assert(req != NULL);
         auraio_wait(engine, 1000);
         assert(callback_called == 1);
@@ -505,8 +506,8 @@ TEST(aggregate_stats_match_ring_stats) {
     for (int i = 0; i < 4; i++) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
-        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf),
-                                             4096, 0, test_callback, NULL);
+        auraio_request_t *req =
+            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
         assert(req != NULL);
         auraio_wait(engine, 1000);
         assert(callback_called == 1);
@@ -532,6 +533,100 @@ TEST(aggregate_stats_match_ring_stats) {
     auraio_buffer_free(engine, buf, 4096);
     auraio_destroy(engine);
     io_teardown();
+}
+
+/* ============================================================================
+ * Ring Selection Tests
+ * ============================================================================ */
+
+TEST(ring_select_options_default) {
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    assert(opts.ring_select == AURAIO_SELECT_ADAPTIVE);
+}
+
+TEST(ring_select_round_robin) {
+    /* Round-robin mode should distribute ops across all rings */
+    io_setup();
+
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    opts.ring_count = 4;
+    opts.queue_depth = 64;
+    opts.ring_select = AURAIO_SELECT_ROUND_ROBIN;
+    opts.disable_adaptive = true;
+
+    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    assert(engine != NULL);
+
+    /* Submit enough ops from a single thread to hit all 4 rings */
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    for (int i = 0; i < 40; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        auraio_request_t *req =
+            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        auraio_wait(engine, 1000);
+    }
+
+    /* Verify all 4 rings received some operations */
+    int rings_used = 0;
+    for (int i = 0; i < 4; i++) {
+        auraio_ring_stats_t rs;
+        auraio_get_ring_stats(engine, i, &rs);
+        if (rs.ops_completed > 0) rings_used++;
+    }
+    assert(rings_used == 4);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    io_teardown();
+}
+
+TEST(ring_select_cpu_local) {
+    /* CPU_LOCAL mode from a single thread should hit only one ring */
+    io_setup();
+
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    opts.ring_count = 4;
+    opts.queue_depth = 64;
+    opts.ring_select = AURAIO_SELECT_CPU_LOCAL;
+    opts.disable_adaptive = true;
+
+    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    assert(engine != NULL);
+
+    void *buf = auraio_buffer_alloc(engine, 4096);
+    for (int i = 0; i < 20; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        auraio_request_t *req =
+            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        auraio_wait(engine, 1000);
+    }
+
+    /* Single thread + CPU_LOCAL = exactly 1 ring should have all ops */
+    int rings_used = 0;
+    for (int i = 0; i < 4; i++) {
+        auraio_ring_stats_t rs;
+        auraio_get_ring_stats(engine, i, &rs);
+        if (rs.ops_completed > 0) rings_used++;
+    }
+    assert(rings_used == 1);
+
+    auraio_buffer_free(engine, buf, 4096);
+    auraio_destroy(engine);
+    io_teardown();
+}
+
+TEST(ring_select_enum_values) {
+    /* Verify enum constants have expected values */
+    assert(AURAIO_SELECT_ADAPTIVE == 0);
+    assert(AURAIO_SELECT_CPU_LOCAL == 1);
+    assert(AURAIO_SELECT_ROUND_ROBIN == 2);
 }
 
 /* ============================================================================
@@ -582,11 +677,9 @@ TEST(concurrent_stats_and_io) {
     assert(engine != NULL);
 
     /* Start stats reader thread */
-    struct stats_reader_ctx ctx = {
-        .engine = engine,
-        .stop = ATOMIC_VAR_INIT(0),
-        .reads_done = ATOMIC_VAR_INIT(0)
-    };
+    struct stats_reader_ctx ctx = { .engine = engine,
+                                    .stop = ATOMIC_VAR_INIT(0),
+                                    .reads_done = ATOMIC_VAR_INIT(0) };
     pthread_t reader;
     int rc = pthread_create(&reader, NULL, stats_reader_thread, &ctx);
     assert(rc == 0);
@@ -599,12 +692,12 @@ TEST(concurrent_stats_and_io) {
     for (int i = 0; i < 64; i++) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
-        auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf),
-                                             4096, 0, test_callback, NULL);
+        auraio_request_t *req =
+            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
         assert(req != NULL);
         auraio_wait(engine, 1000);
         assert(callback_called == 1);
-        if (i % 8 == 0) usleep(100);  /* Yield to reader thread */
+        if (i % 8 == 0) usleep(100); /* Yield to reader thread */
     }
 
     /* Stop reader and verify it ran */
@@ -664,6 +757,12 @@ int main(void) {
 
     /* Concurrency */
     RUN_TEST(concurrent_stats_and_io);
+
+    /* Ring selection */
+    RUN_TEST(ring_select_options_default);
+    RUN_TEST(ring_select_enum_values);
+    RUN_TEST(ring_select_round_robin);
+    RUN_TEST(ring_select_cpu_local);
 
     printf("\n  All %d tests passed!\n\n", test_count);
     return 0;

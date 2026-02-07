@@ -57,12 +57,11 @@ namespace auraio {
  * }
  * @endcode
  */
-template<typename T>
-class Task {
-public:
+template <typename T> class Task {
+  public:
     struct promise_type {
         std::variant<std::monostate, T, std::exception_ptr> result;
-        std::coroutine_handle<> continuation_;  /**< Caller to resume on completion */
+        std::coroutine_handle<> continuation_; /**< Caller to resume on completion */
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -82,23 +81,17 @@ public:
         };
         FinalAwaiter final_suspend() noexcept { return {}; }
 
-        void return_value(T value) {
-            result = std::move(value);
-        }
+        void return_value(T value) { result = std::move(value); }
 
-        void unhandled_exception() {
-            result = std::current_exception();
-        }
+        void unhandled_exception() { result = std::current_exception(); }
     };
 
     Task() = default;
     explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) {}
 
-    Task(Task&& other) noexcept : handle_(other.handle_) {
-        other.handle_ = nullptr;
-    }
+    Task(Task &&other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
 
-    Task& operator=(Task&& other) noexcept {
+    Task &operator=(Task &&other) noexcept {
         if (this != &other) {
             if (handle_) handle_.destroy();
             handle_ = other.handle_;
@@ -112,8 +105,8 @@ public:
     }
 
     // Non-copyable
-    Task(const Task&) = delete;
-    Task& operator=(const Task&) = delete;
+    Task(const Task &) = delete;
+    Task &operator=(const Task &) = delete;
 
     /**
      * Resume the coroutine
@@ -130,13 +123,16 @@ public:
     /**
      * Check if coroutine is done
      */
-    [[nodiscard]] bool done() const noexcept {
-        return !handle_ || handle_.done();
-    }
+    [[nodiscard]] bool done() const noexcept { return !handle_ || handle_.done(); }
 
     /**
      * Get the result (after coroutine completes)
-     * @return The value produced by co_return
+     *
+     * This is a destructive operation: the result is moved out and
+     * subsequent calls will throw std::logic_error("Task result already consumed").
+     *
+     * @return The value produced by co_return (moved)
+     * @throws std::logic_error if the task is not complete or result was already consumed
      * @throws Any exception that was thrown in the coroutine
      */
     T get() {
@@ -144,7 +140,7 @@ public:
             throw std::logic_error("Task not complete");
         }
 
-        auto& result = handle_.promise().result;
+        auto &result = handle_.promise().result;
         if (std::holds_alternative<std::exception_ptr>(result)) {
             auto ex = std::get<std::exception_ptr>(result);
             result = std::monostate{};
@@ -176,7 +172,7 @@ public:
             }
 
             T await_resume() {
-                auto& result = handle.promise().result;
+                auto &result = handle.promise().result;
                 if (std::holds_alternative<std::exception_ptr>(result)) {
                     auto ex = std::get<std::exception_ptr>(result);
                     result = std::monostate{};
@@ -193,19 +189,18 @@ public:
         return Awaiter{handle_};
     }
 
-private:
+  private:
     std::coroutine_handle<promise_type> handle_;
 };
 
 /**
  * Specialization for void tasks
  */
-template<>
-class Task<void> {
-public:
+template <> class Task<void> {
+  public:
     struct promise_type {
         std::exception_ptr exception;
-        std::coroutine_handle<> continuation_;  /**< Caller to resume on completion */
+        std::coroutine_handle<> continuation_; /**< Caller to resume on completion */
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -227,19 +222,15 @@ public:
 
         void return_void() {}
 
-        void unhandled_exception() {
-            exception = std::current_exception();
-        }
+        void unhandled_exception() { exception = std::current_exception(); }
     };
 
     Task() = default;
     explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) {}
 
-    Task(Task&& other) noexcept : handle_(other.handle_) {
-        other.handle_ = nullptr;
-    }
+    Task(Task &&other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
 
-    Task& operator=(Task&& other) noexcept {
+    Task &operator=(Task &&other) noexcept {
         if (this != &other) {
             if (handle_) handle_.destroy();
             handle_ = other.handle_;
@@ -252,8 +243,8 @@ public:
         if (handle_) handle_.destroy();
     }
 
-    Task(const Task&) = delete;
-    Task& operator=(const Task&) = delete;
+    Task(const Task &) = delete;
+    Task &operator=(const Task &) = delete;
 
     bool resume() {
         if (handle_ && !handle_.done()) {
@@ -263,9 +254,7 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool done() const noexcept {
-        return !handle_ || handle_.done();
-    }
+    [[nodiscard]] bool done() const noexcept { return !handle_ || handle_.done(); }
 
     void get() {
         if (!handle_ || !handle_.done()) {
@@ -303,7 +292,7 @@ public:
         return Awaiter{handle_};
     }
 
-private:
+  private:
     std::coroutine_handle<promise_type> handle_;
 };
 
@@ -313,15 +302,9 @@ private:
  * Returned by Engine::async_read, async_write, async_fsync.
  */
 class IoAwaitable {
-public:
-    IoAwaitable(Engine& engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write)
-        : engine_(engine)
-        , fd_(fd)
-        , buf_(buf)
-        , len_(len)
-        , offset_(offset)
-        , is_write_(is_write)
-    {}
+  public:
+    IoAwaitable(Engine &engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write)
+        : engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write) {}
 
     bool await_ready() const noexcept { return false; }
 
@@ -334,8 +317,8 @@ public:
         return result_;
     }
 
-private:
-    Engine& engine_;
+  private:
+    Engine &engine_;
     int fd_;
     BufferRef buf_;
     size_t len_;
@@ -348,12 +331,9 @@ private:
  * Awaitable for async fsync operations
  */
 class FsyncAwaitable {
-public:
-    FsyncAwaitable(Engine& engine, int fd, bool datasync = false)
-        : engine_(engine)
-        , fd_(fd)
-        , datasync_(datasync)
-    {}
+  public:
+    FsyncAwaitable(Engine &engine, int fd, bool datasync = false)
+        : engine_(engine), fd_(fd), datasync_(datasync) {}
 
     bool await_ready() const noexcept { return false; }
 
@@ -365,8 +345,8 @@ public:
         }
     }
 
-private:
-    Engine& engine_;
+  private:
+    Engine &engine_;
     int fd_;
     bool datasync_;
     ssize_t result_ = 0;
@@ -383,17 +363,18 @@ namespace auraio {
 inline void IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
         if (is_write_) {
-            (void)engine_.write(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
-                result_ = result;
-                handle.resume();
-            });
+            (void)engine_.write(fd_, buf_, len_, offset_,
+                                [this, handle](Request &, ssize_t result) {
+                                    result_ = result;
+                                    handle.resume();
+                                });
         } else {
-            (void)engine_.read(fd_, buf_, len_, offset_, [this, handle](Request&, ssize_t result) {
+            (void)engine_.read(fd_, buf_, len_, offset_, [this, handle](Request &, ssize_t result) {
                 result_ = result;
                 handle.resume();
             });
         }
-    } catch (const Error& e) {
+    } catch (const Error &e) {
         result_ = -e.code();
         handle.resume();
     }
@@ -402,17 +383,17 @@ inline void IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
 inline void FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
     try {
         if (datasync_) {
-            (void)engine_.fdatasync(fd_, [this, handle](Request&, ssize_t result) {
+            (void)engine_.fdatasync(fd_, [this, handle](Request &, ssize_t result) {
                 result_ = result;
                 handle.resume();
             });
         } else {
-            (void)engine_.fsync(fd_, [this, handle](Request&, ssize_t result) {
+            (void)engine_.fsync(fd_, [this, handle](Request &, ssize_t result) {
                 result_ = result;
                 handle.resume();
             });
         }
-    } catch (const Error& e) {
+    } catch (const Error &e) {
         result_ = -e.code();
         handle.resume();
     }
