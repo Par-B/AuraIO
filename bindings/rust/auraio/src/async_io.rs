@@ -134,6 +134,12 @@ pub trait AsyncEngine {
     ///
     /// A Future that resolves to `Ok(bytes_read)` or `Err(error)`.
     ///
+    /// # Safety Contract
+    ///
+    /// The buffer must remain valid and exclusively borrowed until the
+    /// Future resolves. Dropping the Future does **not** cancel the kernel
+    /// I/O — see [`IoFuture`] cancellation docs.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -160,6 +166,11 @@ pub trait AsyncEngine {
     /// # Returns
     ///
     /// A Future that resolves to `Ok(bytes_written)` or `Err(error)`.
+    ///
+    /// # Safety Contract
+    ///
+    /// The buffer must remain valid until the Future resolves. Dropping
+    /// the Future does **not** cancel the kernel I/O — see [`IoFuture`].
     fn async_write(
         &self,
         fd: RawFd,

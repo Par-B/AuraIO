@@ -94,7 +94,12 @@ template <typename T> class Task {
 
     Task &operator=(Task &&other) noexcept {
         if (this != &other) {
-            if (handle_) handle_.destroy();
+            if (handle_) {
+                if (!handle_.done()) {
+                    std::terminate();
+                }
+                handle_.destroy();
+            }
             handle_ = other.handle_;
             other.handle_ = nullptr;
         }
@@ -240,7 +245,12 @@ template <> class Task<void> {
 
     Task &operator=(Task &&other) noexcept {
         if (this != &other) {
-            if (handle_) handle_.destroy();
+            if (handle_) {
+                if (!handle_.done()) {
+                    std::terminate();
+                }
+                handle_.destroy();
+            }
             handle_ = other.handle_;
             other.handle_ = nullptr;
         }
@@ -327,9 +337,10 @@ class IoAwaitable {
 
     ssize_t await_resume() {
         if (result_ < 0) {
-            // Kernel error codes are small positive integers (1-4095); clamp to avoid
-            // signed overflow on negation and truncation on cast to int.
-            int err = (-result_ > 0 && -result_ <= 4095) ? static_cast<int>(-result_) : EIO;
+            // Cast to unsigned before negating to avoid signed overflow UB on SSIZE_MIN.
+            // Kernel error codes are small positive integers (1-4095).
+            auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+            int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
             throw Error(err, is_write_ ? "async_write" : "async_read");
         }
         return result_;
@@ -363,7 +374,8 @@ class FsyncAwaitable {
 
     void await_resume() {
         if (result_ < 0) {
-            int err = (-result_ > 0 && -result_ <= 4095) ? static_cast<int>(-result_) : EIO;
+            auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+            int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
             throw Error(err, datasync_ ? "async_fdatasync" : "async_fsync");
         }
     }

@@ -223,12 +223,24 @@ impl BufferRef {
     }
 }
 
+/// Convenience conversion for passing a `Buffer` to I/O methods.
+///
+/// # Safety Contract
+///
+/// The resulting `BufferRef` is `Copy` and carries no lifetime, so the
+/// compiler cannot prevent aliased or overlapping I/O submissions to the
+/// same buffer. The caller must ensure:
+/// - The `Buffer` remains alive until the I/O operation completes.
+/// - Only one in-flight I/O operation uses this buffer at a time.
+///   Submitting concurrent read+write (or read+read) to the same buffer
+///   is a data race.
 impl From<&Buffer> for BufferRef {
     fn from(buf: &Buffer) -> Self {
         buf.to_ref()
     }
 }
 
+/// See [`From<&Buffer>`](#impl-From<%26Buffer>-for-BufferRef) for safety contract.
 impl From<&mut Buffer> for BufferRef {
     fn from(buf: &mut Buffer) -> Self {
         buf.to_ref()

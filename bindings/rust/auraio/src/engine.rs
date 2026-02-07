@@ -65,23 +65,26 @@ impl Engine {
     /// Create a new engine with default options
     pub fn new() -> Result<Self> {
         let handle = unsafe { auraio_sys::auraio_create() };
+        // Capture errno immediately before any other operation can clobber it
+        let err = io::Error::last_os_error();
         NonNull::new(handle)
             .map(|h| Self {
                 handle: h,
                 poll_lock: Mutex::new(()),
             })
-            .ok_or_else(|| Error::EngineCreate(io::Error::last_os_error()))
+            .ok_or(Error::EngineCreate(err))
     }
 
     /// Create a new engine with custom options
     pub fn with_options(options: &Options) -> Result<Self> {
         let handle = unsafe { auraio_sys::auraio_create_with_options(options.as_ptr()) };
+        let err = io::Error::last_os_error();
         NonNull::new(handle)
             .map(|h| Self {
                 handle: h,
                 poll_lock: Mutex::new(()),
             })
-            .ok_or_else(|| Error::EngineCreate(io::Error::last_os_error()))
+            .ok_or(Error::EngineCreate(err))
     }
 
     /// Get the raw engine handle (for advanced use)
@@ -98,9 +101,10 @@ impl Engine {
     /// Returns page-aligned memory suitable for O_DIRECT I/O.
     pub fn allocate_buffer(&self, size: usize) -> Result<Buffer> {
         let ptr = unsafe { auraio_sys::auraio_buffer_alloc(self.handle.as_ptr(), size) };
+        let err = io::Error::last_os_error();
         NonNull::new(ptr as *mut u8)
             .map(|p| Buffer::new(self.handle.as_ptr(), p, size))
-            .ok_or_else(|| Error::BufferAlloc(io::Error::last_os_error()))
+            .ok_or(Error::BufferAlloc(err))
     }
 
     /// Register buffers with the kernel for zero-copy I/O
@@ -113,6 +117,9 @@ impl Engine {
     /// until `unregister_buffers()` is called. The borrow checker cannot
     /// enforce this lifetime across the registration boundary.
     pub unsafe fn register_buffers(&self, buffers: &[&mut [u8]]) -> Result<()> {
+        if buffers.len() > i32::MAX as usize {
+            return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
+        }
         let iovecs: Vec<libc::iovec> = buffers
             .iter()
             .map(|b| libc::iovec {
@@ -148,6 +155,9 @@ impl Engine {
 
     /// Register file descriptors with the kernel
     pub fn register_files(&self, fds: &[RawFd]) -> Result<()> {
+        if fds.len() > i32::MAX as usize {
+            return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
+        }
         let ret = unsafe {
             auraio_sys::auraio_register_files(
                 self.handle.as_ptr(),
@@ -386,6 +396,9 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
+        if iovecs.len() > i32::MAX as usize {
+            return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
+        }
         let ctx = CallbackContext::new(callback);
         let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
 
@@ -430,6 +443,9 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
+        if iovecs.len() > i32::MAX as usize {
+            return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
+        }
         let ctx = CallbackContext::new(callback);
         let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
 
@@ -552,17 +568,13 @@ impl Engine {
     ///
     /// # Thread Safety
     ///
-    /// Must not be called concurrently with `poll()` or `wait()`.
-    /// This is enforced by an internal lock.
+    /// The C library handles internal concurrency via per-ring locks,
+    /// so `poll()` or `wait()` may be called from other threads while
+    /// `run()` is active (though this is rarely useful).
     ///
-    /// # Deadlock Warning
-    ///
-    /// Do **not** call `poll()`, `wait()`, or `run()` from within a
-    /// completion callback while `run()` is active — the internal lock
-    /// is not reentrant and will deadlock. Submissions (read/write/fsync)
-    /// are fine from callbacks.
+    /// Do **not** call `run()` from within a completion callback —
+    /// it blocks and will never return.
     pub fn run(&self) {
-        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { auraio_sys::auraio_run(self.handle.as_ptr()) };
     }
 

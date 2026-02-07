@@ -212,11 +212,11 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * We need EITHER enough samples OR enough time before making decisions.
      * This prevents noisy/invalid statistics with slow storage.
      *
-     * Note: We peek at the active histogram's count before swapping.
+     * Peek at active histogram's count to decide whether to skip this tick.
      */
     adaptive_histogram_t *active_hist = adaptive_hist_active(&ctrl->hist_pair);
-    int sample_count = atomic_load_explicit(&active_hist->total_count, memory_order_acquire);
-    bool have_min_samples = (sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES);
+    int peek_count = atomic_load_explicit(&active_hist->total_count, memory_order_acquire);
+    bool have_min_samples = (peek_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES);
     bool have_min_time = (elapsed_ms >= ADAPTIVE_MIN_SAMPLE_WINDOW_MS);
     bool hit_max_time = (elapsed_ms >= ADAPTIVE_MAX_SAMPLE_WINDOW_MS);
 
@@ -228,6 +228,10 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     /* Swap histograms - O(1) atomic index flip.
      * Returns pointer to old histogram (now inactive) for reading stats. */
     adaptive_histogram_t *old_hist = adaptive_hist_swap(&ctrl->hist_pair);
+
+    /* Re-read sample_count from the swapped-out histogram (now inactive).
+     * This is the definitive count — no more writers after the swap. */
+    int sample_count = atomic_load_explicit(&old_hist->total_count, memory_order_acquire);
 
     /* Calculate current sample statistics from the old (now inactive) histogram */
     double p99_ms = adaptive_hist_p99(old_hist);

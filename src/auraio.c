@@ -31,7 +31,11 @@
  */
 
 #define DEFAULT_QUEUE_DEPTH 256 /**< Default ring queue depth */
-#define BUFFER_ALIGNMENT ((size_t)sysconf(_SC_PAGESIZE)) /**< Page alignment for O_DIRECT */
+static size_t get_page_size(void) {
+    long ps = sysconf(_SC_PAGESIZE);
+    return (ps > 0) ? (size_t)ps : 4096;
+}
+#define BUFFER_ALIGNMENT get_page_size() /**< Page alignment for O_DIRECT */
 #define TICK_INTERVAL_MS 10 /**< Adaptive tick interval */
 /**
  * Maximum number of io_uring rings (1 ring per CPU core).
@@ -154,7 +158,10 @@ static _Thread_local uint32_t tls_rng_state = 0;
  */
 static inline uint32_t xorshift_tls(void) {
     uint32_t s = tls_rng_state;
-    if (__builtin_expect(s == 0, 0)) s = (uint32_t)(uintptr_t)pthread_self() ^ 0x5A5A5A5A;
+    if (__builtin_expect(s == 0, 0)) {
+        s = (uint32_t)(uintptr_t)pthread_self() ^ 0x5A5A5A5A;
+        if (s == 0) s = 1; /* xorshift32 has 0 as fixed point */
+    }
     s ^= s << 13;
     s ^= s >> 17;
     s ^= s << 5;
@@ -908,7 +915,7 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
  * ============================================================================
  */
 
-bool auraio_request_pending(auraio_request_t *req) {
+bool auraio_request_pending(const auraio_request_t *req) {
     if (!req) {
         return false;
     }
@@ -936,7 +943,7 @@ void *auraio_request_user_data(const auraio_request_t *req) {
  * ============================================================================
  */
 
-int auraio_get_poll_fd(auraio_engine_t *engine) {
+int auraio_get_poll_fd(const auraio_engine_t *engine) {
     if (!engine || engine->ring_count == 0) {
         errno = EINVAL;
         return (-1);
@@ -1085,7 +1092,7 @@ void auraio_run(auraio_engine_t *engine) {
     atomic_store(&engine->running, true);
     atomic_store(&engine->stop_requested, false);
 
-    while (!atomic_load(&engine->stop_requested)) {
+    for (;;) {
         int completed = auraio_wait(engine, 100);
 
         /* Check if we have any pending work.
@@ -1098,8 +1105,9 @@ void auraio_run(auraio_engine_t *engine) {
             }
         }
 
-        /* If no pending and no completions and stop requested, exit */
-        if (!has_pending && completed == 0 && atomic_load(&engine->stop_requested)) {
+        /* Exit only when stop requested AND no pending work AND no completions
+         * in this iteration (ensures we drain all in-flight I/O before returning) */
+        if (atomic_load(&engine->stop_requested) && !has_pending && completed == 0) {
             break;
         }
     }

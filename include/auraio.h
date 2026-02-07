@@ -621,7 +621,7 @@ AURAIO_API AURAIO_WARN_UNUSED int auraio_cancel(auraio_engine_t *engine, auraio_
  * @param req Request handle
  * @return true if still in-flight, false if completed or cancelled
  */
-AURAIO_API bool auraio_request_pending(auraio_request_t *req);
+AURAIO_API bool auraio_request_pending(const auraio_request_t *req);
 
 /**
  * Get the file descriptor associated with a request
@@ -658,7 +658,7 @@ AURAIO_API void *auraio_request_user_data(const auraio_request_t *req);
  * @param engine Engine handle
  * @return Pollable fd, or -1 on error (errno set)
  */
-AURAIO_API int auraio_get_poll_fd(auraio_engine_t *engine);
+AURAIO_API int auraio_get_poll_fd(const auraio_engine_t *engine);
 
 /**
  * Process completed operations (non-blocking)

@@ -46,9 +46,9 @@
  * Slots are pre-allocated to avoid malloc() on the free path.
  */
 typedef struct buffer_slot {
-    void *buffer;               /**< Aligned buffer pointer */
-    size_t actual_size;         /**< Actual buffer size */
-    struct buffer_slot *next;   /**< Next in bucket or free slot list */
+    void *buffer;             /**< Aligned buffer pointer */
+    size_t actual_size;       /**< Actual buffer size */
+    struct buffer_slot *next; /**< Next in bucket or free slot list */
 } buffer_slot_t;
 
 /* Forward declaration */
@@ -64,14 +64,20 @@ struct buffer_pool;
 typedef struct thread_cache {
     /* Hot fields: all in cache line 0 for fast-path alloc/free.
      * pool+pool_id validated on every access, counts checked immediately after. */
-    struct buffer_pool *pool;   /**< Parent pool (for slow path) */
-    uint64_t pool_id;           /**< Pool generation ID (detect stale cache) */
-    struct thread_cache *next;  /**< Next in pool's cache list (for cleanup) */
-    int shard_id;               /**< Assigned shard for slow-path operations */
-    int counts[BUFFER_SIZE_CLASSES];  /**< Buffer count per size class */
+    struct buffer_pool *pool;        /**< Parent pool (for slow path) */
+    uint64_t pool_id;                /**< Pool generation ID (detect stale cache) */
+    struct thread_cache *next;       /**< Next in pool's cache list (for cleanup) */
+    int shard_id;                    /**< Assigned shard for slow-path operations */
+    int counts[BUFFER_SIZE_CLASSES]; /**< Buffer count per size class */
 
     /* Cold: large array accessed only after counts check passes */
     void *buffers[BUFFER_SIZE_CLASSES][THREAD_CACHE_SIZE]; /**< Cached buffers */
+
+    /* Cold: cleanup coordination (accessed only during destroy/thread exit) */
+    pthread_mutex_t
+        cleanup_mutex;  /**< Coordinates buffer cleanup between pool destroy and TLS destructor */
+    bool cleaned_up;    /**< Buffers already flushed/freed */
+    bool thread_exited; /**< Thread ran its TLS destructor */
 } thread_cache_t;
 
 /**
@@ -81,13 +87,13 @@ typedef struct thread_cache {
  * With 256 shards, even 1000+ cores only have ~4 threads per shard on average.
  */
 typedef struct {
-    pthread_mutex_t lock;                           /**< Shard lock */
+    pthread_mutex_t lock;                             /**< Shard lock */
     buffer_slot_t *size_buckets[BUFFER_SIZE_CLASSES]; /**< Buckets by size class */
-    buffer_slot_t *slot_pool;                       /**< Pre-allocated slot array */
-    buffer_slot_t *free_slots;                      /**< Available slots for reuse */
-    int slot_pool_size;                             /**< Total slots in shard */
-    int free_count;                                 /**< Buffers currently cached */
-    int max_free_count;                             /**< High-water mark per shard */
+    buffer_slot_t *slot_pool;                         /**< Pre-allocated slot array */
+    buffer_slot_t *free_slots;                        /**< Available slots for reuse */
+    int slot_pool_size;                               /**< Total slots in shard */
+    int free_count;                                   /**< Buffers currently cached */
+    int max_free_count;                               /**< High-water mark per shard */
 } buffer_shard_t;
 
 /**
@@ -109,16 +115,16 @@ typedef struct {
  * - 1024 cores → 256 shards (max)
  */
 typedef struct buffer_pool {
-    buffer_shard_t *shards;                         /**< Dynamically allocated shards */
-    int shard_count;                                /**< Number of shards (power of 2) */
-    int shard_mask;                                 /**< shard_count - 1 for fast modulo */
-    uint64_t pool_id;                               /**< Unique generation ID (set once at init) */
-    size_t alignment;                               /**< Buffer alignment (typically 4096) */
-    _Atomic size_t total_allocated;                 /**< Total bytes allocated (atomic) */
-    _Atomic size_t total_buffers;                   /**< Total buffer count (atomic) */
-    _Atomic(thread_cache_t *) thread_caches;        /**< Lock-free list of thread caches */
-    _Atomic int next_shard;                         /**< Round-robin shard assignment */
-    _Atomic bool destroyed;                         /**< Pool destroyed flag for safety */
+    buffer_shard_t *shards;                  /**< Dynamically allocated shards */
+    int shard_count;                         /**< Number of shards (power of 2) */
+    int shard_mask;                          /**< shard_count - 1 for fast modulo */
+    uint64_t pool_id;                        /**< Unique generation ID (set once at init) */
+    size_t alignment;                        /**< Buffer alignment (typically 4096) */
+    _Atomic size_t total_allocated;          /**< Total bytes allocated (atomic) */
+    _Atomic size_t total_buffers;            /**< Total buffer count (atomic) */
+    _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
+    _Atomic int next_shard;                  /**< Round-robin shard assignment */
+    _Atomic bool destroyed;                  /**< Pool destroyed flag for safety */
 } buffer_pool_t;
 
 /**

@@ -36,8 +36,24 @@
 /* Global pool generation counter for unique IDs */
 static _Atomic uint64_t pool_generation_counter = 0;
 
-/* Thread-local cache pointer */
+/* Thread-local cache pointer (fast-path access, zero overhead) */
 static _Thread_local thread_cache_t *tls_cache = NULL;
+
+/* pthread key for TLS destructor (fires on thread exit to clean up cache) */
+static pthread_key_t tls_key;
+static pthread_once_t tls_key_once = PTHREAD_ONCE_INIT;
+static bool tls_key_valid = false; /* Set once by pthread_once; only read after */
+
+/* Forward declarations for TLS destructor (defined after cache_flush) */
+static void tls_destructor(void *arg);
+static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx,
+                       size_t bucket_size);
+
+static void tls_key_init(void) {
+    if (pthread_key_create(&tls_key, tls_destructor) == 0) {
+        tls_key_valid = true;
+    }
+}
 
 /* ============================================================================
  * Size Class Helpers
@@ -172,6 +188,11 @@ static void shard_destroy(buffer_shard_t *shard) {
  *
  * Each thread gets a dedicated cache the first time it accesses the pool.
  * Uses lock-free CAS to register the cache with the pool for cleanup.
+ *
+ * TLS lifecycle:
+ * - _Thread_local tls_cache provides zero-overhead fast-path access
+ * - pthread_key_t tls_key destructor fires on thread exit for cleanup
+ * - buffer_pool_destroy coordinates via cleanup_mutex on each cache
  */
 static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     thread_cache_t *cache = tls_cache;
@@ -179,26 +200,35 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     /* Fast path: already have a valid cache for this pool.
      * Check both pointer and generation ID to detect stale caches from
      * a previous pool that happened to occupy the same address.
-     * This avoids the atomic pool->destroyed load on every call. */
+     * Safe to dereference: cache struct is never freed while tls_cache
+     * points to it (pool destroy leaves live threads' caches intact). */
     if (cache && cache->pool == pool && cache->pool_id == pool->pool_id) {
         return cache;
     }
 
-    /* Slow path: pool mismatch, no cache, or first call.
-     * Check pool liveness — after buffer_pool_destroy() frees thread caches,
-     * TLS pointers become dangling. The acquire fence ensures we see the
-     * destroyed flag before any freed memory. */
+    /* Slow path: pool mismatch, no cache, or first call. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         tls_cache = NULL;
         return NULL;
     }
 
-    /* Different pool - bypass cache (rare: usually one pool per engine) */
+    /* Orphaned cache from a destroyed pool: pool destroy set pool=NULL
+     * but left the struct for us to free (since our TLS still referenced it). */
     if (cache && cache->pool != pool) {
+        if (cache->pool == NULL) {
+            pthread_mutex_destroy(&cache->cleanup_mutex);
+            free(cache);
+            tls_cache = NULL;
+            if (tls_key_valid) {
+                pthread_setspecific(tls_key, NULL);
+            }
+        }
         return NULL;
     }
 
-    /* First access from this thread - create a new cache */
+    /* First access from this thread — create a new cache */
+    pthread_once(&tls_key_once, tls_key_init);
+
     cache = calloc(1, sizeof(thread_cache_t));
     if (!cache) {
         return NULL;
@@ -206,6 +236,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     cache->pool = pool;
     cache->pool_id = pool->pool_id;
+    pthread_mutex_init(&cache->cleanup_mutex, NULL);
 
     /* Assign shard via round-robin for load balancing */
     cache->shard_id = atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask;
@@ -221,9 +252,15 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
      * our first check and the CAS, destroy already walked the list and
      * missed our cache — it would leak. Detect and clean up. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        pthread_mutex_destroy(&cache->cleanup_mutex);
         free(cache);
         tls_cache = NULL;
         return NULL;
+    }
+
+    /* Register with pthread key for destructor on thread exit */
+    if (tls_key_valid) {
+        pthread_setspecific(tls_key, cache);
     }
 
     tls_cache = cache;
@@ -344,6 +381,61 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
 }
 
 /* ============================================================================
+ * TLS Destructor (fires on thread exit via pthread_key_create)
+ * ============================================================================ */
+
+/**
+ * Called automatically when a thread exits (via pthread_key_create destructor).
+ *
+ * Coordinates with buffer_pool_destroy via cleanup_mutex to ensure exactly
+ * one side handles buffer cleanup and exactly one side frees the struct:
+ *
+ * - If destructor runs first (pool still alive): flush buffers to shards,
+ *   mark cleaned_up. Pool destroy later sees cleaned_up=true, skips cleanup,
+ *   and frees the struct (because thread_exited=true).
+ *
+ * - If pool destroy runs first: it freed buffers and set pool=NULL.
+ *   Destructor sees cleaned_up=true and pool_gone=true, frees the struct.
+ *
+ * - Concurrent: cleanup_mutex serializes. Loser skips buffer cleanup.
+ */
+static void tls_destructor(void *arg) {
+    thread_cache_t *cache = arg;
+    if (!cache) return;
+
+    tls_cache = NULL;
+
+    pthread_mutex_lock(&cache->cleanup_mutex);
+    cache->thread_exited = true;
+
+    if (!cache->cleaned_up) {
+        /* We got here first — flush buffers back to shards.
+         * Shards are guaranteed alive: pool destroy tears down shards
+         * only after processing all caches (which blocks on our mutex). */
+        buffer_pool_t *pool = cache->pool;
+        if (pool) {
+            for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
+                while (cache->counts[class_idx] > 0) {
+                    cache_flush(pool, cache, class_idx, class_to_size(class_idx));
+                }
+            }
+        }
+        cache->cleaned_up = true;
+    }
+
+    bool pool_gone = (cache->pool == NULL);
+    pthread_mutex_unlock(&cache->cleanup_mutex);
+
+    if (pool_gone) {
+        /* Pool destroy already ran and left this struct for us to free. */
+        pthread_mutex_destroy(&cache->cleanup_mutex);
+        free(cache);
+    }
+    /* Otherwise pool is alive and pool destroy will free the struct
+     * when it sees thread_exited=true. */
+}
+
+/* ============================================================================
  * Public API
  * ============================================================================ */
 
@@ -432,38 +524,63 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
         return;
     }
 
-    /* Mark pool as destroyed FIRST so other threads can detect it.
-     * Any thread calling get_thread_cache() after this will see the flag
-     * and clear their TLS pointer instead of using the freed cache. */
+    /* Mark pool as destroyed FIRST so new get_thread_cache() calls bail out. */
     atomic_store_explicit(&pool->destroyed, true, memory_order_release);
 
-    /* Free all thread caches and their buffered contents */
+    /* Process all thread caches.
+     *
+     * For each cache, coordinate with the TLS destructor via cleanup_mutex:
+     * - If the thread already exited (thread_exited=true): its destructor
+     *   handled buffer cleanup. We just free the struct.
+     * - If the thread is still alive: we handle buffer cleanup, set pool=NULL
+     *   to mark the cache as orphaned, and leave the struct for the thread's
+     *   destructor (or get_thread_cache orphan cleanup) to free.
+     * - If racing with the destructor: cleanup_mutex serializes. Whoever
+     *   gets the lock first handles buffers; the other skips. */
     thread_cache_t *cache = atomic_load(&pool->thread_caches);
     while (cache) {
         thread_cache_t *next = cache->next;
 
-        /* Free all buffers in this thread cache */
-        for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
-            for (int i = 0; i < cache->counts[class_idx]; i++) {
-                free(cache->buffers[class_idx][i]);
+        pthread_mutex_lock(&cache->cleanup_mutex);
+
+        if (!cache->cleaned_up) {
+            /* Free all cached buffers (destructor hasn't done it yet) */
+            for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
+                for (int i = 0; i < cache->counts[class_idx]; i++) {
+                    free(cache->buffers[class_idx][i]);
+                }
+                cache->counts[class_idx] = 0;
             }
+            cache->cleaned_up = true;
         }
 
-        /* Null the pool pointer so other threads' fast-path check
-         * (cache->pool == pool) fails instead of reading freed memory. */
         cache->pool = NULL;
+        bool exited = cache->thread_exited;
 
-        /* Clear TLS if it points to this cache */
+        pthread_mutex_unlock(&cache->cleanup_mutex);
+
         if (tls_cache == cache) {
+            /* This is the calling thread's own cache */
             tls_cache = NULL;
+            if (tls_key_valid) {
+                pthread_setspecific(tls_key, NULL);
+            }
+            pthread_mutex_destroy(&cache->cleanup_mutex);
+            free(cache);
+        } else if (exited) {
+            /* Thread already exited — destructor left the struct for us */
+            pthread_mutex_destroy(&cache->cleanup_mutex);
+            free(cache);
         }
+        /* else: thread is alive. Its destructor or get_thread_cache orphan
+         * cleanup will see pool==NULL and free the struct. */
 
-        free(cache);
         cache = next;
     }
     atomic_store(&pool->thread_caches, NULL);
 
-    /* Destroy all shards */
+    /* Destroy all shards (safe: any racing destructor that held cleanup_mutex
+     * has already released it and finished flushing to shards above). */
     if (pool->shards) {
         for (int i = 0; i < pool->shard_count; i++) {
             shard_destroy(&pool->shards[i]);

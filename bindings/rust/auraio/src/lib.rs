@@ -191,7 +191,7 @@ mod tests {
         let opts = Options::new();
         // Options should be created with C library defaults
         // We can't easily inspect internal values, but it shouldn't panic
-        drop(opts);
+        let _ = opts;
     }
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
             .enable_sqpoll(false)
             .sqpoll_idle_ms(1000);
         // Should compile and not panic
-        drop(opts);
+        let _ = opts;
     }
 
     #[test]
@@ -383,7 +383,7 @@ mod tests {
     fn test_bufferref_clone() {
         let data = [0u8; 1024];
         let buf_ref1 = unsafe { BufferRef::from_slice(data.as_slice()) };
-        let buf_ref2 = buf_ref1.clone();
+        let buf_ref2 = buf_ref1;
         let _ = (buf_ref1, buf_ref2);
     }
 
@@ -986,9 +986,8 @@ mod tests {
 
         let handle = engine
             .read(fd, (&buf).into(), 1024 * 1024, 0, move |result| {
-                match result {
-                    Err(Error::Cancelled) => was_cancelled_clone.store(true, Ordering::SeqCst),
-                    _ => {}
+                if let Err(Error::Cancelled) = result {
+                    was_cancelled_clone.store(true, Ordering::SeqCst);
                 }
                 completed_clone.store(true, Ordering::SeqCst);
             })

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 
 /* ============================================================================
@@ -243,6 +244,10 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
         errno = EINVAL;
         return (-1);
     }
+    if (req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
 
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) {
@@ -268,6 +273,10 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
 
 int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
+        errno = EINVAL;
+        return (-1);
+    }
+    if (req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -539,11 +548,10 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
     auraio_callback_t callback = req->callback;
     void *user_data = req->user_data;
 
-    /* Mark as no longer pending */
-    atomic_store_explicit(&req->pending, false, memory_order_release);
-
-    /* Record completion for adaptive controller.
-     * Skip cancel ops and non-sampled ops (submit_time_ns == 0). */
+    /* Record completion for adaptive controller BEFORE callback.
+     * Skip cancel ops and non-sampled ops (submit_time_ns == 0).
+     * req fields are safe to read here: slot is still allocated
+     * (ring_put_request hasn't been called yet). */
     if (req->submit_time_ns != 0) {
         int64_t now_ns = get_time_ns();
         int64_t latency_ns = now_ns - req->submit_time_ns;
@@ -551,11 +559,16 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
         adaptive_record_completion(&ctx->adaptive, latency_ns, bytes);
     }
 
+    /* Mark as no longer pending just before callback invocation.
+     * This ensures auraio_request_pending() returns false only when
+     * the callback is about to fire (not earlier). */
+    atomic_store_explicit(&req->pending, false, memory_order_release);
+
     /* Invoke callback WITHOUT holding lock to prevent deadlock.
      * If the callback calls auraio_read/write, it will try to acquire
      * the lock, which would deadlock with non-recursive mutexes.
      * The req pointer remains valid because ring_put_request hasn't
-     * been called yet. pending is already false (atomic release above). */
+     * been called yet. */
     if (callback) {
         callback((auraio_request_t *)req, result, user_data);
     }
@@ -725,8 +738,15 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 if (ret == -ETIME || ret == -EAGAIN) {
                     return (0);
                 }
-                errno = -ret;
-                return (-1);
+                if (ret == -EINTR) {
+                    /* Signal interrupted the wait — not an error.
+                     * Fall through to re-acquire cq_lock and peek
+                     * for any CQEs that arrived before the signal. */
+                    ret = 0;
+                } else {
+                    errno = -ret;
+                    return (-1);
+                }
             }
 
             /* Wait returned - batch extract all available CQEs.
