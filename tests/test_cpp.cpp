@@ -10,7 +10,10 @@
 #include <cstring>
 #include <cstdio>
 #include <cassert>
+#include <atomic>
+#include <chrono>
 #include <fcntl.h>
+#include <thread>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -576,6 +579,27 @@ TEST(wait_blocks) {
     ASSERT(completed);
 }
 
+TEST(run_serializes_with_poll) {
+    auraio::Engine engine;
+    std::atomic<bool> poll_returned{false};
+
+    std::thread run_thread([&]() { engine.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::thread poll_thread([&]() {
+        (void)engine.poll();
+        poll_returned.store(true, std::memory_order_seq_cst);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ASSERT(!poll_returned.load(std::memory_order_seq_cst));
+
+    engine.stop();
+    run_thread.join();
+    poll_thread.join();
+    ASSERT(poll_returned.load(std::memory_order_seq_cst));
+}
+
 TEST(multiple_concurrent_ops) {
     TempFile file(16384);
     file.reopen(O_RDONLY);
@@ -829,6 +853,7 @@ int main() {
     RUN_TEST(writev_basic);
     RUN_TEST(poll_processes_completions);
     RUN_TEST(wait_blocks);
+    RUN_TEST(run_serializes_with_poll);
     RUN_TEST(multiple_concurrent_ops);
     RUN_TEST(raii_engine_scope);
     RUN_TEST(raii_buffer_scope);

@@ -1,20 +1,14 @@
 //! Buffer management for AuraIO
 
+use crate::engine::EngineInner;
 use std::fmt;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 /// RAII buffer allocated from the engine's pool
 ///
 /// Automatically returned to the pool when dropped.
 /// Provides page-aligned memory suitable for O_DIRECT I/O.
-///
-/// # Lifetime Contract
-///
-/// The `Buffer` must not outlive the `Engine` that allocated it.
-/// Dropping a `Buffer` after its `Engine` has been destroyed is
-/// undefined behavior (the engine pointer stored internally would
-/// be dangling). In practice, keep the `Engine` alive for at least
-/// as long as any `Buffer` allocated from it.
 ///
 /// # Example
 ///
@@ -33,7 +27,7 @@ use std::ptr::NonNull;
 /// # }
 /// ```
 pub struct Buffer {
-    engine: *mut auraio_sys::auraio_engine_t,
+    engine: Arc<EngineInner>,
     ptr: NonNull<u8>,
     len: usize,
 }
@@ -44,7 +38,7 @@ unsafe impl Send for Buffer {}
 impl Buffer {
     /// Create a new buffer (called by Engine::allocate_buffer)
     pub(crate) fn new(
-        engine: *mut auraio_sys::auraio_engine_t,
+        engine: Arc<EngineInner>,
         ptr: NonNull<u8>,
         len: usize,
     ) -> Self {
@@ -94,7 +88,7 @@ impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
             auraio_sys::auraio_buffer_free(
-                self.engine,
+                self.engine.raw(),
                 self.ptr.as_ptr() as *mut std::ffi::c_void,
                 self.len,
             );

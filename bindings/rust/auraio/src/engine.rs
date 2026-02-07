@@ -10,7 +10,24 @@ use crate::stats::Stats;
 use std::io;
 use std::os::unix::io::RawFd;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+pub(crate) struct EngineInner {
+    handle: NonNull<auraio_sys::auraio_engine_t>,
+}
+
+impl EngineInner {
+    #[inline]
+    pub(crate) fn raw(&self) -> *mut auraio_sys::auraio_engine_t {
+        self.handle.as_ptr()
+    }
+}
+
+impl Drop for EngineInner {
+    fn drop(&mut self) {
+        unsafe { auraio_sys::auraio_destroy(self.handle.as_ptr()) };
+    }
+}
 
 /// Main AuraIO engine
 ///
@@ -46,7 +63,7 @@ use std::sync::Mutex;
 /// # }
 /// ```
 pub struct Engine {
-    handle: NonNull<auraio_sys::auraio_engine_t>,
+    pub(crate) inner: Arc<EngineInner>,
     /// Guards poll/wait/run which must not be called concurrently.
     /// Submissions (read/write/fsync etc.) do NOT acquire this lock.
     poll_lock: Mutex<()>,
@@ -69,7 +86,7 @@ impl Engine {
         let err = io::Error::last_os_error();
         NonNull::new(handle)
             .map(|h| Self {
-                handle: h,
+                inner: Arc::new(EngineInner { handle: h }),
                 poll_lock: Mutex::new(()),
             })
             .ok_or(Error::EngineCreate(err))
@@ -81,7 +98,7 @@ impl Engine {
         let err = io::Error::last_os_error();
         NonNull::new(handle)
             .map(|h| Self {
-                handle: h,
+                inner: Arc::new(EngineInner { handle: h }),
                 poll_lock: Mutex::new(()),
             })
             .ok_or(Error::EngineCreate(err))
@@ -89,7 +106,7 @@ impl Engine {
 
     /// Get the raw engine handle (for advanced use)
     pub fn as_ptr(&self) -> *mut auraio_sys::auraio_engine_t {
-        self.handle.as_ptr()
+        self.inner.raw()
     }
 
     // =========================================================================
@@ -100,10 +117,10 @@ impl Engine {
     ///
     /// Returns page-aligned memory suitable for O_DIRECT I/O.
     pub fn allocate_buffer(&self, size: usize) -> Result<Buffer> {
-        let ptr = unsafe { auraio_sys::auraio_buffer_alloc(self.handle.as_ptr(), size) };
+        let ptr = unsafe { auraio_sys::auraio_buffer_alloc(self.inner.raw(), size) };
         let err = io::Error::last_os_error();
         NonNull::new(ptr as *mut u8)
-            .map(|p| Buffer::new(self.handle.as_ptr(), p, size))
+            .map(|p| Buffer::new(Arc::clone(&self.inner), p, size))
             .ok_or(Error::BufferAlloc(err))
     }
 
@@ -130,7 +147,7 @@ impl Engine {
 
         let ret = unsafe {
             auraio_sys::auraio_register_buffers(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 iovecs.as_ptr() as *const _,
                 iovecs.len() as i32,
             )
@@ -145,7 +162,7 @@ impl Engine {
 
     /// Unregister previously registered buffers
     pub fn unregister_buffers(&self) -> Result<()> {
-        let ret = unsafe { auraio_sys::auraio_unregister_buffers(self.handle.as_ptr()) };
+        let ret = unsafe { auraio_sys::auraio_unregister_buffers(self.inner.raw()) };
         if ret == 0 {
             Ok(())
         } else {
@@ -160,7 +177,7 @@ impl Engine {
         }
         let ret = unsafe {
             auraio_sys::auraio_register_files(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fds.as_ptr(),
                 fds.len() as i32,
             )
@@ -175,7 +192,7 @@ impl Engine {
     /// Update a registered file descriptor
     pub fn update_file(&self, index: i32, fd: RawFd) -> Result<()> {
         let ret =
-            unsafe { auraio_sys::auraio_update_file(self.handle.as_ptr(), index, fd) };
+            unsafe { auraio_sys::auraio_update_file(self.inner.raw(), index, fd) };
         if ret == 0 {
             Ok(())
         } else {
@@ -185,7 +202,7 @@ impl Engine {
 
     /// Unregister previously registered files
     pub fn unregister_files(&self) -> Result<()> {
-        let ret = unsafe { auraio_sys::auraio_unregister_files(self.handle.as_ptr()) };
+        let ret = unsafe { auraio_sys::auraio_unregister_files(self.inner.raw()) };
         if ret == 0 {
             Ok(())
         } else {
@@ -249,7 +266,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_read(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 buf.as_raw(),
                 len,
@@ -296,7 +313,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_write(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 buf.as_raw(),
                 len,
@@ -329,7 +346,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_fsync(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 Some(callback_trampoline),
                 ctx_ptr,
@@ -359,7 +376,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_fsync_ex(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 auraio_sys::auraio_fsync_flags_t_AURAIO_FSYNC_DATASYNC,
                 Some(callback_trampoline),
@@ -404,7 +421,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_readv(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 iovecs.as_ptr() as *const _,
                 iovecs.len() as i32,
@@ -451,7 +468,7 @@ impl Engine {
 
         let req = unsafe {
             auraio_sys::auraio_writev(
-                self.handle.as_ptr(),
+                self.inner.raw(),
                 fd,
                 iovecs.as_ptr() as *const _,
                 iovecs.len() as i32,
@@ -490,7 +507,7 @@ impl Engine {
     /// may point to freed or reused memory.
     pub unsafe fn cancel(&self, request: &RequestHandle) -> Result<()> {
         let ret =
-            unsafe { auraio_sys::auraio_cancel(self.handle.as_ptr(), request.as_ptr()) };
+            unsafe { auraio_sys::auraio_cancel(self.inner.raw(), request.as_ptr()) };
         if ret == 0 {
             Ok(())
         } else {
@@ -506,7 +523,7 @@ impl Engine {
     ///
     /// When this fd is readable, call `poll()` to process completions.
     pub fn poll_fd(&self) -> Result<RawFd> {
-        let fd = unsafe { auraio_sys::auraio_get_poll_fd(self.handle.as_ptr()) };
+        let fd = unsafe { auraio_sys::auraio_get_poll_fd(self.inner.raw()) };
         if fd >= 0 {
             Ok(fd)
         } else {
@@ -525,7 +542,7 @@ impl Engine {
     /// serialize rather than cause undefined behavior.
     pub fn poll(&self) -> Result<usize> {
         let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let n = unsafe { auraio_sys::auraio_poll(self.handle.as_ptr()) };
+        let n = unsafe { auraio_sys::auraio_poll(self.inner.raw()) };
         if n >= 0 {
             Ok(n as usize)
         } else {
@@ -553,7 +570,7 @@ impl Engine {
     /// serialize rather than cause undefined behavior.
     pub fn wait(&self, timeout_ms: i32) -> Result<usize> {
         let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let n = unsafe { auraio_sys::auraio_wait(self.handle.as_ptr(), timeout_ms) };
+        let n = unsafe { auraio_sys::auraio_wait(self.inner.raw(), timeout_ms) };
         if n >= 0 {
             Ok(n as usize)
         } else {
@@ -568,21 +585,21 @@ impl Engine {
     ///
     /// # Thread Safety
     ///
-    /// The C library handles internal concurrency via per-ring locks,
-    /// so `poll()` or `wait()` may be called from other threads while
-    /// `run()` is active (though this is rarely useful).
+    /// Must not be called concurrently with `poll()` or `wait()`.
+    /// This is enforced by the same internal lock used by those methods.
     ///
     /// Do **not** call `run()` from within a completion callback —
     /// it blocks and will never return.
     pub fn run(&self) {
-        unsafe { auraio_sys::auraio_run(self.handle.as_ptr()) };
+        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { auraio_sys::auraio_run(self.inner.raw()) };
     }
 
     /// Signal the event loop to stop
     ///
     /// Safe to call from any thread, including from within a callback.
     pub fn stop(&self) {
-        unsafe { auraio_sys::auraio_stop(self.handle.as_ptr()) };
+        unsafe { auraio_sys::auraio_stop(self.inner.raw()) };
     }
 
     // =========================================================================
@@ -592,17 +609,8 @@ impl Engine {
     /// Get current engine statistics
     pub fn stats(&self) -> Stats {
         let mut inner: auraio_sys::auraio_stats_t = unsafe { std::mem::zeroed() };
-        unsafe { auraio_sys::auraio_get_stats(self.handle.as_ptr(), &mut inner) };
+        unsafe { auraio_sys::auraio_get_stats(self.inner.raw(), &mut inner) };
         Stats::new(inner)
-    }
-}
-
-impl Drop for Engine {
-    fn drop(&mut self) {
-        // No need to acquire poll_lock: Drop receives &mut self, which
-        // guarantees no other references exist (for owned Engine) or that
-        // Arc ref count has reached zero (for Arc<Engine>).
-        unsafe { auraio_sys::auraio_destroy(self.handle.as_ptr()) };
     }
 }
 

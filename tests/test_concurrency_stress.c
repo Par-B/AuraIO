@@ -13,9 +13,11 @@
 #define NUM_THREADS 4
 #define DURATION_SEC 5
 
+#include <stdatomic.h>
+
 auraio_engine_t *engine;
 int efd;
-volatile int running = 1;
+volatile atomic_int running = 1;
 
 void on_done(auraio_request_t *req, ssize_t res, void *data) {
   (void)req;
@@ -36,7 +38,7 @@ void *worker(void *arg) {
   CPU_SET(cpu_id, &cpuset);
   pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
-  while (running) {
+  while (atomic_load(&running)) {
     // Submit write to eventfd
     // We use auraio_buf(&buf) which is UNREGISTERED, so it copies the pointer
     // eventfd writes are very fast, stressing the submission/completion path
@@ -95,7 +97,7 @@ int main() {
       fflush(stdout);
     }
   }
-  running = 0;
+  atomic_store(&running, 0);
   printf("\nStopping threads...\n");
 
   uint64_t total = 0;

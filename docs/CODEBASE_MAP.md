@@ -157,7 +157,7 @@ AuraIO/
 │   ├── stress_test.cpp       # Multi-threaded stress test
 │   ├── perf_bench.c          # Performance benchmarks (throughput, latency, scalability)
 │   ├── bench_buffer.c        # Buffer pool microbenchmark
-│   ├── repro_race.c          # Race condition reproduction
+│   ├── test_concurrency_stress.c # Concurrency stress test (formerly repro_race.c)
 │   ├── run_analysis.sh       # FIO comparison benchmark suite
 │   ├── run_deep_analysis.sh  # Flamegraph/cachegrind/pahole profiling
 │   ├── run_perf_test.sh      # Portable benchmark runner

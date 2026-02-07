@@ -178,6 +178,7 @@ cpp-test: all
 # Rust environment setup (source cargo if installed via rustup)
 CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 RUST_LIB_PATH = $(CURDIR)/lib
+ORB_MACHINE ?= Caliente-dev
 
 # Build Rust bindings
 rust: all
@@ -685,6 +686,18 @@ compdb: compile_commands.json
 # Help
 # =============================================================================
 
+orb-build:
+	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR) && make -j4"
+
+orb-test:
+	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR)/tests && make -j1 all"
+
+orb-rust-test:
+	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR)/bindings/rust && LD_LIBRARY_PATH=$(CURDIR)/lib:\$$LD_LIBRARY_PATH cargo test --workspace"
+
+orb-validate:
+	orb -m $(ORB_MACHINE) bash -c "set -e; cd $(CURDIR); make -j4; cd tests; make -j1 all; cd ../bindings/rust; LD_LIBRARY_PATH=$(CURDIR)/lib:\$$LD_LIBRARY_PATH cargo test --workspace"
+
 help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
 	@echo ""
@@ -705,6 +718,13 @@ help:
 	@echo "  make rust-test      Run Rust tests"
 	@echo "  make rust-examples  Build Rust example programs"
 	@echo "  make rust-clean     Clean Rust build artifacts"
+	@echo ""
+	@echo "Orb (macOS host -> Linux container):"
+	@echo "  make orb-build      Build in Orb machine ($(ORB_MACHINE))"
+	@echo "  make orb-test       Run C/C++ tests in Orb machine"
+	@echo "  make orb-rust-test  Run Rust tests in Orb machine"
+	@echo "  make orb-validate   Build + C/C++ tests + Rust tests in Orb machine"
+	@echo "  ORB_MACHINE=name    Override Orb machine (default: $(ORB_MACHINE))"
 	@echo ""
 	@echo "Installation:"
 	@echo "  make install        Install to $(PREFIX) (includes pkg-config)"
@@ -751,6 +771,7 @@ help:
 .PHONY: all test test-all examples install uninstall clean debug deps deps-check help \
         cpp-test cpp-examples \
         rust rust-test rust-examples rust-clean \
+        orb-build orb-test orb-rust-test orb-validate \
         tsan asan test-valgrind test-tsan test-asan test-sanitizers \
         bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
         lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \

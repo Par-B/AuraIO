@@ -18,6 +18,7 @@
 #include <concepts>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -411,6 +412,7 @@ class Engine {
      * @return Number of completions processed
      */
     int poll() {
+        std::lock_guard<std::mutex> lock(event_loop_mutex_);
         int n = auraio_poll(handle_);
         if (n < 0) {
             throw Error(errno, "auraio_poll");
@@ -426,6 +428,7 @@ class Engine {
      * @throws Error on failure
      */
     int wait(int timeout_ms = -1) {
+        std::lock_guard<std::mutex> lock(event_loop_mutex_);
         int n = auraio_wait(handle_, timeout_ms);
         if (n < 0) {
             throw Error(errno, "auraio_wait");
@@ -439,7 +442,10 @@ class Engine {
      * Blocks the calling thread. Call stop() from a callback
      * or another thread to exit.
      */
-    void run() { auraio_run(handle_); }
+    void run() {
+        std::unique_lock<std::mutex> lock(event_loop_mutex_);
+        auraio_run(handle_);
+    }
 
     /**
      * Signal event loop to stop
@@ -644,6 +650,7 @@ class Engine {
 
     auraio_engine_t *handle_ = nullptr;
     std::unique_ptr<detail::CallbackPool> pool_;
+    std::mutex event_loop_mutex_;
 };
 
 } // namespace auraio

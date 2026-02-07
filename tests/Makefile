@@ -11,10 +11,14 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring test_stats test_ring_select
+TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress
 CPP_TESTS = test_cpp
 
-all: $(TESTS) $(CPP_TESTS)
+.PHONY: all build-tests
+
+all:
+	@rm -f $(TESTS) $(CPP_TESTS)
+	@$(MAKE) --no-print-directory build-tests
 	@echo "Running all C tests..."
 	@total=0; \
 	for t in $(TESTS); do \
@@ -36,6 +40,8 @@ all: $(TESTS) $(CPP_TESTS)
 		./$$t || exit 1; \
 	done
 
+build-tests: $(TESTS) $(CPP_TESTS)
+
 test_engine: test_engine.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
@@ -46,6 +52,9 @@ test_ring: test_ring.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 test_stats: test_stats.c ../lib/libauraio.a
+	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+test_concurrency_stress: test_concurrency_stress.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 # ============================================================================
@@ -187,7 +196,7 @@ valgrind-quick: $(TESTS)
 # ============================================================================
 # ThreadSanitizer tests (requires rebuild with TSAN)
 # ============================================================================
-TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan
+TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan test_concurrency_stress_tsan
 
 tsan: $(TSAN_TESTS)
 	@echo "Running ThreadSanitizer tests..."
@@ -235,13 +244,13 @@ test_ring_tsan: test_ring.c ../lib/libauraio_tsan.a
 test_stats_tsan: test_stats.c ../lib/libauraio_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
 
-test_ring_select_tsan: test_ring_select.c ../lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) -O2 $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
+test_concurrency_stress_tsan: test_concurrency_stress.c ../lib/libauraio_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
 
 # ============================================================================
 # AddressSanitizer tests (requires rebuild with ASAN)
 # ============================================================================
-ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan
+ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan test_concurrency_stress_asan
 
 asan: $(ASAN_TESTS)
 	@echo "Running AddressSanitizer tests..."
@@ -265,8 +274,8 @@ test_ring_asan: test_ring.c ../lib/libauraio_asan.a
 test_stats_asan: test_stats.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
-test_ring_select_asan: test_ring_select.c ../lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
+test_concurrency_stress_asan: test_concurrency_stress.c ../lib/libauraio_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 clean:
 	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench $(TSAN_TESTS) $(ASAN_TESTS)

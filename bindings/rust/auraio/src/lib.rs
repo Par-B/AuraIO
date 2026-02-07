@@ -58,10 +58,6 @@
 //! These bindings wrap a C library and have inherent soundness limitations
 //! that cannot be fully expressed in Rust's type system:
 //!
-//! - **Buffer lifetime**: [`Buffer`] stores a raw pointer to the [`Engine`]
-//!   that allocated it. Dropping a `Buffer` after its `Engine` is destroyed
-//!   is undefined behavior. The compiler cannot enforce this ordering.
-//!
 //! - **BufferRef lifetime**: [`BufferRef`] is `Copy` and carries no lifetime
 //!   parameter. The compiler cannot enforce that the underlying memory
 //!   outlives the I/O operation. Callers must manually ensure buffers
@@ -72,9 +68,9 @@
 //!   that point is undefined behavior.
 //!
 //! These limitations match the underlying C API's ownership model. In
-//! practice, following the documented usage patterns (keep the Engine
-//! alive until all Buffers are dropped, don't use RequestHandles after
-//! callbacks) avoids all issues.
+//! practice, following the documented usage patterns (keep `BufferRef`/iovecs
+//! alive for in-flight I/O, don't use `RequestHandle` after callbacks)
+//! avoids all issues.
 
 mod buffer;
 mod callback;
@@ -313,6 +309,15 @@ mod tests {
         // Should be able to allocate again (buffers returned to pool)
         let buf = engine.allocate_buffer(4096);
         assert!(buf.is_ok());
+    }
+
+    #[test]
+    fn test_buffer_outlives_engine_value() {
+        let buf = {
+            let engine = Engine::new().unwrap();
+            engine.allocate_buffer(1024).unwrap()
+        };
+        assert_eq!(buf.len(), 1024);
     }
 
     // =========================================================================
@@ -829,6 +834,34 @@ mod tests {
         engine.run();
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_run_serializes_with_poll() {
+        use std::thread;
+        use std::time::Duration;
+
+        let engine = Arc::new(Engine::new().unwrap());
+        let run_engine = Arc::clone(&engine);
+        let poll_engine = Arc::clone(&engine);
+        let poll_returned = Arc::new(AtomicBool::new(false));
+        let poll_returned_clone = Arc::clone(&poll_returned);
+
+        let run_thread = thread::spawn(move || run_engine.run());
+        thread::sleep(Duration::from_millis(20));
+
+        let poll_thread = thread::spawn(move || {
+            let _ = poll_engine.poll();
+            poll_returned_clone.store(true, Ordering::SeqCst);
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        assert!(!poll_returned.load(Ordering::SeqCst));
+
+        engine.stop();
+        run_thread.join().unwrap();
+        poll_thread.join().unwrap();
+        assert!(poll_returned.load(Ordering::SeqCst));
     }
 
     // =========================================================================
