@@ -15,11 +15,14 @@ tests/test_cpp
 tests/test_stats
 tests/test_ring_select
 tests/test_concurrency_stress
+tests/test_coverage
+tests/test_otel
 tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan
 tests/stress_test
 tests/perf_bench
+tests/default.profraw
 
 # Benchmark results (generated)
 tests/bench_results/
