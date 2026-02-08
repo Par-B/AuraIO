@@ -202,6 +202,17 @@ TEST(log_emit_truncates_long_message) {
     auraio_set_log_handler(NULL, NULL);
 }
 
+TEST(adaptive_inline_getters_direct) {
+    adaptive_controller_t ctrl;
+    int rc = adaptive_init(&ctrl, 128, 16);
+    assert(rc == 0);
+
+    assert(adaptive_get_inflight_limit(&ctrl) == 16);
+    assert(adaptive_get_batch_threshold(&ctrl) == ADAPTIVE_MIN_BATCH);
+
+    adaptive_destroy(&ctrl);
+}
+
 /* ============================================================================
  * Request Introspection Tests (auraio_request_fd, auraio_request_user_data)
  * ============================================================================ */
@@ -2022,6 +2033,7 @@ int main(void) {
     RUN_TEST(log_emit_no_handler);
     RUN_TEST(log_emit_formatted_message);
     RUN_TEST(log_emit_truncates_long_message);
+    RUN_TEST(adaptive_inline_getters_direct);
 
     /* Request introspection */
     RUN_TEST(request_fd_null);

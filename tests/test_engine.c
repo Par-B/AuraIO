@@ -191,6 +191,30 @@ TEST(controller_min_inflight) {
     adaptive_destroy(&ctrl);
 }
 
+TEST(controller_probing_additive_increase) {
+    adaptive_controller_t ctrl;
+    adaptive_init(&ctrl, 256, 32);
+
+    /* Ensure adaptive_tick enters PROBING increase path:
+     * - enough samples (>= LOW_IOPS_MIN_SAMPLES)
+     * - no latency spike (p99 << default 10ms guard)
+     * - positive efficiency ratio */
+    for (int i = 0; i < ADAPTIVE_LOW_IOPS_MIN_SAMPLES; i++) {
+        adaptive_record_completion(&ctrl, 100000, 4096); /* 100us */
+    }
+
+    ctrl.phase = ADAPTIVE_PHASE_PROBING;
+    ctrl.prev_in_flight_limit = 31; /* current is 32 after init */
+    ctrl.prev_throughput_bps = 0.0;
+
+    bool changed = adaptive_tick(&ctrl);
+    assert(changed == true);
+    assert(ctrl.current_in_flight_limit == 32 + ADAPTIVE_AIMD_INCREASE);
+    assert(ctrl.phase == ADAPTIVE_PHASE_PROBING);
+
+    adaptive_destroy(&ctrl);
+}
+
 /* ============================================================================
  * Low-IOPS Sample Window Tests
  * ============================================================================ */
@@ -429,6 +453,7 @@ int main(void) {
     RUN_TEST(controller_record_submit);
     RUN_TEST(controller_tick_baseline);
     RUN_TEST(controller_min_inflight);
+    RUN_TEST(controller_probing_additive_increase);
 
     /* Low-IOPS sample window tests */
     RUN_TEST(low_iops_skips_with_few_samples);

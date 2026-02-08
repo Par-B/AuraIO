@@ -303,9 +303,7 @@ void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count);
  * @param ctrl Controller
  * @return Current limit
  */
-static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
-    return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
-}
+static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) { return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed); }
 
 /**
  * Get current batch threshold
@@ -315,9 +313,7 @@ static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
  * @param ctrl Controller
  * @return Current threshold
  */
-static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
-    return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
-}
+static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) { return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed); }
 
 /**
  * Get current phase name
