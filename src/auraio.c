@@ -532,7 +532,12 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
     atomic_init(&engine->tick_running, false);
 
     /* Initialize registration lock */
-    pthread_rwlock_init(&engine->reg_lock, NULL);
+    int rwlock_ret = pthread_rwlock_init(&engine->reg_lock, NULL);
+    if (rwlock_ret != 0) {
+        errno = rwlock_ret;
+        free(engine);
+        return NULL;
+    }
 
     /* Initialize buffer pool */
     if (buffer_pool_init(&engine->buffer_pool, engine->buffer_alignment) != 0) {

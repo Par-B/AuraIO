@@ -5,6 +5,7 @@
 
 #include "auraio_prometheus.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
@@ -95,7 +96,10 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
     /* --- Per-ring stats (single pass per ring to minimize mutex traffic) --- */
     if (ring_count > 0) {
         rs = malloc((size_t)ring_count * sizeof(*rs));
-        if (!rs) goto overflow;
+        if (!rs) {
+            errno = ENOMEM;
+            return -1;
+        }
 
         for (int i = 0; i < ring_count; i++) {
             auraio_get_ring_stats(engine, i, &rs[i]);
@@ -235,6 +239,7 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
 
 overflow:
     free(rs);
+    errno = ENOBUFS;
     /* Return negative of conservative estimate of bytes needed.
      * Callers should retry in a loop with abs(return value) as the new size. */
     return -(written * 2 + 4096);

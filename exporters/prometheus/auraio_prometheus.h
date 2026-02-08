@@ -10,7 +10,8 @@
  *   char buf[65536];
  *   int len = auraio_metrics_prometheus(engine, buf, sizeof(buf));
  *   if (len < 0) {
- *       // buffer too small — retry with abs(len) bytes as a minimum estimate
+ *       // if errno==ENOBUFS: buffer too small — retry with abs(len) bytes
+ *       // if errno==ENOMEM: hard error (allocation failure)
  *   }
  *   // write buf to HTTP response, file, etc.
  * @endcode
@@ -42,9 +43,10 @@ extern "C" {
  * @param engine   AuraIO engine handle
  * @param buf      Output buffer
  * @param buf_size Size of output buffer in bytes
- * @return Number of bytes written (excluding null terminator) on success,
- *         or negative value if buffer too small (abs value = minimum estimate;
- *         callers should retry in a loop)
+ * @return Number of bytes written (excluding null terminator) on success;
+ *         negative value with errno=ENOBUFS if buffer too small
+ *         (abs value = minimum estimate; callers should retry in a loop);
+ *         or -1 with errno set on hard failure (e.g., ENOMEM)
  */
 int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_size);
 

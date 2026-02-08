@@ -55,7 +55,8 @@ static void serve_metrics(int client_fd, auraio_engine_t *engine) {
 
     int len = auraio_metrics_prometheus(engine, buf, METRICS_BUF_SIZE);
     if (len < 0) {
-        const char *err = "HTTP/1.1 500 Buffer Too Small\r\n\r\n";
+        const char *err = (errno == ENOBUFS) ? "HTTP/1.1 500 Buffer Too Small\r\n\r\n"
+                                              : "HTTP/1.1 500 Internal Server Error\r\n\r\n";
         send_bytes(client_fd, err, strlen(err));
         free(buf);
         return;

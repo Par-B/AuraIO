@@ -250,13 +250,19 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     /* Re-check liveness after registration. If pool was destroyed between
      * our first check and the CAS, destroy may already be walking the list
-     * and could access this cache. Do NOT free it here — mark it as
-     * cleaned_up (it has no buffers) and let destroy handle the struct. */
+     * and could access this cache. Do NOT free it here — mark it orphaned
+     * and let destroy / next get_thread_cache call / TLS destructor reclaim it. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         pthread_mutex_lock(&cache->cleanup_mutex);
         cache->cleaned_up = true; /* Empty cache — nothing to flush */
+        cache->pool = NULL;       /* Never retain pointer to a destroying pool */
         pthread_mutex_unlock(&cache->cleanup_mutex);
-        tls_cache = NULL;
+        /* Keep orphan reachable so the same thread can reclaim it on the
+         * next pool access (or at thread exit via TLS destructor). */
+        if (tls_key_valid) {
+            pthread_setspecific(tls_key, cache);
+        }
+        tls_cache = cache;
         return NULL;
     }
 
@@ -539,47 +545,55 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
      *   destructor (or get_thread_cache orphan cleanup) to free.
      * - If racing with the destructor: cleanup_mutex serializes. Whoever
      *   gets the lock first handles buffers; the other skips. */
-    thread_cache_t *cache = atomic_load(&pool->thread_caches);
-    while (cache) {
-        thread_cache_t *next = cache->next;
+    for (;;) {
+        /* Detach the currently visible cache list. If a late registrar races
+         * and pushes a new node, it lands in pool->thread_caches and is picked
+         * up by the next iteration. */
+        thread_cache_t *cache = atomic_exchange(&pool->thread_caches, NULL);
+        if (!cache) {
+            break;
+        }
 
-        pthread_mutex_lock(&cache->cleanup_mutex);
+        while (cache) {
+            thread_cache_t *next = cache->next;
 
-        if (!cache->cleaned_up) {
-            /* Free all cached buffers (destructor hasn't done it yet) */
-            for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
-                for (int i = 0; i < cache->counts[class_idx]; i++) {
-                    free(cache->buffers[class_idx][i]);
+            pthread_mutex_lock(&cache->cleanup_mutex);
+
+            if (!cache->cleaned_up) {
+                /* Free all cached buffers (destructor hasn't done it yet) */
+                for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
+                    for (int i = 0; i < cache->counts[class_idx]; i++) {
+                        free(cache->buffers[class_idx][i]);
+                    }
+                    cache->counts[class_idx] = 0;
                 }
-                cache->counts[class_idx] = 0;
+                cache->cleaned_up = true;
             }
-            cache->cleaned_up = true;
-        }
 
-        cache->pool = NULL;
-        bool exited = cache->thread_exited;
+            cache->pool = NULL;
+            bool exited = cache->thread_exited;
 
-        pthread_mutex_unlock(&cache->cleanup_mutex);
+            pthread_mutex_unlock(&cache->cleanup_mutex);
 
-        if (tls_cache == cache) {
-            /* This is the calling thread's own cache */
-            tls_cache = NULL;
-            if (tls_key_valid) {
-                pthread_setspecific(tls_key, NULL);
+            if (tls_cache == cache) {
+                /* This is the calling thread's own cache */
+                tls_cache = NULL;
+                if (tls_key_valid) {
+                    pthread_setspecific(tls_key, NULL);
+                }
+                pthread_mutex_destroy(&cache->cleanup_mutex);
+                free(cache);
+            } else if (exited) {
+                /* Thread already exited — destructor left the struct for us */
+                pthread_mutex_destroy(&cache->cleanup_mutex);
+                free(cache);
             }
-            pthread_mutex_destroy(&cache->cleanup_mutex);
-            free(cache);
-        } else if (exited) {
-            /* Thread already exited — destructor left the struct for us */
-            pthread_mutex_destroy(&cache->cleanup_mutex);
-            free(cache);
-        }
-        /* else: thread is alive. Its destructor or get_thread_cache orphan
-         * cleanup will see pool==NULL and free the struct. */
+            /* else: thread is alive. Its destructor or get_thread_cache orphan
+             * cleanup will see pool==NULL and free the struct. */
 
-        cache = next;
+            cache = next;
+        }
     }
-    atomic_store(&pool->thread_caches, NULL);
 
     /* Destroy all shards (safe: any racing destructor that held cleanup_mutex
      * has already released it and finished flushing to shards above). */
