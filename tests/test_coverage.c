@@ -25,6 +25,7 @@
 #include "../include/auraio.h"
 #include "../src/adaptive_buffer.h"
 #include "../src/adaptive_ring.h"
+#include "../src/log.h"
 
 static int test_count = 0;
 
@@ -150,6 +151,53 @@ TEST(log_handler_receives_messages) {
     if (atomic_load(&log_cb_count) > 0) {
         assert(last_log_ud == &sentinel);
     }
+
+    auraio_set_log_handler(NULL, NULL);
+}
+
+TEST(log_emit_no_handler) {
+    atomic_store(&log_cb_count, 0);
+    auraio_set_log_handler(NULL, NULL);
+
+    /* Should be a no-op when no handler is installed. */
+    auraio_log(AURAIO_LOG_WARN, "no handler %d", 7);
+    assert(atomic_load(&log_cb_count) == 0);
+}
+
+TEST(log_emit_formatted_message) {
+    int sentinel = 1234;
+    atomic_store(&log_cb_count, 0);
+    last_log_level = 0;
+    last_log_msg[0] = '\0';
+    last_log_ud = NULL;
+
+    auraio_set_log_handler(test_log_handler, &sentinel);
+    auraio_log(AURAIO_LOG_ERR, "formatted %d %s", 42, "message");
+
+    assert(atomic_load(&log_cb_count) == 1);
+    assert(last_log_level == AURAIO_LOG_ERR);
+    assert(strcmp(last_log_msg, "formatted 42 message") == 0);
+    assert(last_log_ud == &sentinel);
+
+    auraio_set_log_handler(NULL, NULL);
+}
+
+TEST(log_emit_truncates_long_message) {
+    int sentinel = 55;
+    char big[1024];
+    memset(big, 'X', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+
+    atomic_store(&log_cb_count, 0);
+    last_log_msg[0] = '\0';
+    auraio_set_log_handler(test_log_handler, &sentinel);
+    auraio_log(AURAIO_LOG_WARN, "%s", big);
+
+    assert(atomic_load(&log_cb_count) == 1);
+    assert(last_log_level == AURAIO_LOG_WARN);
+    /* Internal buffer is 256 bytes, so emitted string must be truncated. */
+    assert(strlen(last_log_msg) == 255);
+    assert(last_log_ud == &sentinel);
 
     auraio_set_log_handler(NULL, NULL);
 }
@@ -1971,6 +2019,9 @@ int main(void) {
     RUN_TEST(log_set_handler);
     RUN_TEST(log_null_handler);
     RUN_TEST(log_handler_receives_messages);
+    RUN_TEST(log_emit_no_handler);
+    RUN_TEST(log_emit_formatted_message);
+    RUN_TEST(log_emit_truncates_long_message);
 
     /* Request introspection */
     RUN_TEST(request_fd_null);
