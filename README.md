@@ -108,12 +108,14 @@ fn main() -> Result<()> {
     let engine = Engine::new()?;
     let buf = engine.allocate_buffer(4096)?;
 
-    engine.read(fd, &buf, 4096, 0, |result| {
-        match result {
-            Ok(n) => println!("Read {} bytes", n),
-            Err(e) => eprintln!("Error: {}", e),
-        }
-    })?;
+    unsafe {
+        engine.read(fd, &buf, 4096, 0, |result| {
+            match result {
+                Ok(n) => println!("Read {} bytes", n),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        })?;
+    }
 
     engine.wait(-1)?;
     Ok(())
@@ -129,9 +131,9 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
     let buf = engine.allocate_buffer(65536)?;
     let mut offset = 0i64;
     loop {
-        let n = engine.async_read(src, &buf, 65536, offset).await?;
+        let n = unsafe { engine.async_read(src, &buf, 65536, offset) }?.await?;
         if n == 0 { break; }
-        engine.async_write(dst, &buf, n, offset).await?;
+        unsafe { engine.async_write(dst, &buf, n, offset) }?.await?;
         offset += n as i64;
     }
     Ok(())
@@ -161,6 +163,7 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
 - **Coroutine Support** — C++20 `co_await` and Rust async/await
 - **Thread-Safe** — Multiple threads can submit concurrently
 - **Event Loop Integration** — Pollable fd for epoll/kqueue
+- **Prometheus Metrics** — Built-in exporter with per-ring stats, latency histograms, AIMD phase
 
 ## Quick Start
 
@@ -239,13 +242,15 @@ fn main() -> Result<()> {
     let done = Arc::new(AtomicBool::new(false));
     let done_cb = done.clone();
 
-    engine.read(fd, &buf, 4096, 0, move |result| {
-        match result {
-            Ok(n) => println!("Read {} bytes", n),
-            Err(e) => eprintln!("Error: {}", e),
-        }
-        done_cb.store(true, Ordering::SeqCst);
-    })?;
+    unsafe {
+        engine.read(fd, &buf, 4096, 0, move |result| {
+            match result {
+                Ok(n) => println!("Read {} bytes", n),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+            done_cb.store(true, Ordering::SeqCst);
+        })?;
+    }
 
     while !done.load(Ordering::SeqCst) {
         engine.wait(100)?;
@@ -402,20 +407,19 @@ See [docs/BFFIO.md](docs/BFFIO.md) for full usage, supported parameters, and bas
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
 - [API Reference](docs/api_reference.md) — Full function documentation
 - [Async Lifecycle](docs/ASYNC_LIFECYCLE.md) — Submission vs completion semantics
-- [Release Strategy](docs/RELEASE_STRATEGY.md) — Path to first public open-source release
-- [Compatibility Policy](docs/COMPATIBILITY_POLICY.md) — C ABI + C++/Rust semver guarantees
-- [API Freeze Gate](docs/API_FREEZE_GATE.md) — Snapshot/RFC workflow for public surfaces
-- [Observability Contract](docs/OBSERVABILITY_CONTRACT.md) — Metrics schema and stability rules
+- [Observability Guide](docs/observability.md) — Stats API, Prometheus integration, sampling costs
+- [Performance Guide](docs/performance.md) — Tuning constants, benchmark methodology
 - [BFFIO Benchmark](docs/BFFIO.md) — FIO-compatible benchmark tool
+- [Codebase Map](docs/CODEBASE_MAP.md) — File-level guide for contributors
 - [Examples](examples/) — Working code samples
 
 ## Stability and Versioning
 
-AuraIO is currently pre-1.0 (`0.x`) and stabilizing toward open-source release.
+AuraIO is currently pre-1.0 (`0.x`).
 
-1. API and ABI may still evolve.
-2. API/ABI compatibility gates are not yet enforced in CI while the project is under active development.
-3. Breaking surface changes are currently expected during internal iteration.
+1. API and ABI may still evolve between minor releases.
+2. API/ABI surface snapshots are tracked in `api/snapshots/` for visibility.
+3. Breaking changes require an RFC in `docs/rfcs/`.
 
 ## Contributing
 

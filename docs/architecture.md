@@ -43,6 +43,86 @@ A zero-copy-ready slab allocator designed to reduce `malloc/free` overhead and e
   - Fallback when local cache is empty/full.
   - Sharded by `next_power_of_2(cpu_count / 4)` to reduce lock contention.
 
+### 5. Registered Buffers & Files (Kernel Zero-Copy)
+
+#### What Are Registered Buffers?
+
+Every normal `io_uring` read or write requires the kernel to map the userspace buffer pages into kernel address space, perform the I/O, and then unmap them. For large transfers this mapping cost is negligible, but for high-frequency small I/O it becomes a measurable bottleneck.
+
+**Registered buffers** (`io_uring` fixed buffers) solve this by pre-registering a set of buffers with the kernel once. The kernel pins the pages and keeps the mapping alive across operations. Subsequent I/O referencing these buffers by index skips the map/unmap step entirely.
+
+AuraIO wraps this mechanism with `auraio_register_buffers()` and `auraio_buf_fixed()`:
+
+```c
+// Register two 4KB buffers with the kernel (once, at startup)
+struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
+auraio_register_buffers(engine, iovs, 2);
+
+// Use by index — kernel skips page mapping
+auraio_read(engine, fd, auraio_buf_fixed(0, 0), 4096, offset, cb, ud);
+auraio_write(engine, fd, auraio_buf_fixed(1, 0), 4096, offset, cb, ud);
+```
+
+This is a separate system from the buffer pool:
+
+| System | What it does | When to use |
+|--------|-------------|-------------|
+| **Buffer pool** (`auraio_buffer_alloc`) | Userspace slab allocator for aligned buffers. Alloc/free per operation. | General-purpose I/O, dynamic buffer counts, one-off operations |
+| **Registered buffers** (`auraio_register_buffers`) | Kernel-pinned buffers referenced by index. Register once. | Same buffers reused across 1000+ ops, high-frequency small I/O (< 16KB), zero-copy critical paths |
+
+**Use regular buffers** (`auraio_buf(ptr)`) when you don't want to manage registration lifecycle, when buffer counts change at runtime, or when operations are infrequent enough that mapping overhead doesn't matter.
+
+#### Registration Lifecycle
+
+Registered buffers have three states:
+
+```
+UNREGISTERED ──register──> REGISTERED ──request_unregister──> DRAINING ──all complete──> UNREGISTERED
+                                       └──unregister (sync)──> blocks until UNREGISTERED
+```
+
+- **UNREGISTERED**: No buffers registered. `auraio_buf_fixed()` submissions fail with `ENOENT`.
+- **REGISTERED**: Fixed-buffer I/O is active. Submissions via `auraio_buf_fixed(index, offset)` are accepted.
+- **DRAINING**: Unregister has been requested but in-flight fixed-buffer operations are still completing. New `auraio_buf_fixed()` submissions fail with `EBUSY`. In-flight operations complete normally. Regular (non-fixed) I/O is completely unaffected.
+
+#### Knowing When Buffers Are Safe to Free
+
+**This is the critical safety question:** after requesting unregistration, when can you free or modify the underlying buffer memory?
+
+**Synchronous path** (non-callback context): Use `auraio_unregister_buffers()`. It blocks internally — calling `auraio_wait()` in a loop — until every in-flight fixed-buffer operation has completed and the kernel has unregistered the pages. When it returns 0, the buffers are fully detached from the kernel and safe to free, reuse, or modify.
+
+```c
+// Main thread (not in a callback):
+auraio_unregister_buffers(engine);  // blocks until all fixed-buf I/O completes
+free(buf1);  // safe — kernel no longer references these pages
+free(buf2);
+```
+
+**Deferred path** (from callbacks): Use `auraio_request_unregister_buffers()`. It marks buffers as draining and returns immediately. Finalization happens automatically during subsequent `auraio_poll()` / `auraio_wait()` / `auraio_run()` calls: once the per-ring `fixed_buf_inflight` counters all reach zero, the library calls `io_uring_unregister_buffers()` and clears the registration state.
+
+There is no explicit completion callback for deferred unregistration. You know it is safe to free the buffers when you can successfully call `auraio_register_buffers()` with new buffers (which fails with `EBUSY` if the old set is still draining). The intended pattern is:
+
+```c
+void my_callback(auraio_request_t *req, ssize_t result, void *ctx) {
+    // Last operation done — request deferred unregister
+    auraio_request_unregister_buffers(engine);
+    // Do NOT free buffers here — other fixed-buf ops may still be in-flight
+}
+
+// Later, in main thread after draining:
+auraio_drain(engine, -1);   // wait for all I/O to complete
+// At this point finalization has run (drain calls wait internally).
+// Buffers are safe to free.
+free(buf1);
+free(buf2);
+```
+
+**If called from a callback**, `auraio_unregister_buffers()` automatically degrades to deferred mode (equivalent to `auraio_request_unregister_buffers()`). This prevents deadlock since the callback is already on the `auraio_wait()` call stack.
+
+#### Registered Files
+
+File descriptor registration (`auraio_register_files`) follows the same lifecycle pattern, eliminating kernel fd-table lookups on every I/O submission. Registered files additionally support `auraio_update_file(engine, index, new_fd)` for hot-swapping individual slots without unregistering the entire set.
+
 ## Concurrency Model
 
 AuraIO employs a **Shared-Nothing (mostly)** architecture.
@@ -183,22 +263,163 @@ auraio::Task<std::vector<char>> read_file_async(auraio::Engine& engine, int fd, 
 
 **Migration effort:** Add `#include <auraio.hpp>`, create an `Engine`, replace blocking calls with async equivalents. The C++ compiler catches type errors, and RAII handles cleanup automatically.
 
-### Choosing C vs C++
+### Rust API: Safe Systems Programming
 
-| Consideration | C API | C++ API |
-|---------------|-------|---------|
-| **Use case** | Storage engines, databases, OS components, embedded | Services, applications, data pipelines |
-| **Error handling** | Return codes + errno | Exceptions |
-| **Memory management** | Manual (or use buffer pool) | RAII (automatic) |
-| **Callback style** | Function pointers + void* | Lambdas with captures |
-| **Async pattern** | Callbacks only | Callbacks or coroutines |
-| **Dependencies** | libc, liburing | libc, liburing, C++20 stdlib |
-| **Binary size** | Minimal | Moderate (templates) |
+The Rust bindings provide memory-safe access to AuraIO through two crates: `auraio-sys` (raw FFI bindings generated by bindgen) and `auraio` (safe wrapper crate). The safe crate exposes an idiomatic Rust API with `Result<T>` error handling, RAII buffer management, `FnOnce` callbacks, and optional `async`/`await` support via the `async` feature flag.
+
+#### Crate Structure
+
+```
+auraio-sys          (raw FFI - auto-generated, not meant for direct use)
+  └── auraio        (safe wrapper crate)
+       ├── Engine         Arc<EngineInner> ownership, Send + Sync
+       ├── Buffer         RAII, returned to pool on Drop
+       ├── BufferRef      Copy, no lifetime (unsafe constructors)
+       ├── Options        Builder pattern for engine configuration
+       ├── Stats          Snapshot of runtime statistics
+       ├── Error/Result   Typed errors: Io, Cancelled, Submission, etc.
+       └── async_io       AsyncEngine trait + IoFuture (feature = "async")
+```
+
+The `Engine` internally holds an `Arc<EngineInner>` that wraps a `NonNull<auraio_engine_t>`. This Arc is cloned into every `Buffer`, ensuring the C engine outlives all buffers even if the user drops the `Engine` value first. The engine is `Send + Sync`; submissions from multiple threads are safe. Polling (`poll`/`wait`/`run`) is serialized by an internal `Mutex<()>` to prevent concurrent CQ access.
+
+#### Key Differences from C++
+
+| Aspect | C++ API | Rust API |
+|--------|---------|----------|
+| **Error handling** | Exceptions | `Result<T, auraio::Error>` with typed variants |
+| **Engine lifetime** | RAII (unique ownership) | `Arc<EngineInner>` (shared ownership, cloneable) |
+| **Callback signature** | `void(Request&, ssize_t)` | `FnOnce(Result<usize>) + Send + 'static` |
+| **Buffer I/O methods** | Safe methods | `unsafe fn read()` / `unsafe fn write()` |
+| **Buffer references** | `Buffer` with RAII | `BufferRef` is `Copy`, no lifetime (unsafe to create from raw pointers/slices) |
+| **Async pattern** | Coroutines (`co_await`) | `AsyncEngine` trait returning `IoFuture` (any executor) |
+| **Memory management** | RAII + destructors | RAII `Buffer` with `Drop` returning to pool; `BufferRef` is unmanaged |
+
+#### Buffer Safety Model
+
+`Buffer` is an RAII type: it holds an `Arc<EngineInner>` and returns its memory to the pool on `Drop`. Safe to create via `engine.allocate_buffer(size)`.
+
+`BufferRef` is a lightweight `Copy` type that wraps a raw pointer or registered buffer index. It intentionally carries **no lifetime parameter** because the kernel holds the pointer across the async submission boundary, which cannot be expressed in Rust's borrow checker. As a result:
+
+- `BufferRef::from_ptr()`, `BufferRef::from_slice()`, and `BufferRef::from_mut_slice()` are all `unsafe` constructors.
+- Converting from `&Buffer` via `.into()` is safe (the `From<&Buffer>` impl is not `unsafe`), but the caller must still keep the `Buffer` alive until the callback fires.
+- `BufferRef::fixed()` and `BufferRef::fixed_index()` are safe (they reference kernel-registered buffers by index).
+
+The `read()` and `write()` methods on `Engine` are `unsafe fn` specifically because the compiler cannot verify that the `BufferRef`'s underlying memory outlives the in-flight I/O operation. Methods that do not take a `BufferRef` (like `fsync` and `fdatasync`) are safe.
+
+#### Async Support
+
+When the `async` feature is enabled, the `AsyncEngine` trait extends `Engine` with future-returning methods:
+
+```rust
+use auraio::{Engine, async_io::AsyncEngine};
+
+// Returns IoFuture which implements Future<Output = Result<usize>>
+let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
+```
+
+`IoFuture` works with any async runtime (tokio, async-std, smol). It uses an `Arc<Mutex<IoState>>` shared between the callback and the future's `poll()` implementation. The callback stores the result and wakes the future; `poll()` checks for a ready result or registers its `Waker`.
+
+**Important:** Dropping an `IoFuture` does *not* cancel the kernel I/O operation. If you use `select!` or similar cancellation patterns, you must ensure buffers outlive the I/O operation, not just the future.
+
+Integration requires a completion driver -- either a background thread calling `engine.wait()` in a loop, or integration with your runtime's event loop via `engine.poll_fd()`:
+
+```rust
+// Background poller pattern (works with any runtime)
+let engine = Arc::new(Engine::new()?);
+let poller_engine = engine.clone();
+let stop = Arc::new(AtomicBool::new(false));
+let stop_clone = stop.clone();
+
+thread::spawn(move || {
+    while !stop_clone.load(Ordering::Relaxed) {
+        poller_engine.wait(10).ok();
+    }
+});
+```
+
+#### When to Use `unsafe` vs Safe APIs
+
+The Rust bindings minimize `unsafe` surface area. Here is when `unsafe` is required:
+
+| Operation | Safe? | Why |
+|-----------|-------|-----|
+| `Engine::new()`, `Engine::with_options()` | Safe | Engine creation is fully managed |
+| `engine.allocate_buffer(size)` | Safe | Returns RAII `Buffer` |
+| `engine.read()`, `engine.write()` | **Unsafe** | `BufferRef` lifetime not enforced by compiler |
+| `engine.readv()`, `engine.writev()` | **Unsafe** | iovec + buffer lifetime not enforced |
+| `engine.fsync()`, `engine.fdatasync()` | Safe | No buffer involved |
+| `engine.cancel(&handle)` | **Unsafe** | `RequestHandle` may be invalid after callback |
+| `engine.poll()`, `engine.wait()`, `engine.run()` | Safe | Internally synchronized |
+| `BufferRef::from_ptr()`, `from_slice()`, `from_mut_slice()` | **Unsafe** | Lifetime not tracked |
+| `BufferRef::from(&buffer)` | Safe | But caller must keep buffer alive |
+| `BufferRef::fixed()`, `fixed_index()` | Safe | References registered index |
+| `engine.register_buffers()` | **Unsafe** | Registered buffers must outlive registration |
+| `engine.async_read()`, `async_write()` | **Unsafe** | Same buffer lifetime concern as sync |
+| `engine.async_fsync()`, `async_fdatasync()` | Safe | No buffer involved |
+
+#### Migration Examples: C to Rust
+
+**Before (POSIX blocking I/O):**
+```c
+ssize_t n = pread(fd, buf, len, offset);
+if (n < 0) handle_error(errno);
+process_data(buf, n);
+```
+
+**After (AuraIO Rust, callback-based):**
+```rust
+let engine = Engine::new()?;
+let buf = engine.allocate_buffer(4096)?;
+let done = Arc::new(AtomicBool::new(false));
+let done_clone = done.clone();
+
+unsafe {
+    engine.read(fd, (&buf).into(), 4096, 0, move |result| {
+        match result {
+            Ok(n) => println!("Read {} bytes", n),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+        done_clone.store(true, Ordering::SeqCst);
+    })?;
+}
+
+while !done.load(Ordering::SeqCst) {
+    engine.wait(100)?;
+}
+```
+
+**After (AuraIO Rust, async/await with `async` feature):**
+```rust
+use auraio::{Engine, async_io::AsyncEngine};
+
+let engine = Engine::new()?;
+let buf = engine.allocate_buffer(4096)?;
+
+let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
+let content = &buf.as_slice()[..n];
+```
+
+**Migration effort:** Add `auraio` to `Cargo.toml`, create an `Engine`, replace blocking calls with async submissions. The `unsafe` blocks around buffer I/O operations serve as explicit documentation of the lifetime contract. Error handling uses idiomatic `?` propagation with typed `auraio::Error` variants.
+
+### Choosing C vs C++ vs Rust
+
+| Consideration | C API | C++ API | Rust API |
+|---------------|-------|---------|----------|
+| **Use case** | Storage engines, databases, OS components, embedded | Services, applications, data pipelines | Systems services, CLI tools, safe infrastructure |
+| **Error handling** | Return codes + errno | Exceptions | `Result<T>` with `?` operator |
+| **Memory management** | Manual (or use buffer pool) | RAII (automatic) | RAII `Buffer` + `unsafe` for raw buffer ops |
+| **Callback style** | Function pointers + void* | Lambdas with captures | `FnOnce(Result<usize>) + Send + 'static` closures |
+| **Async pattern** | Callbacks only | Callbacks or coroutines | Callbacks or `async`/`await` (any executor) |
+| **Dependencies** | libc, liburing | libc, liburing, C++20 stdlib | libc, liburing (via auraio-sys FFI) |
+| **Binary size** | Minimal | Moderate (templates) | Moderate (monomorphization) |
+| **Thread safety** | Manual | Manual | `Send + Sync` enforced by compiler |
 
 **Recommendation:**
-- Building infrastructure that other code depends on? → **C API**
-- Building an application or service? → **C++ API**
-- Uncertain? Start with C++. You can always call the C API directly if needed—the C++ `Engine::handle()` method exposes the underlying `auraio_engine_t*`.
+- Building infrastructure that other code depends on? --> **C API**
+- Building an application or service in C++? --> **C++ API**
+- Building systems software where memory safety matters? --> **Rust API**
+- Uncertain? Start with C++ or Rust depending on your team's language. Both provide high-level ergonomics. The C++ `Engine::handle()` and Rust `Engine::as_ptr()` methods expose the underlying `auraio_engine_t*` for escape hatches.
 
 ### Incremental Adoption Strategy
 

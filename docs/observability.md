@@ -37,6 +37,7 @@ Fields in `auraio_stats_t`:
 | `current_in_flight` | `int` | Current total in-flight operations |
 | `optimal_in_flight` | `int` | AIMD-tuned aggregate in-flight limit |
 | `optimal_batch_size` | `int` | AIMD-tuned aggregate batch size |
+| `adaptive_spills` | `uint64_t` | ADAPTIVE mode: count of submissions that spilled to a non-local ring |
 
 ### Per-Ring Stats
 
@@ -163,7 +164,14 @@ std::cout << bs.total_buffers() << " buffers in " << bs.shard_count() << " shard
 AuraIO ships a standalone Prometheus exposition text formatter in `exporters/prometheus/`. It has **no external dependencies** beyond libauraio itself.
 
 Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
-See `docs/OBSERVABILITY_CONTRACT.md` for compatibility and naming rules.
+
+**Schema versioning:** A schema info metric is emitted (`auraio_metrics_schema_info{schema="v0",stability="experimental"} 1`). Before `1.0`, new metrics may be added and labels may change. At `1.0`, the schema transitions to stable and breaking metric changes require a major-version bump.
+
+**Naming rules:** All metric names use the `auraio_` prefix. Labels are kept bounded and operationally meaningful — no high-cardinality labels (`req_id`, raw fd/offset, `user_data`).
+
+**Data consistency:** Observability reads are intentionally lock-free best-effort snapshots. Values may be updated while being read, and minor cross-field skew is expected. Metrics are intended for trends and alerting, not strict accounting.
+
+**Change process:** Any change to exporter metric names or labels requires an updated metric snapshot (`api/snapshots/prometheus_metrics.txt`), an RFC under `docs/rfcs/`, and a documentation update.
 
 ### Building
 
