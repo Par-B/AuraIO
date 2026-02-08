@@ -1244,9 +1244,8 @@ int auraio_poll(auraio_engine_t *engine) {
     if (!engine) {
         return (0);
     }
-    if (check_fatal_submit_errno(engine)) {
-        return (-1);
-    }
+
+    bool fatal_latched = (get_fatal_submit_errno(engine) != 0);
 
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
@@ -1278,8 +1277,7 @@ int auraio_poll(auraio_engine_t *engine) {
                     errno = 0;
                 } else {
                     latch_fatal_submit_errno(engine, errno);
-                    pthread_mutex_unlock(&ring->lock);
-                    return (-1);
+                    fatal_latched = true;
                 }
             }
             pthread_mutex_unlock(&ring->lock);
@@ -1307,8 +1305,7 @@ int auraio_poll(auraio_engine_t *engine) {
                     errno = 0;
                 } else {
                     latch_fatal_submit_errno(engine, errno);
-                    pthread_mutex_unlock(&ring->lock);
-                    return (-1);
+                    fatal_latched = true;
                 }
             }
             pthread_mutex_unlock(&ring->lock);
@@ -1325,6 +1322,11 @@ int auraio_poll(auraio_engine_t *engine) {
         return (-1);
     }
 
+    if (fatal_latched && total == 0) {
+        errno = get_fatal_submit_errno(engine);
+        return (-1);
+    }
+
     return total;
 }
 
@@ -1333,9 +1335,8 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
         errno = EINVAL;
         return (-1);
     }
-    if (check_fatal_submit_errno(engine)) {
-        return (-1);
-    }
+
+    bool fatal_latched = (get_fatal_submit_errno(engine) != 0);
 
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
@@ -1365,8 +1366,7 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
                 errno = 0;
             } else {
                 latch_fatal_submit_errno(engine, errno);
-                pthread_mutex_unlock(&ring->lock);
-                return (-1);
+                fatal_latched = true;
             }
         }
         bool has_pending = (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0);
@@ -1385,6 +1385,11 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
             return (-1);
         }
         return total;
+    }
+
+    if (fatal_latched) {
+        errno = get_fatal_submit_errno(engine);
+        return (-1);
     }
 
     /* Nothing ready — block on first ring with pending ops.
@@ -1466,9 +1471,6 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
         errno = EINVAL;
         return -1;
     }
-    if (check_fatal_submit_errno(engine)) {
-        return (-1);
-    }
 
     int64_t deadline_ns = 0;
     if (timeout_ms > 0) {
@@ -1477,9 +1479,6 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
 
     int total = 0;
     for (;;) {
-        if (check_fatal_submit_errno(engine)) {
-            return (-1);
-        }
         if (maybe_finalize_deferred_unregistration(engine) != 0) {
             return (-1);
         }
