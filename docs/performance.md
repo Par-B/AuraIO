@@ -250,6 +250,7 @@ Internal structures are organized so that fields accessed together on the hot pa
 The most frequent operations avoid locks and atomics entirely:
 
 - **Thread-local buffer cache**: Allocation and deallocation from the per-thread cache are `O(1)` with zero atomics — just a pointer swap on a stack.
+- **Registered file/buffer elision**: An `_Atomic bool` flag tracks whether any files or buffers are registered. The common unregistered path reads this flag with `memory_order_acquire` and skips the `reg_lock` rwlock entirely — eliminating ~93 instructions per operation (rdlock + unlock + resolution function) when no registrations are active.
 - **TLS-cached CPU routing**: The result of `sched_getcpu()` is cached in thread-local storage and refreshed every 32 submissions, avoiding a syscall on every I/O operation.
 - **Size-class lookup**: Common buffer sizes (up to 256KB) use a comparison cascade rather than a `CLZ` instruction, which is faster on most x86 microarchitectures for the typical 4KB-64KB range.
 
@@ -265,7 +266,7 @@ Where locks are required, AuraIO amortizes the cost by doing more work per acqui
 Micro-optimizations that compound at high IOPS:
 
 - **Request initialization**: Only the 8 fields needed for a new request are written (targeted stores), rather than zeroing the full struct with `memset`.
-- **Buffer allocation fast path**: The TLS cache validity check (pointer + generation ID comparison) runs before the atomic `pool->destroyed` check, keeping the common case branch-free.
+- **Buffer allocation fast path**: The TLS cache validity check is a single pointer comparison (`cache->pool == pool`) followed by an atomic `pool->destroyed` check. The generation ID (`pool_id`) is only validated on the slow path as defense-in-depth, keeping the hot path to two comparisons.
 - **Inline hot getters**: The adaptive controller's `inflight_limit` and `batch_threshold` are computed via `static inline` functions in the header, eliminating function call overhead on every submission.
 
 ### Kernel Cooperation
