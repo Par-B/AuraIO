@@ -202,7 +202,8 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
      * a previous pool that happened to occupy the same address.
      * Safe to dereference: cache struct is never freed while tls_cache
      * points to it (pool destroy leaves live threads' caches intact). */
-    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id) {
+    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id &&
+        !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         return cache;
     }
 
@@ -250,12 +251,14 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     /* Re-check liveness after registration. If pool was destroyed between
      * our first check and the CAS, destroy may already be walking the list
-     * and could access this cache. Do NOT free it here — mark it orphaned
-     * and let destroy / next get_thread_cache call / TLS destructor reclaim it. */
+     * and could access this cache. Do NOT free or detach it here; leave
+     * ownership with destroy/list traversal to avoid UAF races. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         pthread_mutex_lock(&cache->cleanup_mutex);
         cache->cleaned_up = true; /* Empty cache — nothing to flush */
-        cache->pool = NULL;       /* Never retain pointer to a destroying pool */
+        /* Keep pool pointer intact until destroy processes this node.
+         * Otherwise tls_destructor can free it while destroy still has a
+         * detached list pointer to this cache. */
         pthread_mutex_unlock(&cache->cleanup_mutex);
         /* Keep orphan reachable so the same thread can reclaim it on the
          * next pool access (or at thread exit via TLS destructor). */
