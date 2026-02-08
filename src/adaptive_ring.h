@@ -114,7 +114,7 @@ typedef struct {
     int64_t ops_completed;   /**< Total ops completed */
 
     /* Batching state */
-    int queued_sqes;                     /**< SQEs queued but not submitted */
+    _Atomic int queued_sqes;             /**< SQEs queued but not submitted */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
 
     /* Latency sampling: only timestamp every Nth submission to reduce

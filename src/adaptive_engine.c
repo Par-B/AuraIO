@@ -330,6 +330,11 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         }
     }
 
+    /* Save prev_* BEFORE state machine may modify in_flight_limit,
+     * so next tick's efficiency ratio sees the actual delta. */
+    ctrl->prev_throughput_bps = throughput_bps;
+    ctrl->prev_in_flight_limit = in_flight_limit;
+
     switch (ctrl->phase) {
     case ADAPTIVE_PHASE_BASELINE:
         /* Collect baseline metrics */
@@ -418,10 +423,6 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         /* No more changes - just maintain current config */
         break;
     }
-
-    /* Save for next ER calculation */
-    ctrl->prev_throughput_bps = throughput_bps;
-    ctrl->prev_in_flight_limit = in_flight_limit;
 
     /* Clear the old histogram for next use using atomic stores.
      * This avoids TSAN warnings from mixing memset with atomic operations.
