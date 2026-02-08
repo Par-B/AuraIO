@@ -17,6 +17,7 @@ VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 # Source files
 SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c
 OBJ = $(SRC:.c=.o)
+DEP = $(OBJ:.o=.d)
 
 # Library names (SO versioning: libauraio.so -> libauraio.so.0 -> libauraio.so.0.1.0)
 LIB_SHARED = lib/libauraio.so.$(VERSION)
@@ -59,8 +60,11 @@ $(LIB_STATIC): $(OBJ) | lib
 	ar rcs $@ $^
 
 # Object files (AURAIO_SHARED_BUILD exports public symbols via AURAIO_API)
+# -MMD -MP generates .d dependency files for automatic header tracking
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) -DAURAIO_SHARED_BUILD -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -DAURAIO_SHARED_BUILD -c $< -o $@
+
+-include $(DEP)
 
 # Build and run C tests (local/in-container)
 test-local: core
@@ -260,7 +264,7 @@ uninstall:
 
 # Clean
 clean: rust-clean
-	rm -f $(OBJ) $(TSAN_OBJ) $(ASAN_OBJ)
+	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
 	rm -f $(LIB_SHARED) lib/$(LIB_SONAME) lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
 	rm -rf lib
 	-$(MAKE) -C tests clean 2>/dev/null || true

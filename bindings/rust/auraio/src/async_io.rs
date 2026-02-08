@@ -69,9 +69,9 @@ struct IoState {
 /// (which is kept alive by the callback's Arc clone).
 ///
 /// Even with cancellation, callers using `select!` or similar patterns
-/// should prefer keeping buffers alive until the engine is polled at
-/// least once after cancellation, to ensure the kernel has observed
-/// the cancel before the buffer memory is reused.
+/// **must** keep buffers alive until the engine is polled at least once
+/// after the drop, to ensure the kernel has observed the cancel before
+/// the buffer memory is reused.
 pub struct IoFuture {
     state: Arc<Mutex<IoState>>,
     engine: Arc<EngineInner>,
@@ -119,11 +119,14 @@ impl Drop for IoFuture {
         };
         // Lock is dropped before FFI call to avoid holding the Mutex
         // while calling into the C library (which acquires its own locks).
-        // The TOCTOU between check and cancel is benign: cancelling an
-        // already-completed request is a no-op in the C API.
         if needs_cancel {
-            unsafe {
-                auraio_sys::auraio_cancel(self.engine.raw(), self.request);
+            // Re-check request_consumed to narrow the TOCTOU window: the
+            // callback may have fired between our lock release and here,
+            // invalidating the request pointer per the C API contract.
+            if !self.request_consumed.load(Ordering::Acquire) {
+                unsafe {
+                    auraio_sys::auraio_cancel(self.engine.raw(), self.request);
+                }
             }
         }
     }

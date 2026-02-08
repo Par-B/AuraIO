@@ -1,5 +1,6 @@
 # Build artifacts
 *.o
+*.d
 *.a
 *.so
 *.so.*
@@ -44,6 +45,9 @@ tools/BFFIO/baseline_results/
 
 # Exporter binaries
 exporters/prometheus/prometheus_example
+
+# Claude Code
+.claude/
 
 # Editor/IDE
 *.swp
