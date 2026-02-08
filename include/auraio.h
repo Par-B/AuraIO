@@ -27,7 +27,7 @@
 #define AURAIO_H
 
 #include <stdbool.h>
-#include <string.h>
+#include <stddef.h>
 
 /* ============================================================================
  * Version Information
@@ -273,6 +273,8 @@ typedef struct {
 
     /* Ring selection */
     auraio_ring_select_t ring_select; /**< Ring selection mode (default: ADAPTIVE) */
+
+    uint32_t _reserved[8]; /**< Reserved for future use; must be zero */
 } auraio_options_t;
 
 /**
@@ -334,9 +336,7 @@ typedef struct {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf(void *ptr) {
-    auraio_buf_t buf;
-    memset(&buf, 0, sizeof(buf));
-    buf.type = AURAIO_BUF_UNREGISTERED;
+    auraio_buf_t buf = {AURAIO_BUF_UNREGISTERED, {0}};
     buf.u.ptr = ptr;
     return buf;
 }
@@ -351,8 +351,7 @@ static inline auraio_buf_t auraio_buf(void *ptr) {
  * @return Buffer descriptor
  */
 static inline auraio_buf_t auraio_buf_fixed(int index, size_t offset) {
-    auraio_buf_t buf;
-    memset(&buf, 0, sizeof(buf));
+    auraio_buf_t buf = {AURAIO_BUF_UNREGISTERED, {0}};
     if (index < 0) {
         /* Return zeroed AURAIO_BUF_UNREGISTERED buffer with ptr=NULL.
          * Submitting this to an I/O function will fail with EINVAL. */

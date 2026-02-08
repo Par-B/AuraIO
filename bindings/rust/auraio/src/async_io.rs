@@ -36,6 +36,7 @@
 //! ```
 
 use crate::buffer::BufferRef;
+use crate::engine::EngineInner;
 use crate::error::Result;
 use crate::Engine;
 use std::future::Future;
@@ -43,8 +44,6 @@ use std::os::unix::io::RawFd;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-
-use pin_project_lite::pin_project;
 
 /// Shared state between the callback and the future
 struct IoState {
@@ -54,25 +53,35 @@ struct IoState {
     waker: Option<Waker>,
 }
 
-pin_project! {
-    /// A Future that completes when an async I/O operation finishes.
-    ///
-    /// This future is created by methods like [`AsyncEngine::async_read`].
-    /// Poll this future while also ensuring the engine processes completions
-    /// (via `engine.wait()` or `engine.poll()`).
-    ///
-    /// # Cancellation
-    ///
-    /// Dropping an `IoFuture` does **not** cancel the underlying I/O operation.
-    /// The kernel will still complete the operation and the callback will fire
-    /// (writing into the shared state that nobody reads). If the buffer passed
-    /// to the I/O call is freed before the operation completes, the kernel will
-    /// write into freed memory. Callers using `select!` or similar cancellation
-    /// patterns must ensure buffers outlive the I/O operation, not just the future.
-    pub struct IoFuture {
-        state: Arc<Mutex<IoState>>,
-    }
+/// A Future that completes when an async I/O operation finishes.
+///
+/// This future is created by methods like [`AsyncEngine::async_read`].
+/// Poll this future while also ensuring the engine processes completions
+/// (via `engine.wait()` or `engine.poll()`).
+///
+/// # Cancellation
+///
+/// Dropping an `IoFuture` will attempt to cancel the underlying kernel I/O
+/// operation via `auraio_cancel()`. Cancellation is best-effort: the kernel
+/// may have already completed the I/O. If cancelled successfully, the
+/// callback fires with `-ECANCELED` and writes into the shared state
+/// (which is kept alive by the callback's Arc clone).
+///
+/// Even with cancellation, callers using `select!` or similar patterns
+/// should prefer keeping buffers alive until the engine is polled at
+/// least once after cancellation, to ensure the kernel has observed
+/// the cancel before the buffer memory is reused.
+pub struct IoFuture {
+    state: Arc<Mutex<IoState>>,
+    engine: Arc<EngineInner>,
+    request: *mut auraio_sys::auraio_request_t,
 }
+
+// Safety: IoFuture is Send because:
+// - state is behind Arc<Mutex<>>, which is Send
+// - engine is behind Arc, which is Send
+// - request is a raw pointer only accessed for cancel (which is thread-safe in C API)
+unsafe impl Send for IoFuture {}
 
 impl Future for IoFuture {
     type Output = Result<usize>;
@@ -91,10 +100,27 @@ impl Future for IoFuture {
     }
 }
 
+impl Drop for IoFuture {
+    fn drop(&mut self) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.result.is_none() {
+            // I/O still in-flight — attempt best-effort cancellation.
+            // This prevents the kernel from writing to freed buffers if
+            // the future was dropped via select! or similar patterns.
+            // The callback will still fire (with -ECANCELED or the real
+            // result) and write into the Arc<Mutex<IoState>> harmlessly.
+            unsafe {
+                auraio_sys::auraio_cancel(self.engine.raw(), self.request);
+            }
+        }
+    }
+}
+
 /// Creates a new IoFuture and its associated callback.
 ///
-/// Returns (future, callback) where the callback must be passed to the C API.
-fn create_io_future() -> (IoFuture, impl FnOnce(Result<usize>) + Send + 'static) {
+/// Returns (callback, state_arc) where the callback must be passed to the C API.
+/// The IoFuture is constructed separately after the submission succeeds.
+fn create_io_callback() -> (impl FnOnce(Result<usize>) + Send + 'static, Arc<Mutex<IoState>>) {
     let state = Arc::new(Mutex::new(IoState {
         result: None,
         waker: None,
@@ -114,7 +140,7 @@ fn create_io_future() -> (IoFuture, impl FnOnce(Result<usize>) + Send + 'static)
         }
     };
 
-    (IoFuture { state }, callback)
+    (callback, state)
 }
 
 /// Extension trait providing async I/O methods on [`Engine`].
@@ -137,8 +163,8 @@ pub trait AsyncEngine {
     /// # Safety Contract
     ///
     /// The buffer must remain valid and exclusively borrowed until the
-    /// Future resolves. Dropping the Future does **not** cancel the kernel
-    /// I/O — see [`IoFuture`] cancellation docs.
+    /// Future resolves. Dropping the Future attempts to cancel the kernel
+    /// I/O but cancellation is best-effort — see [`IoFuture`] docs.
     ///
     /// # Example
     ///
@@ -170,7 +196,7 @@ pub trait AsyncEngine {
     /// # Safety Contract
     ///
     /// The buffer must remain valid until the Future resolves. Dropping
-    /// the Future does **not** cancel the kernel I/O — see [`IoFuture`].
+    /// the Future attempts to cancel the kernel I/O — see [`IoFuture`].
     unsafe fn async_write(
         &self,
         fd: RawFd,
@@ -229,9 +255,13 @@ impl AsyncEngine for Engine {
         len: usize,
         offset: i64,
     ) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        unsafe { self.read(fd, buf.into(), len, offset, callback)? };
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = unsafe { self.read(fd, buf.into(), len, offset, callback)? };
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 
     unsafe fn async_write(
@@ -241,21 +271,33 @@ impl AsyncEngine for Engine {
         len: usize,
         offset: i64,
     ) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        unsafe { self.write(fd, buf.into(), len, offset, callback)? };
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = unsafe { self.write(fd, buf.into(), len, offset, callback)? };
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 
     fn async_fsync(&self, fd: RawFd) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        self.fsync(fd, callback)?;
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = self.fsync(fd, callback)?;
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 
     fn async_fdatasync(&self, fd: RawFd) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        self.fdatasync(fd, callback)?;
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = self.fdatasync(fd, callback)?;
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 
     unsafe fn async_readv(
@@ -264,9 +306,13 @@ impl AsyncEngine for Engine {
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        unsafe { self.readv(fd, iovecs, offset, callback)? };
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = unsafe { self.readv(fd, iovecs, offset, callback)? };
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 
     unsafe fn async_writev(
@@ -275,9 +321,13 @@ impl AsyncEngine for Engine {
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
-        let (future, callback) = create_io_future();
-        unsafe { self.writev(fd, iovecs, offset, callback)? };
-        Ok(future)
+        let (callback, state) = create_io_callback();
+        let handle = unsafe { self.writev(fd, iovecs, offset, callback)? };
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+        })
     }
 }
 

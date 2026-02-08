@@ -11,7 +11,7 @@ fn main() {
     // Tell cargo to rerun if these change
     println!("cargo:rerun-if-env-changed=AURAIO_LIB_DIR");
     println!("cargo:rerun-if-env-changed=AURAIO_INCLUDE_DIR");
-    println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=../../../include/auraio.h");
 
     let mut include_path: Option<PathBuf> = None;
 
@@ -52,8 +52,9 @@ fn main() {
         println!("cargo:rustc-link-lib=auraio");
     }
 
-    // Always need liburing
+    // Always need liburing and pthreads
     println!("cargo:rustc-link-lib=uring");
+    println!("cargo:rustc-link-lib=pthread");
 
     // Determine include path for bindgen
     let include_arg = include_path

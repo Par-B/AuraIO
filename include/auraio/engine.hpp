@@ -472,6 +472,7 @@ class Engine {
      * @throws Error on timeout or failure
      */
     int drain(int timeout_ms = -1) {
+        std::lock_guard<std::mutex> lock(event_loop_mutex_);
         int n = auraio_drain(handle_, timeout_ms);
         if (n < 0) {
             throw Error(errno, "auraio_drain");
@@ -675,11 +676,15 @@ class Engine {
   private:
     void destroy() noexcept {
         if (handle_) {
+            /* Drain pending I/O BEFORE marking engine as dead.
+             * auraio_destroy() drains in-flight ops, invoking callbacks.
+             * Those callbacks may free Buffers, which need engine_alive_==true
+             * to call auraio_buffer_free() instead of falling back to free(). */
+            auraio_destroy(handle_);
+            handle_ = nullptr;
             if (engine_alive_) {
                 engine_alive_->store(false, std::memory_order_release);
             }
-            auraio_destroy(handle_);
-            handle_ = nullptr;
         }
         pool_.reset();
         engine_alive_.reset();

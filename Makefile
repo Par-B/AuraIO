@@ -244,6 +244,8 @@ install: core
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
 	install -m 644 include/auraio.h $(DESTDIR)$(PREFIX)/include/
 	install -m 644 include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
+	install -d $(DESTDIR)$(PREFIX)/include/auraio/exporters
+	install -m 644 exporters/prometheus/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall

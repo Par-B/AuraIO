@@ -129,7 +129,8 @@ class Buffer {
      * Move constructor
      */
     Buffer(Buffer &&other) noexcept
-        : engine_(other.engine_), ptr_(other.ptr_), size_(other.size_), owned_(other.owned_) {
+        : engine_(other.engine_), engine_alive_(std::move(other.engine_alive_)), ptr_(other.ptr_),
+          size_(other.size_), owned_(other.owned_) {
         other.engine_ = nullptr;
         other.ptr_ = nullptr;
         other.size_ = 0;
@@ -143,6 +144,7 @@ class Buffer {
         if (this != &other) {
             release_internal();
             engine_ = other.engine_;
+            engine_alive_ = std::move(other.engine_alive_);
             ptr_ = other.ptr_;
             size_ = other.size_;
             owned_ = other.owned_;
@@ -349,8 +351,8 @@ class Buffer {
 // Implementation of release_internal (needs auraio.h)
 inline void Buffer::release_internal() noexcept {
     if (owned_ && ptr_) {
-        bool engine_alive = engine_ && engine_alive_ &&
-                           engine_alive_->load(std::memory_order_acquire);
+        bool engine_alive =
+            engine_ && engine_alive_ && engine_alive_->load(std::memory_order_acquire);
         if (engine_alive) {
             auraio_buffer_free(engine_, ptr_, size_);
         } else {

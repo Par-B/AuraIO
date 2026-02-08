@@ -1156,7 +1156,7 @@ int auraio_poll(auraio_engine_t *engine) {
         }
     }
 
-    if (maybe_finalize_deferred_unregistration(engine) != 0) {
+    if (maybe_finalize_deferred_unregistration(engine) != 0 && total == 0) {
         return (-1);
     }
 

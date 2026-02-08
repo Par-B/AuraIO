@@ -249,11 +249,13 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     } while (!atomic_compare_exchange_weak(&pool->thread_caches, &old_head, cache));
 
     /* Re-check liveness after registration. If pool was destroyed between
-     * our first check and the CAS, destroy already walked the list and
-     * missed our cache — it would leak. Detect and clean up. */
+     * our first check and the CAS, destroy may already be walking the list
+     * and could access this cache. Do NOT free it here — mark it as
+     * cleaned_up (it has no buffers) and let destroy handle the struct. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        pthread_mutex_destroy(&cache->cleanup_mutex);
-        free(cache);
+        pthread_mutex_lock(&cache->cleanup_mutex);
+        cache->cleaned_up = true; /* Empty cache — nothing to flush */
+        pthread_mutex_unlock(&cache->cleanup_mutex);
         tls_cache = NULL;
         return NULL;
     }
@@ -660,6 +662,13 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
 
 void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     if (!pool || !buf) {
+        return;
+    }
+
+    /* Pool destroyed — shards are gone, just free the buffer directly.
+     * This can happen when a late callback frees a buffer after destroy. */
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        free(buf);
         return;
     }
 
