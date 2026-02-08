@@ -36,26 +36,94 @@ static int parse_endpoint(const char *endpoint, char *host, size_t host_sz, char
         *path_out = slash;
     }
 
-    /* Extract host:port */
+    /* Extract host[:port] authority portion */
     size_t hp_len = (size_t)(slash - hp);
-    const char *colon = memchr(hp, ':', hp_len);
-    if (colon) {
-        size_t h_len = (size_t)(colon - hp);
-        if (h_len >= host_sz) return -1;
-        memcpy(host, hp, h_len);
+    if (hp_len == 0) return -1;
+
+    if (hp[0] == '[') {
+        /* Bracketed IPv6 literal: [addr]:port */
+        const char *rbr = memchr(hp, ']', hp_len);
+        if (!rbr) return -1;
+
+        size_t h_len = (size_t)(rbr - (hp + 1));
+        if (h_len == 0 || h_len >= host_sz) return -1;
+        memcpy(host, hp + 1, h_len);
         host[h_len] = '\0';
 
-        size_t p_len = (size_t)(slash - colon - 1);
-        if (p_len >= port_sz || p_len == 0) return -1;
-        memcpy(port, colon + 1, p_len);
+        if ((size_t)(rbr - hp + 1) == hp_len) {
+            snprintf(port, port_sz, "80");
+            return 0;
+        }
+
+        if (*(rbr + 1) != ':') return -1;
+        size_t p_len = (size_t)(hp + hp_len - (rbr + 2));
+        if (p_len == 0 || p_len >= port_sz) return -1;
+        memcpy(port, rbr + 2, p_len);
         port[p_len] = '\0';
     } else {
-        if (hp_len >= host_sz) return -1;
-        memcpy(host, hp, hp_len);
-        host[hp_len] = '\0';
-        snprintf(port, port_sz, "80");
+        /* Hostname / IPv4 with optional :port */
+        const char *colon = memchr(hp, ':', hp_len);
+        if (colon) {
+            /* Reject unbracketed multiple-colon authorities (ambiguous IPv6). */
+            if (memchr(colon + 1, ':', (size_t)(hp + hp_len - (colon + 1))) != NULL) return -1;
+
+            size_t h_len = (size_t)(colon - hp);
+            if (h_len == 0 || h_len >= host_sz) return -1;
+            memcpy(host, hp, h_len);
+            host[h_len] = '\0';
+
+            size_t p_len = (size_t)(hp + hp_len - (colon + 1));
+            if (p_len == 0 || p_len >= port_sz) return -1;
+            memcpy(port, colon + 1, p_len);
+            port[p_len] = '\0';
+        } else {
+            if (hp_len == 0 || hp_len >= host_sz) return -1;
+            memcpy(host, hp, hp_len);
+            host[hp_len] = '\0';
+            snprintf(port, port_sz, "80");
+        }
     }
 
+    return 0;
+}
+
+static int send_all(int fd, const char *buf, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(fd, buf + sent, len - sent,
+#ifdef MSG_NOSIGNAL
+                         MSG_NOSIGNAL
+#else
+                         0
+#endif
+        );
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+static int read_status_line(int fd, char *resp, size_t resp_sz) {
+    size_t used = 0;
+    while (used + 1 < resp_sz) {
+        ssize_t n = read(fd, resp + used, 1);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) break;
+        if (resp[used] == '\n') {
+            used++;
+            break;
+        }
+        used++;
+    }
+    if (used == 0) return -1;
+    resp[used] = '\0';
     return 0;
 }
 
@@ -77,19 +145,25 @@ int auraio_otel_push(const char *endpoint, const char *buf, size_t len) {
         return -1;
     }
 
-    /* Connect */
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
-        freeaddrinfo(res);
-        return -1;
-    }
+    /* Connect: try all returned addresses */
+    int fd = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        int candidate = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (candidate < 0) continue;
 
-    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-        close(fd);
-        freeaddrinfo(res);
-        return -1;
+        int rc;
+        do {
+            rc = connect(candidate, ai->ai_addr, ai->ai_addrlen);
+        } while (rc < 0 && errno == EINTR);
+
+        if (rc == 0) {
+            fd = candidate;
+            break;
+        }
+        close(candidate);
     }
     freeaddrinfo(res);
+    if (fd < 0) return -1;
 
     /* Build and send HTTP request header */
     char header[1024];
@@ -107,34 +181,23 @@ int auraio_otel_push(const char *endpoint, const char *buf, size_t len) {
     }
 
     /* Send header */
-    ssize_t sent = 0;
-    while ((size_t)sent < (size_t)hlen) {
-        ssize_t n = write(fd, header + sent, (size_t)hlen - (size_t)sent);
-        if (n <= 0) {
-            close(fd);
-            return -1;
-        }
-        sent += n;
+    if (send_all(fd, header, (size_t)hlen) < 0) {
+        close(fd);
+        return -1;
     }
 
     /* Send body */
-    sent = 0;
-    while ((size_t)sent < len) {
-        ssize_t n = write(fd, buf + sent, len - (size_t)sent);
-        if (n <= 0) {
-            close(fd);
-            return -1;
-        }
-        sent += n;
+    if (send_all(fd, buf, len) < 0) {
+        close(fd);
+        return -1;
     }
 
     /* Read response status line */
     char resp[256];
-    ssize_t nread = read(fd, resp, sizeof(resp) - 1);
+    int read_ok = read_status_line(fd, resp, sizeof(resp));
     close(fd);
 
-    if (nread <= 0) return -1;
-    resp[nread] = '\0';
+    if (read_ok < 0) return -1;
 
     /* Parse "HTTP/1.x NNN ..." */
     int status = 0;
