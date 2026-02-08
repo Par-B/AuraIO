@@ -69,6 +69,7 @@ struct auraio_request {
     int op_idx;                     /**< Index in ring's request array */
     auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
     bool uses_registered_buffer;    /**< True if op depends on registered buffer lifetime */
+    bool uses_registered_file;      /**< True if fd is a registered-file index */
 
     /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending;           /**< True if still in-flight */

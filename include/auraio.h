@@ -846,7 +846,8 @@ AURAIO_API int auraio_unregister_buffers(auraio_engine_t *engine);
  * Register file descriptors with the kernel
  *
  * Pre-registers file descriptors to eliminate lookup overhead.
- * After registration, use the index (not fd) with _registered variants.
+ * After registration, regular I/O calls (auraio_read/auraio_write/readv/writev/fsync)
+ * automatically use the registered-file table when the submitted fd is found there.
  *
  * @param engine Engine handle
  * @param fds    Array of file descriptors to register

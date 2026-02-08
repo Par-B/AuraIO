@@ -86,6 +86,7 @@ struct auraio_engine {
 
     /* Aggregated statistics */
     _Atomic uint64_t adaptive_spills; /**< Count of ADAPTIVE ring spills */
+    _Atomic int fatal_submit_errno; /**< Latched fatal submit error from ring_flush */
 
     /* Registered buffers and files (protected by reg_lock) */
     pthread_rwlock_t reg_lock; /**< Protects registered_buffers/files access */
@@ -238,6 +239,7 @@ static ring_ctx_t *select_ring(auraio_engine_t *engine) {
  * Returned by submit_begin(), consumed by submit_end() or submit_abort().
  */
 typedef struct {
+    auraio_engine_t *engine;
     ring_ctx_t *ring;
     auraio_request_t *req;
     int op_idx;
@@ -245,6 +247,52 @@ typedef struct {
 
 static bool flush_error_is_fatal(int err) {
     return err != EAGAIN && err != EBUSY && err != EINTR;
+}
+
+static int get_fatal_submit_errno(const auraio_engine_t *engine) {
+    return atomic_load_explicit(&engine->fatal_submit_errno, memory_order_acquire);
+}
+
+static void latch_fatal_submit_errno(auraio_engine_t *engine, int err) {
+    if (err <= 0) {
+        err = EIO;
+    }
+
+    int expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&engine->fatal_submit_errno, &expected, err,
+                                                 memory_order_acq_rel, memory_order_acquire)) {
+        return;
+    }
+
+    if (engine->event_fd >= 0) {
+        uint64_t one = 1;
+        ssize_t rc = write(engine->event_fd, &one, sizeof(one));
+        (void)rc;
+    }
+}
+
+static bool check_fatal_submit_errno(auraio_engine_t *engine) {
+    int fatal = get_fatal_submit_errno(engine);
+    if (fatal == 0) {
+        return false;
+    }
+    errno = fatal;
+    return true;
+}
+
+static bool resolve_registered_file_locked(const auraio_engine_t *engine, int fd, int *fixed_fd) {
+    if (!engine->files_registered || engine->files_unreg_pending) {
+        return false;
+    }
+
+    for (int i = 0; i < engine->registered_file_count; i++) {
+        if (engine->registered_files[i] == fd) {
+            *fixed_fd = i;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static uint32_t fixed_buf_inflight_total(const auraio_engine_t *engine) {
@@ -323,7 +371,11 @@ static int maybe_finalize_deferred_unregistration(auraio_engine_t *engine) {
  *         (ring NOT locked, errno set to ESHUTDOWN/EAGAIN/ENOMEM)
  */
 static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
-    submit_ctx_t ctx = { .ring = NULL, .req = NULL, .op_idx = -1 };
+    submit_ctx_t ctx = { .engine = engine, .ring = NULL, .req = NULL, .op_idx = -1 };
+
+    if (check_fatal_submit_errno(engine)) {
+        return ctx;
+    }
 
     if (atomic_load_explicit(&engine->shutting_down, memory_order_acquire)) {
         errno = ESHUTDOWN;
@@ -338,6 +390,7 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
             if (!flush_error_is_fatal(errno)) {
                 errno = 0;
             } else {
+                latch_fatal_submit_errno(engine, errno);
                 pthread_mutex_unlock(&ring->lock);
                 return ctx;
             }
@@ -383,7 +436,9 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
  */
 static void submit_end(submit_ctx_t *ctx) {
     if (ring_should_flush(ctx->ring)) {
-        ring_flush(ctx->ring);
+        if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
+            latch_fatal_submit_errno(ctx->engine, errno);
+        }
     }
     pthread_mutex_unlock(&ctx->ring->lock);
 }
@@ -530,6 +585,7 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
     atomic_init(&engine->stop_requested, false);
     atomic_init(&engine->shutting_down, false);
     atomic_init(&engine->tick_running, false);
+    atomic_init(&engine->fatal_submit_errno, 0);
 
     /* Initialize registration lock */
     int rwlock_ret = pthread_rwlock_init(&engine->reg_lock, NULL);
@@ -694,25 +750,43 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
             return NULL;
         }
 
-        submit_ctx_t ctx = submit_begin(engine, true);
+        int submit_fd = fd;
+        bool use_registered_file = false;
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+        if (!use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
+
+        submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
         if (!ctx.req) {
+            if (use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
             return NULL;
         }
 
-        ctx.req->fd = fd;
+        ctx.req->fd = submit_fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
         ctx.req->user_data = user_data;
         ctx.req->ring_idx = ctx.ring->ring_idx;
+        ctx.req->uses_registered_file = use_registered_file;
 
         ctx.req->buffer = buf.u.ptr;
         if (ring_submit_read(ctx.ring, ctx.req) != 0) {
             submit_abort(&ctx);
+            if (use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
             return NULL;
         }
 
         submit_end(&ctx);
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return ctx.req;
     } else if (buf.type == AURAIO_BUF_REGISTERED) {
         pthread_rwlock_rdlock(&engine->reg_lock);
@@ -744,13 +818,17 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
             return NULL;
         }
 
-        ctx.req->fd = fd;
+        int submit_fd = fd;
+        bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+
+        ctx.req->fd = submit_fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
         ctx.req->user_data = user_data;
         ctx.req->ring_idx = ctx.ring->ring_idx;
         ctx.req->uses_registered_buffer = true;
+        ctx.req->uses_registered_file = use_registered_file;
 
         atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
 
@@ -786,25 +864,43 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
             return NULL;
         }
 
-        submit_ctx_t ctx = submit_begin(engine, true);
+        int submit_fd = fd;
+        bool use_registered_file = false;
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+        if (!use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
+
+        submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
         if (!ctx.req) {
+            if (use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
             return NULL;
         }
 
-        ctx.req->fd = fd;
+        ctx.req->fd = submit_fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
         ctx.req->user_data = user_data;
         ctx.req->ring_idx = ctx.ring->ring_idx;
+        ctx.req->uses_registered_file = use_registered_file;
 
         ctx.req->buffer = buf.u.ptr;
         if (ring_submit_write(ctx.ring, ctx.req) != 0) {
             submit_abort(&ctx);
+            if (use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
             return NULL;
         }
 
         submit_end(&ctx);
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return ctx.req;
     } else if (buf.type == AURAIO_BUF_REGISTERED) {
         pthread_rwlock_rdlock(&engine->reg_lock);
@@ -836,13 +932,17 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
             return NULL;
         }
 
-        ctx.req->fd = fd;
+        int submit_fd = fd;
+        bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+
+        ctx.req->fd = submit_fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
         ctx.req->user_data = user_data;
         ctx.req->ring_idx = ctx.ring->ring_idx;
         ctx.req->uses_registered_buffer = true;
+        ctx.req->uses_registered_file = use_registered_file;
 
         atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
 
@@ -877,15 +977,27 @@ auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd, auraio_fsync_
         return NULL;
     }
 
-    submit_ctx_t ctx = submit_begin(engine, true);
+    int submit_fd = fd;
+    bool use_registered_file = false;
+    pthread_rwlock_rdlock(&engine->reg_lock);
+    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+    if (!use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
+
+    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
     if (!ctx.req) {
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
-    ctx.req->fd = fd;
+    ctx.req->fd = submit_fd;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
+    ctx.req->uses_registered_file = use_registered_file;
 
     int ret;
     if (flags & AURAIO_FSYNC_DATASYNC) {
@@ -896,10 +1008,16 @@ auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd, auraio_fsync_
 
     if (ret != 0) {
         submit_abort(&ctx);
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
     submit_end(&ctx);
+    if (use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
     return ctx.req;
 }
 
@@ -915,25 +1033,43 @@ auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd, const struct iov
         return NULL;
     }
 
-    submit_ctx_t ctx = submit_begin(engine, true);
+    int submit_fd = fd;
+    bool use_registered_file = false;
+    pthread_rwlock_rdlock(&engine->reg_lock);
+    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+    if (!use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
+
+    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
     if (!ctx.req) {
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
-    ctx.req->fd = fd;
+    ctx.req->fd = submit_fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
     ctx.req->offset = offset;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
+    ctx.req->uses_registered_file = use_registered_file;
 
     if (ring_submit_readv(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
     submit_end(&ctx);
+    if (use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
     return ctx.req;
 }
 
@@ -945,25 +1081,43 @@ auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd, const struct io
         return NULL;
     }
 
-    submit_ctx_t ctx = submit_begin(engine, true);
+    int submit_fd = fd;
+    bool use_registered_file = false;
+    pthread_rwlock_rdlock(&engine->reg_lock);
+    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+    if (!use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
+
+    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
     if (!ctx.req) {
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
-    ctx.req->fd = fd;
+    ctx.req->fd = submit_fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
     ctx.req->offset = offset;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
+    ctx.req->uses_registered_file = use_registered_file;
 
     if (ring_submit_writev(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
+        if (use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
         return NULL;
     }
 
     submit_end(&ctx);
+    if (use_registered_file) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+    }
     return ctx.req;
 }
 
@@ -1032,6 +1186,7 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
             pthread_mutex_unlock(&ring->lock);
             return (0);
         }
+        latch_fatal_submit_errno(engine, errno);
         pthread_mutex_unlock(&ring->lock);
         return (-1);
     }
@@ -1089,6 +1244,9 @@ int auraio_poll(auraio_engine_t *engine) {
     if (!engine) {
         return (0);
     }
+    if (check_fatal_submit_errno(engine)) {
+        return (-1);
+    }
 
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
@@ -1119,6 +1277,7 @@ int auraio_poll(auraio_engine_t *engine) {
                 if (!flush_error_is_fatal(errno)) {
                     errno = 0;
                 } else {
+                    latch_fatal_submit_errno(engine, errno);
                     pthread_mutex_unlock(&ring->lock);
                     return (-1);
                 }
@@ -1147,6 +1306,7 @@ int auraio_poll(auraio_engine_t *engine) {
                 if (!flush_error_is_fatal(errno)) {
                     errno = 0;
                 } else {
+                    latch_fatal_submit_errno(engine, errno);
                     pthread_mutex_unlock(&ring->lock);
                     return (-1);
                 }
@@ -1171,6 +1331,9 @@ int auraio_poll(auraio_engine_t *engine) {
 int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     if (!engine) {
         errno = EINVAL;
+        return (-1);
+    }
+    if (check_fatal_submit_errno(engine)) {
         return (-1);
     }
 
@@ -1201,6 +1364,7 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
             if (!flush_error_is_fatal(errno)) {
                 errno = 0;
             } else {
+                latch_fatal_submit_errno(engine, errno);
                 pthread_mutex_unlock(&ring->lock);
                 return (-1);
             }
@@ -1302,6 +1466,9 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
         errno = EINVAL;
         return -1;
     }
+    if (check_fatal_submit_errno(engine)) {
+        return (-1);
+    }
 
     int64_t deadline_ns = 0;
     if (timeout_ms > 0) {
@@ -1310,6 +1477,9 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
 
     int total = 0;
     for (;;) {
+        if (check_fatal_submit_errno(engine)) {
+            return (-1);
+        }
         if (maybe_finalize_deferred_unregistration(engine) != 0) {
             return (-1);
         }

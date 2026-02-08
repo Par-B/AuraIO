@@ -122,6 +122,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         ctx->free_request_stack[i] = i;
         ctx->requests[i].op_idx = i;
         ctx->requests[i].uses_registered_buffer = false;
+        ctx->requests[i].uses_registered_file = false;
         atomic_init(&ctx->requests[i].pending, false);
         atomic_init(&ctx->requests[i].cancel_requested, false);
     }
@@ -227,6 +228,7 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->iov = NULL;
     req->cancel_target = NULL;
     req->uses_registered_buffer = false;
+    req->uses_registered_file = false;
     atomic_store_explicit(&req->pending, false, memory_order_relaxed);
     atomic_store_explicit(&req->cancel_requested, false, memory_order_relaxed);
 
@@ -254,6 +256,12 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
  * Submission Operations
  * ============================================================================ */
 
+static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const auraio_request_t *req) {
+    if (req->uses_registered_file) {
+        sqe->flags |= IOSQE_FIXED_FILE;
+    }
+}
+
 int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
@@ -271,6 +279,7 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_read(sqe, req->fd, req->buffer, req->len, req->offset);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ;
@@ -303,6 +312,7 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_write(sqe, req->fd, req->buffer, req->len, req->offset);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE;
@@ -331,6 +341,7 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_readv(sqe, req->fd, req->iov, req->iovcnt, req->offset);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READV;
@@ -359,6 +370,7 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_writev(sqe, req->fd, req->iov, req->iovcnt, req->offset);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITEV;
@@ -387,6 +399,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_fsync(sqe, req->fd, 0);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FSYNC;
@@ -415,6 +428,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
 
     /* IORING_FSYNC_DATASYNC flag makes it behave like fdatasync */
     io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_FDATASYNC;
@@ -476,6 +490,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
      * we need to compute it from the registered iovec. The caller must provide
      * the actual buffer address in req->buffer computed from buf_index + buf_offset. */
     io_uring_prep_read_fixed(sqe, req->fd, req->buffer, req->len, req->offset, req->buf_index);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_READ_FIXED;
@@ -504,6 +519,7 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     }
 
     io_uring_prep_write_fixed(sqe, req->fd, req->buffer, req->len, req->offset, req->buf_index);
+    sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_WRITE_FIXED;

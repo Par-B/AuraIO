@@ -125,6 +125,7 @@ typedef struct buffer_pool {
     _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
     _Atomic int next_shard;                  /**< Round-robin shard assignment */
     _Atomic bool destroyed;                  /**< Pool destroyed flag for safety */
+    _Atomic int registrations_inflight;      /**< Caches currently in registration path */
 } buffer_pool_t;
 
 /**

@@ -31,6 +31,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <sched.h>
 #include <unistd.h>
 
 /* Global pool generation counter for unique IDs */
@@ -227,11 +228,19 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
         return NULL;
     }
 
+    atomic_fetch_add_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
+        tls_cache = NULL;
+        return NULL;
+    }
+
     /* First access from this thread — create a new cache */
     pthread_once(&tls_key_once, tls_key_init);
 
     cache = calloc(1, sizeof(thread_cache_t));
     if (!cache) {
+        atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
         return NULL;
     }
 
@@ -266,6 +275,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
             pthread_setspecific(tls_key, cache);
         }
         tls_cache = cache;
+        atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
         return NULL;
     }
 
@@ -275,6 +285,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     }
 
     tls_cache = cache;
+    atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
     return cache;
 }
 
@@ -507,6 +518,7 @@ int buffer_pool_init(buffer_pool_t *pool, size_t alignment) {
     atomic_init(&pool->thread_caches, NULL);
     atomic_init(&pool->next_shard, 0);
     atomic_init(&pool->destroyed, false);
+    atomic_init(&pool->registrations_inflight, 0);
 
     /* Allocate shards array */
     pool->shards = calloc(pool->shard_count, sizeof(buffer_shard_t));
@@ -537,6 +549,12 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
 
     /* Mark pool as destroyed FIRST so new get_thread_cache() calls bail out. */
     atomic_store_explicit(&pool->destroyed, true, memory_order_release);
+
+    /* Wait for in-flight cache registrations to quiesce so no new nodes can
+     * be published after the final atomic_exchange(NULL) in the drain loop. */
+    while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
+        sched_yield();
+    }
 
     /* Process all thread caches.
      *
