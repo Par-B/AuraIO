@@ -1332,7 +1332,7 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
         } else if (timeout_ms == 0) {
             /* Non-blocking: just poll once */
             int n = auraio_poll(engine);
-            return n > 0 ? total + n : total;
+            return n >= 0 ? total + n : (total > 0 ? total : n);
         } else {
             int64_t remaining_ns = deadline_ns - get_time_ns();
             if (remaining_ns <= 0) {

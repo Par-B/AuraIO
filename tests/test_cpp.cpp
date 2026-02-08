@@ -13,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <type_traits>
 #include <fcntl.h>
 #include <thread>
 #include <unistd.h>
@@ -150,24 +151,10 @@ TEST(engine_with_options) {
     ASSERT(engine.handle() != nullptr);
 }
 
-TEST(engine_move_construct) {
-    auraio::Engine engine1;
-    auto *handle = engine1.handle();
-
-    auraio::Engine engine2(std::move(engine1));
-    ASSERT_EQ(engine2.handle(), handle);
-    ASSERT_EQ(engine1.handle(), nullptr);
-}
-
-TEST(engine_move_assign) {
-    auraio::Engine engine1;
-    auraio::Engine engine2;
-
-    auto *handle1 = engine1.handle();
-    engine2 = std::move(engine1);
-
-    ASSERT_EQ(engine2.handle(), handle1);
-    ASSERT_EQ(engine1.handle(), nullptr);
+TEST(engine_not_movable) {
+    static_assert(!std::is_move_constructible_v<auraio::Engine>,
+                  "Engine must not be move-constructible");
+    static_assert(!std::is_move_assignable_v<auraio::Engine>, "Engine must not be move-assignable");
 }
 
 TEST(engine_poll_fd_valid) {
@@ -393,7 +380,7 @@ TEST(request_unregister_buffers) {
 
     auraio::Engine engine;
     auto fixed_storage = engine.allocate_buffer(4096);
-    std::array<iovec, 1> iovs = { iovec{ fixed_storage.data(), fixed_storage.size() } };
+    std::array<iovec, 1> iovs = {iovec{fixed_storage.data(), fixed_storage.size()}};
     engine.register_buffers(iovs);
 
     std::atomic<bool> completed{false};
@@ -438,7 +425,7 @@ TEST(request_unregister_files) {
     file.reopen(O_RDONLY);
 
     auraio::Engine engine;
-    std::array<int, 1> fds = { file.fd() };
+    std::array<int, 1> fds = {file.fd()};
     engine.register_files(fds);
 
     engine.request_unregister_files();
@@ -912,8 +899,7 @@ int main() {
 
     RUN_TEST(engine_default_construct);
     RUN_TEST(engine_with_options);
-    RUN_TEST(engine_move_construct);
-    RUN_TEST(engine_move_assign);
+    RUN_TEST(engine_not_movable);
     RUN_TEST(engine_poll_fd_valid);
     RUN_TEST(options_default_values);
     RUN_TEST(options_builder_chain);

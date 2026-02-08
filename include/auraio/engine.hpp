@@ -109,32 +109,14 @@ class Engine {
         }
     }
 
-    /**
-     * Move constructor
-     */
-    Engine(Engine &&other) noexcept
-        : handle_(other.handle_), pool_(std::move(other.pool_)),
-          engine_alive_(std::move(other.engine_alive_)) {
-        other.handle_ = nullptr;
-    }
-
-    /**
-     * Move assignment
-     */
-    Engine &operator=(Engine &&other) noexcept {
-        if (this != &other) {
-            destroy();
-            handle_ = other.handle_;
-            pool_ = std::move(other.pool_);
-            engine_alive_ = std::move(other.engine_alive_);
-            other.handle_ = nullptr;
-        }
-        return *this;
-    }
-
-    // Non-copyable
+    // Non-copyable and non-movable.
+    // std::mutex is not movable; moving while run()/poll()/wait() is active
+    // would destroy a locked mutex (UB). Use std::unique_ptr<Engine> for
+    // heap allocation.
     Engine(const Engine &) = delete;
     Engine &operator=(const Engine &) = delete;
+    Engine(Engine &&) = delete;
+    Engine &operator=(Engine &&) = delete;
 
     /**
      * Destructor
@@ -676,15 +658,18 @@ class Engine {
   private:
     void destroy() noexcept {
         if (handle_) {
-            /* Drain pending I/O BEFORE marking engine as dead.
-             * auraio_destroy() drains in-flight ops, invoking callbacks.
-             * Those callbacks may free Buffers, which need engine_alive_==true
-             * to call auraio_buffer_free() instead of falling back to free(). */
-            auraio_destroy(handle_);
-            handle_ = nullptr;
+            /* Mark engine as dead BEFORE destroying the C handle.
+             * This prevents a race where a concurrent Buffer destructor on
+             * another thread sees engine_alive_==true and calls
+             * auraio_buffer_free() on an already-freed handle.
+             * Drain callbacks that free Buffers will use the free() fallback
+             * instead of auraio_buffer_free() — safe since the pool is about
+             * to be destroyed anyway. */
             if (engine_alive_) {
                 engine_alive_->store(false, std::memory_order_release);
             }
+            auraio_destroy(handle_);
+            handle_ = nullptr;
         }
         pool_.reset();
         engine_alive_.reset();

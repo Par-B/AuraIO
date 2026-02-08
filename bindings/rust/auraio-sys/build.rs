@@ -32,6 +32,7 @@ fn main() {
             let lib_path = PathBuf::from(&manifest_dir)
                 .join("../../../lib");
             if lib_path.exists() {
+                let lib_path = lib_path.canonicalize().unwrap_or(lib_path);
                 println!("cargo:rustc-link-search=native={}", lib_path.display());
             }
         }
@@ -45,6 +46,7 @@ fn main() {
             let inc_path = PathBuf::from(&manifest_dir)
                 .join("../../../include");
             if inc_path.exists() {
+                let inc_path = inc_path.canonicalize().unwrap_or(inc_path);
                 include_path = Some(inc_path);
             }
         }

@@ -16,6 +16,13 @@ pub(crate) struct EngineInner {
     handle: NonNull<auraio_sys::auraio_engine_t>,
 }
 
+// Safety: The underlying auraio_engine_t is thread-safe for submissions
+// from multiple threads. The C library uses internal locking (per-ring
+// mutexes) to synchronize access. Polling/waiting is guarded by
+// Engine::poll_lock at the Rust level.
+unsafe impl Send for EngineInner {}
+unsafe impl Sync for EngineInner {}
+
 impl EngineInner {
     #[inline]
     pub(crate) fn raw(&self) -> *mut auraio_sys::auraio_engine_t {
