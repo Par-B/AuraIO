@@ -553,9 +553,10 @@ int ring_flush(ring_ctx_t *ctx) {
         return (-1);
     }
 
-    /* Record submit for batch optimizer */
-    adaptive_record_submit(&ctx->adaptive, ctx->queued_sqes);
-    ctx->queued_sqes = 0;
+    /* Record submit for batch optimizer.
+     * Use submitted (not queued_sqes) in case of partial submit. */
+    adaptive_record_submit(&ctx->adaptive, submitted);
+    ctx->queued_sqes -= submitted;
 
     return submitted;
 }

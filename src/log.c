@@ -23,12 +23,17 @@ void auraio_log(int level, const char *fmt, ...) {
         return;
     }
 
+    /* Load userdata immediately after handler to get a consistent pair.
+     * set_log_handler stores userdata before handler (release order),
+     * so an acquire load of handler that sees the new fn also sees the
+     * matching userdata. */
+    void *ud = atomic_load_explicit(&log_userdata, memory_order_acquire);
+
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
-    void *ud = atomic_load_explicit(&log_userdata, memory_order_acquire);
     fn(level, buf, ud);
 }

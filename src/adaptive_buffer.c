@@ -660,7 +660,13 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
         }
     }
 
-    /* Slow path: shard also empty, or no thread cache */
+    /* Slow path: shard also empty, or no thread cache.
+     * Re-check destroyed: pool may have been torn down since our earlier check. */
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        errno = ENXIO;
+        return NULL;
+    }
+
     /* Pick a shard - use cache's shard or round-robin for no-cache case */
     int shard_id =
         cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
@@ -733,7 +739,13 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         }
     }
 
-    /* Slow path: no thread cache or flush failed, go directly to shard */
+    /* Slow path: no thread cache or flush failed, go directly to shard.
+     * Re-check destroyed: pool may have been torn down since our earlier check. */
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        free(buf);
+        return;
+    }
+
     int shard_id =
         cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
     buffer_shard_t *shard = &pool->shards[shard_id];

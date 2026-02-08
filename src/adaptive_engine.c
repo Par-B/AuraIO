@@ -140,7 +140,9 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     atomic_init(&ctrl->current_in_flight_limit, initial_inflight);
     atomic_init(&ctrl->current_batch_threshold, ADAPTIVE_MIN_BATCH);
 
-    ctrl->phase = ADAPTIVE_PHASE_BASELINE;
+    atomic_init(&ctrl->current_p99_ms, 0.0);
+    atomic_init(&ctrl->current_throughput_bps, 0.0);
+    atomic_init(&ctrl->phase, ADAPTIVE_PHASE_BASELINE);
     atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
     atomic_store_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
     atomic_store_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
