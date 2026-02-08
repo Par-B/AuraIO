@@ -8,7 +8,9 @@
 #define _GNU_SOURCE
 #include "adaptive_ring.h"
 #include "internal.h"
+#include "log.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -124,7 +126,6 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         ctx->requests[i].uses_registered_buffer = false;
         ctx->requests[i].uses_registered_file = false;
         atomic_init(&ctx->requests[i].pending, false);
-        atomic_init(&ctx->requests[i].cancel_requested, false);
     }
     ctx->free_request_count = queue_depth;
     atomic_init(&ctx->fixed_buf_inflight, 0);
@@ -185,6 +186,11 @@ void ring_destroy(ring_ctx_t *ctx) {
         drain_attempts++;
     }
 
+    if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0) {
+        auraio_log(AURAIO_LOG_WARN, "ring_destroy timed out with %d ops still pending",
+                   (int)atomic_load_explicit(&ctx->pending_count, memory_order_relaxed));
+    }
+
     adaptive_destroy(&ctx->adaptive);
 
     free(ctx->free_request_stack);
@@ -226,11 +232,9 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->iovcnt = 0;
     req->buf_offset = 0;
     req->iov = NULL;
-    req->cancel_target = NULL;
     req->uses_registered_buffer = false;
     req->uses_registered_file = false;
     atomic_store_explicit(&req->pending, false, memory_order_relaxed);
-    atomic_store_explicit(&req->cancel_requested, false, memory_order_relaxed);
 
     if (op_idx) {
         *op_idx = idx;
@@ -246,6 +250,9 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
 
     /* Guard against double-free: if stack is already full, something is wrong */
     if (ctx->free_request_count >= ctx->max_requests) {
+        auraio_log(AURAIO_LOG_ERR,
+                   "BUG: ring_put_request double-free detected (op_idx=%d, ring=%p)", op_idx,
+                   (void *)ctx);
         return;
     }
 
@@ -455,15 +462,11 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
         return (-1);
     }
 
-    /* Mark target as cancel-requested */
-    atomic_store_explicit(&target->cancel_requested, true, memory_order_release);
-
     /* io_uring cancel uses user_data to identify the request */
     io_uring_prep_cancel(sqe, target, 0);
     io_uring_sqe_set_data(sqe, req);
 
     req->op_type = AURAIO_OP_CANCEL;
-    req->cancel_target = target;
     req->submit_time_ns = 0; /* Cancel ops skip latency tracking */
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);

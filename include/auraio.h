@@ -987,6 +987,31 @@ AURAIO_API const char *auraio_phase_name(int phase);
  */
 AURAIO_API const char *auraio_version(void);
 
+/* ============================================================================
+ * Logging
+ * ============================================================================
+ */
+
+/**
+ * Log callback type
+ *
+ * @param level   Severity (AURAIO_LOG_ERR=3, AURAIO_LOG_WARN=4; matches syslog)
+ * @param msg     Formatted message string (NUL-terminated)
+ * @param userdata Opaque pointer passed to auraio_set_log_handler()
+ */
+typedef void (*auraio_log_fn)(int level, const char *msg, void *userdata);
+
+/**
+ * Set the library-wide log handler
+ *
+ * By default no handler is installed and the library is silent.
+ * The handler is global (process-wide) and may be called from any thread.
+ *
+ * @param handler  Log callback (NULL to disable logging)
+ * @param userdata Opaque pointer forwarded to the callback
+ */
+AURAIO_API void auraio_set_log_handler(auraio_log_fn handler, void *userdata);
+
 /**
  * Get library version as integer
  *

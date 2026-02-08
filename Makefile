@@ -15,7 +15,7 @@ VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
-SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c
+SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c src/log.c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 

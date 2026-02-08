@@ -30,6 +30,10 @@ static inline double prom_finite(double v) {
     return isfinite(v) ? v : 0.0;
 }
 
+/* NOTE: This function reads stats from each ring independently. The resulting
+ * snapshot is not globally consistent — individual ring stats are consistent
+ * but cross-ring values (e.g., aggregate ops vs sum of per-ring ops) may
+ * reflect slightly different points in time. For monitoring this is fine. */
 int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_size) {
     if (!engine || !buf || buf_size == 0) return -1;
 

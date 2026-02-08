@@ -92,6 +92,8 @@ AuraIO/
 │   ├── adaptive_engine.h     # Adaptive controller interface, tuning constants
 │   ├── adaptive_buffer.c     # Thread-safe aligned buffer pool with sharding
 │   ├── adaptive_buffer.h     # Buffer pool interface
+│   ├── log.c                 # Library-wide log callback implementation
+│   ├── log.h                 # Internal log header (auraio_log_fn, auraio_log)
 │   └── internal.h            # Shared utilities (timing, iovec helpers)
 ├── bindings/
 │   └── rust/
@@ -501,7 +503,7 @@ See [docs/BFFIO.md](BFFIO.md) for full usage documentation.
 
 **Key Types**:
 - `ring_ctx_t` - Per-ring context (io_uring, request pool, mutex, adaptive controller, `fixed_buf_inflight` counter)
-- `auraio_request_t` - Request with callback, timing, cancellation state, `uses_registered_buffer`/`uses_registered_file` flags
+- `auraio_request_t` - Request with callback, timing, `uses_registered_buffer`/`uses_registered_file` flags
 - `auraio_op_type_t` - Includes `AURAIO_OP_READ_FIXED` and `AURAIO_OP_WRITE_FIXED`
 
 **Key Functions**:
@@ -792,7 +794,7 @@ flowchart TD
 |-----------|-----------|-------|
 | Ring submission | `pthread_mutex_t` per ring | Released during callback |
 | Ring completion | `pthread_mutex_t cq_lock` per ring | Separate from SQ lock, released before blocking wait |
-| Request state | Atomics (`pending`, `cancel_requested`) | Lock-free checks |
+| Request state | Atomic (`pending`) | Lock-free checks |
 | Histogram recording | Atomic increments | No lock needed |
 | Histogram swap | Atomic index flip (`fetch_xor`) | O(1) operation, ~1-3 samples lost |
 | Buffer TLS cache | Thread-local storage | Zero lock fast path |

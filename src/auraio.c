@@ -1736,7 +1736,10 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
         return (-1);
     }
 
-    /* Update in all rings, rolling back on failure */
+    /* Update in all rings, rolling back on failure.
+     * NOTE: The rollback itself can fail (e.g., if the kernel rejects the
+     * old fd). In that case the file table is left in an inconsistent state
+     * across rings. The caller should unregister all files and re-register. */
     int old_fd = engine->registered_files[index];
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];

@@ -62,7 +62,7 @@ pub(crate) extern "C" fn callback_trampoline(
         }))
         .is_err()
         {
-            eprintln!("auraio: panic in I/O callback (caught at FFI boundary)");
+            eprintln!("auraio: panic in I/O callback (caught at FFI boundary, request={:p})", _req);
         }
     }
     // Context is dropped here, freeing the memory

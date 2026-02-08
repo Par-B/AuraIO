@@ -34,8 +34,8 @@ typedef enum {
     AURAIO_OP_FSYNC,
     AURAIO_OP_FDATASYNC,
     AURAIO_OP_CANCEL,
-    AURAIO_OP_READ_FIXED,   /**< Read using registered buffer */
-    AURAIO_OP_WRITE_FIXED   /**< Write using registered buffer */
+    AURAIO_OP_READ_FIXED, /**< Read using registered buffer */
+    AURAIO_OP_WRITE_FIXED /**< Write using registered buffer */
 } auraio_op_type_t;
 
 /**
@@ -45,43 +45,41 @@ typedef enum {
  */
 struct auraio_request {
     /* Operation info */
-    auraio_op_type_t op_type;       /**< Operation type */
-    int fd;                         /**< File descriptor */
-    off_t offset;                   /**< File offset */
+    auraio_op_type_t op_type; /**< Operation type */
+    int fd;                   /**< File descriptor */
+    off_t offset;             /**< File offset */
 
     /* Buffer for simple read/write */
-    void *buffer;                   /**< I/O buffer */
-    size_t len;                     /**< I/O size */
+    void *buffer; /**< I/O buffer */
+    size_t len;   /**< I/O size */
 
     /* Fixed buffer + vectored I/O (packed to eliminate holes) */
-    int buf_index;                  /**< Registered buffer index */
-    int iovcnt;                     /**< Number of iovecs */
-    size_t buf_offset;              /**< Offset within registered buffer */
-    const struct iovec *iov;        /**< iovec array for readv/writev */
+    int buf_index;           /**< Registered buffer index */
+    int iovcnt;              /**< Number of iovecs */
+    size_t buf_offset;       /**< Offset within registered buffer */
+    const struct iovec *iov; /**< iovec array for readv/writev */
 
     /* Callback */
-    auraio_callback_t callback;     /**< Completion callback */
-    void *user_data;                /**< User data for callback */
+    auraio_callback_t callback; /**< Completion callback */
+    void *user_data;            /**< User data for callback */
 
     /* Internal tracking */
-    int64_t submit_time_ns;         /**< Submission timestamp */
-    int ring_idx;                   /**< Which ring owns this request */
-    int op_idx;                     /**< Index in ring's request array */
-    auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
-    bool uses_registered_buffer;    /**< True if op depends on registered buffer lifetime */
-    bool uses_registered_file;      /**< True if fd is a registered-file index */
+    int64_t submit_time_ns;      /**< Submission timestamp */
+    int ring_idx;                /**< Which ring owns this request */
+    int op_idx;                  /**< Index in ring's request array */
+    bool uses_registered_buffer; /**< True if op depends on registered buffer lifetime */
+    bool uses_registered_file;   /**< True if fd is a registered-file index */
 
     /* State flags (trailing bools avoid mid-struct hole) */
-    _Atomic bool pending;           /**< True if still in-flight */
-    _Atomic bool cancel_requested;  /**< True if cancellation requested */
+    _Atomic bool pending; /**< True if still in-flight */
 };
 
 /**
  * Ring initialization options
  */
 typedef struct {
-    bool enable_sqpoll;             /**< Enable SQPOLL mode */
-    int sqpoll_idle_ms;             /**< SQPOLL idle timeout (ms) */
+    bool enable_sqpoll; /**< Enable SQPOLL mode */
+    int sqpoll_idle_ms; /**< SQPOLL idle timeout (ms) */
 } ring_options_t;
 
 /**
@@ -90,39 +88,39 @@ typedef struct {
  * One io_uring ring, typically pinned to a single CPU core.
  */
 typedef struct {
-    struct io_uring ring;           /**< io_uring instance */
-    bool ring_initialized;          /**< Ring setup succeeded */
-    bool sqpoll_enabled;            /**< SQPOLL mode active */
-    int cpu_id;                     /**< CPU this ring is pinned to (-1 if not pinned) */
-    int ring_idx;                   /**< Index of this ring in engine's array */
+    struct io_uring ring;  /**< io_uring instance */
+    bool ring_initialized; /**< Ring setup succeeded */
+    bool sqpoll_enabled;   /**< SQPOLL mode active */
+    int cpu_id;            /**< CPU this ring is pinned to (-1 if not pinned) */
+    int ring_idx;          /**< Index of this ring in engine's array */
 
     /* Per-ring locks for thread-safe access */
-    pthread_mutex_t lock;           /**< Protects ring submission and request pool */
-    pthread_mutex_t cq_lock;        /**< Protects completion queue access */
+    pthread_mutex_t lock;    /**< Protects ring submission and request pool */
+    pthread_mutex_t cq_lock; /**< Protects completion queue access */
 
     /* Request tracking */
-    auraio_request_t *requests;     /**< Request array */
-    int *free_request_stack;        /**< Free request indices */
-    int free_request_count;         /**< Number of free request slots */
-    int max_requests;               /**< Queue depth */
-    _Atomic int pending_count;      /**< Number of in-flight ops (atomic for lock-free reads) */
+    auraio_request_t *requests; /**< Request array */
+    int *free_request_stack;    /**< Free request indices */
+    int free_request_count;     /**< Number of free request slots */
+    int max_requests;           /**< Queue depth */
+    _Atomic int pending_count;  /**< Number of in-flight ops (atomic for lock-free reads) */
 
     /* Adaptive controller */
     adaptive_controller_t adaptive; /**< AIMD controller */
 
     /* Statistics */
-    int64_t bytes_submitted;        /**< Total bytes requested at submission */
-    int64_t bytes_completed;        /**< Total bytes actually transferred (from CQE results) */
-    int64_t ops_completed;          /**< Total ops completed */
+    int64_t bytes_submitted; /**< Total bytes requested at submission */
+    int64_t bytes_completed; /**< Total bytes actually transferred (from CQE results) */
+    int64_t ops_completed;   /**< Total ops completed */
 
     /* Batching state */
-    int queued_sqes;                /**< SQEs queued but not submitted */
+    int queued_sqes;                     /**< SQEs queued but not submitted */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
 
     /* Latency sampling: only timestamp every Nth submission to reduce
      * clock_gettime overhead. Non-sampled ops get submit_time_ns=0 and
      * are skipped in process_completion's adaptive recording. */
-    int sample_counter;             /**< Submission counter for sampling */
+    int sample_counter; /**< Submission counter for sampling */
 } ring_ctx_t;
 
 /**
@@ -137,8 +135,8 @@ bool ring_in_callback_context(void);
 /** Sample 1 in N submissions for latency measurement.
  *  Must be power of 2. With N=8 and 10K IOPS, gives ~1250 samples/sec
  *  which is sufficient for P99 calculation (needs ~100 per 100ms window). */
-#define RING_LATENCY_SAMPLE_RATE  8
-#define RING_LATENCY_SAMPLE_MASK  (RING_LATENCY_SAMPLE_RATE - 1)
+#define RING_LATENCY_SAMPLE_RATE 8
+#define RING_LATENCY_SAMPLE_MASK (RING_LATENCY_SAMPLE_RATE - 1)
 
 /**
  * Initialize ring context

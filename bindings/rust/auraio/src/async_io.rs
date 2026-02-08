@@ -123,6 +123,15 @@ impl Drop for IoFuture {
             // Re-check request_consumed to narrow the TOCTOU window: the
             // callback may have fired between our lock release and here,
             // invalidating the request pointer per the C API contract.
+            //
+            // A residual TOCTOU race exists: the callback could set
+            // request_consumed between this load and the auraio_cancel()
+            // call below, making the request pointer invalid. In practice
+            // auraio_cancel() checks req->pending (atomic) and returns
+            // EALREADY if the op already completed, so the worst case is
+            // a harmless failed cancel attempt. Fully closing this race
+            // would require the C API to provide a combined
+            // "cancel-if-still-pending" primitive.
             if !self.request_consumed.load(Ordering::Acquire) {
                 unsafe {
                     auraio_sys::auraio_cancel(self.engine.raw(), self.request);
