@@ -564,6 +564,13 @@ impl Engine {
     ///
     /// Returns the number of completions processed.
     ///
+    /// # Deadlock Warning
+    ///
+    /// Do **not** call `poll()` from within a completion callback.
+    /// Callbacks are invoked while the internal poll lock is held,
+    /// so calling `poll()` (or `wait()`/`run()`) from a callback
+    /// will deadlock.
+    ///
     /// # Thread Safety
     ///
     /// Must not be called concurrently with `wait()` or `run()`.
@@ -592,6 +599,13 @@ impl Engine {
     ///
     /// Returns the number of completions processed.
     ///
+    /// # Deadlock Warning
+    ///
+    /// Do **not** call `wait()` from within a completion callback.
+    /// Callbacks are invoked while the internal poll lock is held,
+    /// so calling `wait()` (or `poll()`/`run()`) from a callback
+    /// will deadlock.
+    ///
     /// # Thread Safety
     ///
     /// Must not be called concurrently with `poll()` or `run()`.
@@ -612,13 +626,17 @@ impl Engine {
     /// Blocks the calling thread, continuously processing completions.
     /// Call `stop()` from a callback or another thread to exit.
     ///
+    /// # Deadlock Warning
+    ///
+    /// Do **not** call `run()` from within a completion callback.
+    /// Callbacks are invoked while the internal poll lock is held,
+    /// so calling `run()` (or `poll()`/`wait()`) from a callback
+    /// will deadlock. Call `stop()` from a callback instead.
+    ///
     /// # Thread Safety
     ///
     /// Must not be called concurrently with `poll()` or `wait()`.
     /// This is enforced by the same internal lock used by those methods.
-    ///
-    /// Do **not** call `run()` from within a completion callback —
-    /// it blocks and will never return.
     pub fn run(&self) {
         let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { auraio_sys::auraio_run(self.inner.raw()) };

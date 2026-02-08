@@ -323,6 +323,10 @@ template <> class Task<void> {
  * Awaitable for async I/O operations
  *
  * Returned by Engine::async_read, async_write, async_fsync.
+ *
+ * Stores a bare Engine& reference. This is safe because awaitables are
+ * transient co_await-only objects — they are created and consumed within
+ * a single co_await expression and never outlive the Engine.
  */
 class IoAwaitable {
     friend class Engine;

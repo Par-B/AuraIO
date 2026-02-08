@@ -422,7 +422,13 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     ctrl->prev_in_flight_limit = in_flight_limit;
 
     /* Clear the old histogram for next use using atomic stores.
-     * This avoids TSAN warnings from mixing memset with atomic operations. */
+     * This avoids TSAN warnings from mixing memset with atomic operations.
+     *
+     * Known limitation: there is a brief race window between the pointer swap
+     * above and this reset where concurrent adaptive_hist_record() calls may
+     * write to old_hist. Those ~1-3 samples are lost. Fixing this requires a
+     * seq-lock or RCU approach, which is not worth the complexity for
+     * statistical metrics that tolerate minor sample loss. */
     adaptive_hist_reset(old_hist);
 
     /* Reset sample start for next period.

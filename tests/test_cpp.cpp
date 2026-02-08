@@ -643,6 +643,8 @@ TEST(wait_blocks) {
     ASSERT(completed);
 }
 
+// Note: this test relies on 20ms sleeps to observe lock contention ordering.
+// May be flaky under heavy system load but is not a correctness issue.
 TEST(run_serializes_with_poll) {
     auraio::Engine engine;
     std::atomic<bool> poll_returned{false};

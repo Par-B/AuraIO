@@ -547,7 +547,12 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
         return;
     }
 
-    /* Mark pool as destroyed FIRST so new get_thread_cache() calls bail out. */
+    /* Mark pool as destroyed FIRST so new get_thread_cache() calls bail out.
+     *
+     * Known limitation: a thread that has already passed the destroyed check
+     * in get_thread_cache() but not yet registered its cache may retain its
+     * TLS cache (~2KB) until thread exit. This is acceptable for the shutdown
+     * path — the memory is freed when the thread's TLS destructor fires. */
     atomic_store_explicit(&pool->destroyed, true, memory_order_release);
 
     /* Wait for in-flight cache registrations to quiesce so no new nodes can

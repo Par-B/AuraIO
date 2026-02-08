@@ -6,6 +6,7 @@
 #include "auraio_prometheus.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
@@ -20,7 +21,7 @@
         if (_n < 0 || (size_t)_n >= remain) goto overflow; \
         pos += _n;                                         \
         remain -= (size_t)_n;                              \
-        written += _n;                                     \
+        written += (size_t)_n;                             \
     } while (0)
 
 /* Clamp non-finite doubles to 0.0 to avoid emitting lowercase "nan"/"inf"
@@ -34,7 +35,7 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
 
     char *pos = buf;
     size_t remain = buf_size;
-    int written = 0;
+    size_t written = 0;
     int ring_count = auraio_get_ring_count(engine);
     auraio_ring_stats_t *rs = NULL;
 
@@ -235,12 +236,15 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
                 bstats.shard_count);
 
     free(rs);
-    return written;
+    return written > (size_t)INT_MAX ? INT_MAX : (int)written;
 
 overflow:
     free(rs);
     errno = ENOBUFS;
     /* Return negative of conservative estimate of bytes needed.
      * Callers should retry in a loop with abs(return value) as the new size. */
-    return -(written * 2 + 4096);
+    {
+        size_t estimate = written * 2 + 4096;
+        return estimate > (size_t)INT_MAX ? INT_MIN : -(int)estimate;
+    }
 }
