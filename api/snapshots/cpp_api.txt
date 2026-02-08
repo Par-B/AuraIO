@@ -1,0 +1,548 @@
+# file: include/auraio.hpp
+
+# file: include/auraio/buffer.hpp
+namespace auraio 
+class BufferRef 
+public:
+BufferRef(void *ptr) noexcept : buf_(auraio_buf(ptr)) 
+explicit BufferRef(const void *ptr) noexcept : buf_(auraio_buf(const_cast<void *>(ptr))) 
+[[nodiscard]] static BufferRef fixed(int index, size_t offset = 0) noexcept 
+ref.buf_ = auraio_buf_fixed(index, offset);
+[[nodiscard]] bool is_registered() const noexcept 
+[[nodiscard]] auraio_buf_t c_buf() const noexcept 
+private:
+BufferRef() noexcept = default;
+inline BufferRef buf(void *ptr) noexcept 
+return BufferRef(ptr);
+inline BufferRef buf_fixed(int index, size_t offset = 0) noexcept 
+return BufferRef::fixed(index, offset);
+class Buffer 
+public:
+Buffer() noexcept = default;
+Buffer(Buffer &&other) noexcept
+: engine_(other.engine_), ptr_(other.ptr_), size_(other.size_), owned_(other.owned_) 
+Buffer &operator=(Buffer &&other) noexcept 
+if (this != &other) 
+release_internal();
+Buffer(const Buffer &) = delete;
+Buffer &operator=(const Buffer &) = delete;
+~Buffer() 
+[[nodiscard]] static Buffer wrap(void *ptr, size_t size) noexcept 
+[[nodiscard]] void *data() noexcept 
+[[nodiscard]] const void *data() const noexcept 
+[[nodiscard]] size_t size() const noexcept 
+[[nodiscard]] std::span<std::byte> span() 
+if (!ptr_) 
+throw Error(EINVAL, "Buffer is null");
+[[nodiscard]] std::span<const std::byte> span() const 
+if (!ptr_) 
+throw Error(EINVAL, "Buffer is null");
+template <typename T>
+[[nodiscard]] std::span<T> as() 
+if (!ptr_) 
+throw Error(EINVAL, "Buffer is null");
+if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) 
+throw Error(EINVAL, "Buffer not aligned for requested type");
+template <typename T>
+[[nodiscard]] std::span<const T> as() const 
+if (!ptr_) 
+throw Error(EINVAL, "Buffer is null");
+if (reinterpret_cast<std::uintptr_t>(ptr_) % alignof(T) != 0) 
+throw Error(EINVAL, "Buffer not aligned for requested type");
+[[nodiscard]] BufferRef ref() noexcept 
+[[nodiscard]] BufferRef ref() const noexcept 
+return BufferRef(static_cast<const void *>(ptr_));
+operator BufferRef() noexcept 
+operator BufferRef() const = delete;
+[[nodiscard]] explicit operator bool() const noexcept 
+[[nodiscard]] bool owned() const noexcept 
+struct ReleasedBuffer 
+[[nodiscard]] ReleasedBuffer release() noexcept 
+private:
+Buffer(auraio_engine_t *engine, void *ptr, size_t size) noexcept
+: engine_(engine), ptr_(ptr), size_(size), owned_(true) 
+void release_internal() noexcept;
+inline void Buffer::release_internal() noexcept 
+if (owned_ && ptr_ && engine_) 
+auraio_buffer_free(engine_, ptr_, size_);
+
+# file: include/auraio/coro.hpp
+namespace auraio 
+template <typename T> class Task 
+public:
+struct promise_type 
+Task get_return_object() 
+std::suspend_always initial_suspend() noexcept 
+struct FinalAwaiter 
+bool await_ready() const noexcept 
+std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept 
+if (h.promise().continuation_) 
+return h.promise().continuation_;
+return std::noop_coroutine();
+void await_resume() noexcept 
+FinalAwaiter final_suspend() noexcept 
+void return_value(T value) 
+void unhandled_exception() 
+Task() = default;
+explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) 
+Task(Task &&other) noexcept : handle_(other.handle_) 
+Task &operator=(Task &&other) noexcept 
+if (this != &other) 
+if (handle_) 
+if (!handle_.done()) 
+std::terminate();
+handle_.destroy();
+~Task() 
+if (handle_) 
+if (!handle_.done()) 
+std::terminate();
+handle_.destroy();
+Task(const Task &) = delete;
+Task &operator=(const Task &) = delete;
+bool resume() 
+if (handle_ && !handle_.done()) 
+handle_.resume();
+return !handle_.done();
+[[nodiscard]] bool done() const noexcept 
+T get() 
+if (!handle_ || !handle_.done()) 
+throw std::logic_error("Task not complete");
+auto &result = handle_.promise().result;
+if (std::holds_alternative<std::exception_ptr>(result)) 
+auto ex = std::get<std::exception_ptr>(result);
+std::rethrow_exception(ex);
+if (!std::holds_alternative<T>(result)) 
+throw std::logic_error("Task result already consumed");
+T value = std::move(std::get<T>(result));
+auto operator co_await() 
+if (!handle_) 
+throw std::logic_error("co_await on empty Task");
+struct Awaiter 
+bool await_ready() const noexcept 
+std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept 
+handle.promise().continuation_ = caller;
+T await_resume() 
+auto &result = handle.promise().result;
+if (std::holds_alternative<std::exception_ptr>(result)) 
+auto ex = std::get<std::exception_ptr>(result);
+std::rethrow_exception(ex);
+if (!std::holds_alternative<T>(result)) 
+throw std::logic_error("Task result not available");
+T value = std::move(std::get<T>(result));
+private:
+template <> class Task<void> 
+public:
+struct promise_type 
+Task get_return_object() 
+std::suspend_always initial_suspend() noexcept 
+struct FinalAwaiter 
+bool await_ready() const noexcept 
+std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept 
+if (h.promise().continuation_) 
+return h.promise().continuation_;
+return std::noop_coroutine();
+void await_resume() noexcept 
+FinalAwaiter final_suspend() noexcept 
+void return_void() 
+void unhandled_exception() 
+Task() = default;
+explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) 
+Task(Task &&other) noexcept : handle_(other.handle_) 
+Task &operator=(Task &&other) noexcept 
+if (this != &other) 
+if (handle_) 
+if (!handle_.done()) 
+std::terminate();
+handle_.destroy();
+~Task() 
+if (handle_) 
+if (!handle_.done()) 
+std::terminate();
+handle_.destroy();
+Task(const Task &) = delete;
+Task &operator=(const Task &) = delete;
+bool resume() 
+if (handle_ && !handle_.done()) 
+handle_.resume();
+return !handle_.done();
+[[nodiscard]] bool done() const noexcept 
+void get() 
+if (!handle_ || !handle_.done()) 
+throw std::logic_error("Task not complete");
+if (handle_.promise().exception) 
+auto ex = handle_.promise().exception;
+handle_.promise().exception = nullptr;
+std::rethrow_exception(ex);
+auto operator co_await() 
+if (!handle_) 
+throw std::logic_error("co_await on empty Task");
+struct Awaiter 
+bool await_ready() const noexcept 
+std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept 
+handle.promise().continuation_ = caller;
+void await_resume() 
+if (handle.promise().exception) 
+auto ex = handle.promise().exception;
+handle.promise().exception = nullptr;
+std::rethrow_exception(ex);
+private:
+class IoAwaitable 
+IoAwaitable(Engine &engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write)
+: engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write) 
+public:
+bool await_ready() const noexcept 
+bool await_suspend(std::coroutine_handle<> handle);
+ssize_t await_resume() 
+if (result_ < 0) 
+auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
+throw Error(err, is_write_ ? "async_write" : "async_read");
+private:
+class FsyncAwaitable 
+FsyncAwaitable(Engine &engine, int fd, bool datasync = false)
+: engine_(engine), fd_(fd), datasync_(datasync) 
+public:
+bool await_ready() const noexcept 
+bool await_suspend(std::coroutine_handle<> handle);
+void await_resume() 
+if (result_ < 0) 
+auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
+throw Error(err, datasync_ ? "async_fdatasync" : "async_fsync");
+private:
+namespace auraio 
+inline bool IoAwaitable::await_suspend(std::coroutine_handle<> handle) 
+auto callback = [this, handle](Request &, ssize_t result) 
+if (completed_.exchange(true, std::memory_order_acq_rel)) 
+handle.resume();
+if (is_write_) 
+request_ = engine_.write(fd_, buf_, len_, offset_, std::move(callback));
+request_ = engine_.read(fd_, buf_, len_, offset_, std::move(callback));
+return !completed_.exchange(true, std::memory_order_acq_rel);
+} catch (const Error &e) 
+result_ = -e.code();
+inline bool FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) 
+auto callback = [this, handle](Request &, ssize_t result) 
+if (completed_.exchange(true, std::memory_order_acq_rel)) 
+handle.resume();
+if (datasync_) 
+request_ = engine_.fdatasync(fd_, std::move(callback));
+request_ = engine_.fsync(fd_, std::move(callback));
+return !completed_.exchange(true, std::memory_order_acq_rel);
+} catch (const Error &e) 
+result_ = -e.code();
+inline IoAwaitable Engine::async_read(int fd, BufferRef buf, size_t len, off_t offset) 
+return IoAwaitable(*this, fd, buf, len, offset, false);
+inline IoAwaitable Engine::async_write(int fd, BufferRef buf, size_t len, off_t offset) 
+return IoAwaitable(*this, fd, buf, len, offset, true);
+inline FsyncAwaitable Engine::async_fsync(int fd) 
+return FsyncAwaitable(*this, fd, false);
+inline FsyncAwaitable Engine::async_fdatasync(int fd) 
+return FsyncAwaitable(*this, fd, true);
+
+# file: include/auraio/engine.hpp
+namespace auraio 
+class IoAwaitable;
+class FsyncAwaitable;
+template <typename F>
+class Engine 
+public:
+Engine() 
+handle_ = auraio_create();
+if (!handle_) 
+throw Error(errno, "auraio_create");
+pool_ = std::make_unique<detail::CallbackPool>(handle_);
+} catch (...) 
+auraio_destroy(handle_);
+explicit Engine(const Options &opts) 
+handle_ = auraio_create_with_options(&opts.c_options());
+if (!handle_) 
+throw Error(errno, "auraio_create_with_options");
+pool_ = std::make_unique<detail::CallbackPool>(handle_);
+} catch (...) 
+auraio_destroy(handle_);
+Engine(Engine &&other) noexcept : handle_(other.handle_), pool_(std::move(other.pool_)) 
+Engine &operator=(Engine &&other) noexcept 
+if (this != &other) 
+destroy();
+pool_ = std::move(other.pool_);
+Engine(const Engine &) = delete;
+Engine &operator=(const Engine &) = delete;
+~Engine() 
+template <Callback F>
+[[nodiscard]] Request read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) 
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_read(handle_, fd, buf.c_buf(), len, offset,
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_read");
+return Request(req);
+template <Callback F>
+[[nodiscard]] Request write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) 
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_write(handle_, fd, buf.c_buf(), len, offset,
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_write");
+return Request(req);
+template <Callback F>
+[[nodiscard]] Request readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) 
+if (iov.size() > static_cast<size_t>(INT_MAX)) 
+throw Error(EINVAL, "iov count exceeds INT_MAX");
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()),
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_readv");
+return Request(req);
+template <Callback F>
+[[nodiscard]] Request writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) 
+if (iov.size() > static_cast<size_t>(INT_MAX)) 
+throw Error(EINVAL, "iov count exceeds INT_MAX");
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()),
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_writev");
+return Request(req);
+template <Callback F> [[nodiscard]] Request fsync(int fd, F &&callback) 
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_fsync(handle_, fd, auraio_detail_callback_trampoline, ctx);
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_fsync");
+return Request(req);
+template <Callback F> [[nodiscard]] Request fdatasync(int fd, F &&callback) 
+auto *ctx = pool_->allocate();
+ctx->callback = std::forward<F>(callback);
+auto *pool_ptr = pool_.get();
+ctx->on_complete = [pool_ptr, ctx]() 
+auraio_request_t *req = auraio_fsync_ex(handle_, fd, AURAIO_FSYNC_DATASYNC,
+if (!req) 
+pool_->release(ctx);
+throw Error(errno, "auraio_fsync_ex");
+return Request(req);
+inline IoAwaitable async_read(int fd, BufferRef buf, size_t len, off_t offset);
+inline IoAwaitable async_write(int fd, BufferRef buf, size_t len, off_t offset);
+inline FsyncAwaitable async_fsync(int fd);
+inline FsyncAwaitable async_fdatasync(int fd);
+bool cancel(Request &req) noexcept 
+if (!req.handle()) 
+return auraio_cancel(handle_, req.handle()) == 0;
+[[nodiscard]] int poll_fd() const 
+int fd = auraio_get_poll_fd(handle_);
+if (fd < 0) 
+throw Error(errno, "auraio_get_poll_fd");
+int poll() 
+std::lock_guard<std::mutex> lock(event_loop_mutex_);
+int n = auraio_poll(handle_);
+if (n < 0) 
+throw Error(errno, "auraio_poll");
+int wait(int timeout_ms = -1) 
+std::lock_guard<std::mutex> lock(event_loop_mutex_);
+int n = auraio_wait(handle_, timeout_ms);
+if (n < 0) 
+throw Error(errno, "auraio_wait");
+void run() 
+std::unique_lock<std::mutex> lock(event_loop_mutex_);
+auraio_run(handle_);
+void stop() noexcept 
+int drain(int timeout_ms = -1) 
+int n = auraio_drain(handle_, timeout_ms);
+if (n < 0) 
+throw Error(errno, "auraio_drain");
+[[nodiscard]] Buffer allocate_buffer(size_t size) 
+void *ptr = auraio_buffer_alloc(handle_, size);
+if (!ptr) 
+throw Error(errno, "auraio_buffer_alloc");
+return Buffer(handle_, ptr, size);
+void register_buffers(std::span<const iovec> bufs) 
+if (bufs.size() > static_cast<size_t>(INT_MAX)) 
+throw Error(EINVAL, "buffer count exceeds INT_MAX");
+if (auraio_register_buffers(handle_, bufs.data(), static_cast<int>(bufs.size())) != 0) 
+throw Error(errno, "auraio_register_buffers");
+void unregister_buffers() 
+if (auraio_unregister_buffers(handle_) != 0) 
+throw Error(errno, "auraio_unregister_buffers");
+void register_files(std::span<const int> fds) 
+if (fds.size() > static_cast<size_t>(INT_MAX)) 
+throw Error(EINVAL, "file count exceeds INT_MAX");
+if (auraio_register_files(handle_, fds.data(), static_cast<int>(fds.size())) != 0) 
+throw Error(errno, "auraio_register_files");
+void update_file(int index, int fd) 
+if (auraio_update_file(handle_, index, fd) != 0) 
+throw Error(errno, "auraio_update_file");
+void unregister_files() 
+if (auraio_unregister_files(handle_) != 0) 
+throw Error(errno, "auraio_unregister_files");
+[[nodiscard]] Stats get_stats() const 
+auraio_get_stats(handle_, &stats.stats_);
+[[nodiscard]] int ring_count() const noexcept 
+[[nodiscard]] RingStats get_ring_stats(int ring_idx) const 
+if (auraio_get_ring_stats(handle_, ring_idx, &rs.stats_) != 0)
+throw std::out_of_range("ring_idx out of range");
+[[nodiscard]] Histogram get_histogram(int ring_idx) const 
+if (auraio_get_histogram(handle_, ring_idx, &h.hist_) != 0)
+throw std::out_of_range("ring_idx out of range");
+[[nodiscard]] BufferStats get_buffer_stats() const 
+auraio_get_buffer_stats(handle_, &bs.stats_);
+[[nodiscard]] auraio_engine_t *handle() noexcept 
+[[nodiscard]] const auraio_engine_t *handle() const noexcept 
+[[nodiscard]] explicit operator bool() const noexcept 
+private:
+void destroy() noexcept 
+if (handle_) 
+auraio_destroy(handle_);
+pool_.reset();
+
+# file: include/auraio/error.hpp
+namespace auraio 
+class Error : public std::system_error 
+public:
+explicit Error(int err, std::string_view context = 
+: std::system_error(err, std::generic_category(), std::string(context)) 
+[[nodiscard]] int code() const noexcept 
+[[nodiscard]] bool is_invalid() const noexcept 
+[[nodiscard]] bool is_again() const noexcept 
+[[nodiscard]] bool is_shutdown() const noexcept 
+[[nodiscard]] bool is_cancelled() const noexcept 
+[[nodiscard]] bool is_busy() const noexcept 
+[[nodiscard]] bool is_not_found() const noexcept 
+inline void check(bool condition, std::string_view context = 
+if (!condition) 
+throw Error(errno, context);
+[[noreturn]] inline void throw_errno(std::string_view context = 
+throw Error(errno, context);
+
+# file: include/auraio/fwd.hpp
+namespace auraio 
+class Engine;
+class Buffer;
+class BufferRef;
+class Request;
+class Options;
+class Stats;
+class RingStats;
+class Histogram;
+class BufferStats;
+class Error;
+class Task;
+
+# file: include/auraio/options.hpp
+namespace auraio 
+enum class RingSelect 
+class Options 
+public:
+Options() noexcept 
+Options &queue_depth(int depth) noexcept 
+Options &ring_count(int count) noexcept 
+Options &initial_in_flight(int limit) noexcept 
+Options &min_in_flight(int limit) noexcept 
+Options &max_p99_latency_ms(double ms) noexcept 
+Options &buffer_alignment(size_t align) noexcept 
+Options &disable_adaptive(bool disable = true) noexcept 
+Options &enable_sqpoll(bool enable = true) noexcept 
+Options &sqpoll_idle_ms(int ms) noexcept 
+Options &ring_select(RingSelect mode) noexcept 
+opts_.ring_select = static_cast<auraio_ring_select_t>(mode);
+[[nodiscard]] int queue_depth() const noexcept 
+[[nodiscard]] int ring_count() const noexcept 
+[[nodiscard]] int initial_in_flight() const noexcept 
+[[nodiscard]] int min_in_flight() const noexcept 
+[[nodiscard]] double max_p99_latency_ms() const noexcept 
+[[nodiscard]] size_t buffer_alignment() const noexcept 
+[[nodiscard]] bool disable_adaptive() const noexcept 
+[[nodiscard]] bool enable_sqpoll() const noexcept 
+[[nodiscard]] int sqpoll_idle_ms() const noexcept 
+[[nodiscard]] RingSelect ring_select() const noexcept 
+if (raw >= AURAIO_SELECT_ADAPTIVE && raw <= AURAIO_SELECT_ROUND_ROBIN) 
+return static_cast<RingSelect>(raw);
+[[nodiscard]] const auraio_options_t &c_options() const noexcept 
+private:
+
+# file: include/auraio/request.hpp
+namespace auraio 
+class Request 
+public:
+[[nodiscard]] bool pending() const noexcept 
+return handle_ && auraio_request_pending(handle_);
+[[nodiscard]] int fd() const noexcept 
+return handle_ ? auraio_request_fd(handle_) : -1;
+[[nodiscard]] auraio_request_t* handle() noexcept 
+[[nodiscard]] const auraio_request_t* handle() const noexcept 
+[[nodiscard]] explicit operator bool() const noexcept 
+explicit Request(auraio_request_t* h) noexcept : handle_(h) 
+private:
+
+# file: include/auraio/stats.hpp
+namespace auraio 
+class Stats 
+public:
+[[nodiscard]] int64_t ops_completed() const noexcept 
+[[nodiscard]] int64_t bytes_transferred() const noexcept 
+[[nodiscard]] double throughput_bps() const noexcept 
+[[nodiscard]] double p99_latency_ms() const noexcept 
+[[nodiscard]] int current_in_flight() const noexcept 
+[[nodiscard]] int optimal_in_flight() const noexcept 
+[[nodiscard]] int optimal_batch_size() const noexcept 
+[[nodiscard]] uint64_t adaptive_spills() const noexcept 
+[[nodiscard]] const auraio_stats_t &c_stats() const & noexcept 
+[[nodiscard]] auraio_stats_t c_stats() const && noexcept 
+private:
+class RingStats 
+public:
+[[nodiscard]] int64_t ops_completed() const noexcept 
+[[nodiscard]] int64_t bytes_transferred() const noexcept 
+[[nodiscard]] int pending_count() const noexcept 
+[[nodiscard]] int in_flight_limit() const noexcept 
+[[nodiscard]] int batch_threshold() const noexcept 
+[[nodiscard]] double p99_latency_ms() const noexcept 
+[[nodiscard]] double throughput_bps() const noexcept 
+[[nodiscard]] int aimd_phase() const noexcept 
+[[nodiscard]] const char *aimd_phase_name() const noexcept 
+return auraio_phase_name(stats_.aimd_phase);
+[[nodiscard]] int queue_depth() const noexcept 
+[[nodiscard]] int ring_index() const noexcept 
+[[nodiscard]] const auraio_ring_stats_t &c_stats() const & noexcept 
+[[nodiscard]] auraio_ring_stats_t c_stats() const && noexcept 
+private:
+class Histogram 
+public:
+[[nodiscard]] uint32_t bucket(int idx) const noexcept 
+if (idx < 0 || idx >= bucket_count) return 0;
+[[nodiscard]] uint32_t overflow() const noexcept 
+[[nodiscard]] uint32_t total_count() const noexcept 
+[[nodiscard]] int max_tracked_us() const noexcept 
+[[nodiscard]] int bucket_lower_us(int idx) const noexcept 
+if (idx < 0 || idx >= bucket_count) return 0;
+[[nodiscard]] int bucket_upper_us(int idx) const noexcept 
+if (idx < 0 || idx >= bucket_count) return 0;
+return (idx + 1) * hist_.bucket_width_us;
+[[nodiscard]] const auraio_histogram_t &c_histogram() const & noexcept 
+[[nodiscard]] auraio_histogram_t c_histogram() const && noexcept 
+private:
+class BufferStats 
+public:
+[[nodiscard]] size_t total_allocated_bytes() const noexcept 
+[[nodiscard]] size_t total_buffers() const noexcept 
+[[nodiscard]] int shard_count() const noexcept 
+[[nodiscard]] const auraio_buffer_stats_t &c_stats() const & noexcept 
+[[nodiscard]] auraio_buffer_stats_t c_stats() const && noexcept 
+private:
+
+

@@ -168,11 +168,11 @@ An approximate snapshot of the active histogram window. Because the snapshot is 
 
 | Macro | Value | Description |
 |-------|-------|-------------|
-| `AURAIO_VERSION_MAJOR` | 1 | Major version |
-| `AURAIO_VERSION_MINOR` | 0 | Minor version |
-| `AURAIO_VERSION_PATCH` | 1 | Patch version |
-| `AURAIO_VERSION` | 10001 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURAIO_VERSION_STRING` | `"1.0.1"` | Version string |
+| `AURAIO_VERSION_MAJOR` | 0 | Major version |
+| `AURAIO_VERSION_MINOR` | 1 | Minor version |
+| `AURAIO_VERSION_PATCH` | 0 | Patch version |
+| `AURAIO_VERSION` | 100 | Combined: `major * 10000 + minor * 100 + patch` |
+| `AURAIO_VERSION_STRING` | `"0.1.0"` | Version string |
 
 #### AIMD Phase Constants
 
@@ -756,7 +756,7 @@ Get a human-readable name for an AIMD phase value.
 const char *auraio_version(void);
 ```
 
-**Returns:** Version string (e.g., `"1.0.1"`).
+**Returns:** Version string (e.g., `"0.1.0"`).
 
 ---
 
@@ -766,7 +766,7 @@ const char *auraio_version(void);
 int auraio_version_int(void);
 ```
 
-**Returns:** Version as integer: `major * 10000 + minor * 100 + patch` (e.g., 10001).
+**Returns:** Version as integer: `major * 10000 + minor * 100 + patch` (e.g., 100).
 
 ---
 

@@ -127,7 +127,7 @@ fn copy_file(
         let buf = engine.allocate_buffer(chunk)?;
 
         // Async read
-        let read_future = engine.async_read(src_fd, &buf, chunk, offset as i64)?;
+        let read_future = unsafe { engine.async_read(src_fd, &buf, chunk, offset as i64)? };
         let bytes_read = block_on(engine, read_future)?;
 
         if bytes_read == 0 {
@@ -135,7 +135,7 @@ fn copy_file(
         }
 
         // Async write
-        let write_future = engine.async_write(dst_fd, &buf, bytes_read, offset as i64)?;
+        let write_future = unsafe { engine.async_write(dst_fd, &buf, bytes_read, offset as i64)? };
         let bytes_written = block_on(engine, write_future)?;
 
         total_copied += bytes_written;

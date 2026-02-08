@@ -168,6 +168,66 @@ static void test_callback(auraio_request_t *req, ssize_t result, void *user_data
     callback_result = result;
 }
 
+typedef struct {
+    auraio_engine_t *engine;
+    int fd;
+    int unregister_rc;
+    int nested_submit_errno;
+} unregister_cb_ctx_t;
+
+static void unregister_in_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    unregister_cb_ctx_t *ctx = (unregister_cb_ctx_t *)user_data;
+    callback_called = 1;
+    callback_result = result;
+
+    ctx->unregister_rc = auraio_unregister_buffers(ctx->engine);
+
+    auraio_request_t *nested =
+        auraio_read(ctx->engine, ctx->fd, auraio_buf_fixed(0, 0), 64, 0, NULL, NULL);
+    if (nested) {
+        ctx->nested_submit_errno = 0;
+    } else {
+        ctx->nested_submit_errno = errno;
+    }
+}
+
+typedef struct {
+    _Atomic int completions;
+    int first_ring;
+    int second_ring;
+} fixed_unreg_ctx_t;
+
+static void fixed_unreg_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+    (void)result;
+    fixed_unreg_ctx_t *ctx = (fixed_unreg_ctx_t *)user_data;
+    int idx = atomic_fetch_add_explicit(&ctx->completions, 1, memory_order_relaxed);
+    if (idx == 0) {
+        ctx->first_ring = req->ring_idx;
+    } else if (idx == 1) {
+        ctx->second_ring = req->ring_idx;
+    }
+}
+
+typedef struct {
+    auraio_engine_t *engine;
+    int request_rc;
+    int update_rc;
+    int update_errno;
+} files_unreg_cb_ctx_t;
+
+static void request_unregister_files_in_callback(auraio_request_t *req, ssize_t result,
+                                                 void *user_data) {
+    (void)req;
+    files_unreg_cb_ctx_t *ctx = (files_unreg_cb_ctx_t *)user_data;
+    callback_called = 1;
+    callback_result = result;
+
+    ctx->request_rc = auraio_request_unregister_files(ctx->engine);
+    ctx->update_rc = auraio_update_file(ctx->engine, 0, -1);
+    ctx->update_errno = (ctx->update_rc == 0) ? 0 : errno;
+}
+
 TEST(ring_read_basic) {
     setup();
 
@@ -607,6 +667,126 @@ TEST(registered_buffers_basic) {
     teardown();
 }
 
+TEST(registered_buffers_callback_deferred_unregister) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    void *buf = NULL;
+    posix_memalign(&buf, 4096, 4096);
+    assert(buf != NULL);
+    memset(buf, 0, 4096);
+
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    int ret = auraio_register_buffers(engine, &iov, 1);
+    assert(ret == 0);
+
+    unregister_cb_ctx_t cb_ctx = {
+        .engine = engine,
+        .fd = test_fd,
+        .unregister_rc = -1,
+        .nested_submit_errno = 0,
+    };
+
+    callback_called = 0;
+
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf_fixed(0, 0), 4096, 0,
+                                        unregister_in_callback, &cb_ctx);
+    assert(req != NULL);
+
+    ret = auraio_wait(engine, 1000);
+    assert(ret > 0);
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+    assert(cb_ctx.unregister_rc == 0);
+    assert(cb_ctx.nested_submit_errno == EBUSY);
+
+    /* Deferred unregister should complete once in-flight fixed-buffer ops drain. */
+    errno = 0;
+    auraio_request_t *after =
+        auraio_read(engine, test_fd, auraio_buf_fixed(0, 0), 64, 0, NULL, NULL);
+    assert(after == NULL && errno == ENOENT);
+
+    free(buf);
+    auraio_destroy(engine);
+    teardown();
+}
+
+TEST(registered_buffers_request_deferred_unregister) {
+    int pipefd[2];
+    int ret = pipe(pipefd);
+    assert(ret == 0);
+
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    opts.ring_count = 2;
+    opts.ring_select = AURAIO_SELECT_ROUND_ROBIN;
+
+    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    assert(engine != NULL);
+
+    void *buf1 = NULL;
+    void *buf2 = NULL;
+    posix_memalign(&buf1, 4096, 4096);
+    posix_memalign(&buf2, 4096, 4096);
+    assert(buf1 && buf2);
+    memset(buf1, 0, 4096);
+    memset(buf2, 0, 4096);
+
+    struct iovec iovs[2] = {
+        { .iov_base = buf1, .iov_len = 4096 },
+        { .iov_base = buf2, .iov_len = 4096 },
+    };
+    ret = auraio_register_buffers(engine, iovs, 2);
+    assert(ret == 0);
+
+    fixed_unreg_ctx_t cb_ctx;
+    atomic_init(&cb_ctx.completions, 0);
+    cb_ctx.first_ring = -1;
+    cb_ctx.second_ring = -1;
+
+    auraio_request_t *r1 =
+        auraio_read(engine, pipefd[0], auraio_buf_fixed(0, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
+    auraio_request_t *r2 =
+        auraio_read(engine, pipefd[0], auraio_buf_fixed(1, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
+    assert(r1 != NULL);
+    assert(r2 != NULL);
+
+    ret = auraio_request_unregister_buffers(engine);
+    assert(ret == 0);
+
+    errno = 0;
+    auraio_request_t *blocked =
+        auraio_read(engine, pipefd[0], auraio_buf_fixed(0, 0), 1, -1, NULL, NULL);
+    assert(blocked == NULL && errno == EBUSY);
+
+    const char bytes[2] = { 'x', 'y' };
+    ssize_t written = write(pipefd[1], bytes, sizeof(bytes));
+    assert(written == (ssize_t)sizeof(bytes));
+
+    while (atomic_load_explicit(&cb_ctx.completions, memory_order_relaxed) < 2) {
+        ret = auraio_wait(engine, 1000);
+        assert(ret >= 0);
+    }
+
+    /* With round-robin enabled, the first two submissions should split rings. */
+    assert(cb_ctx.first_ring >= 0);
+    assert(cb_ctx.second_ring >= 0);
+    assert(cb_ctx.first_ring != cb_ctx.second_ring);
+
+    errno = 0;
+    auraio_request_t *after =
+        auraio_read(engine, pipefd[0], auraio_buf_fixed(0, 0), 1, -1, NULL, NULL);
+    assert(after == NULL && errno == ENOENT);
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    free(buf1);
+    free(buf2);
+    auraio_destroy(engine);
+}
+
 TEST(registered_buffers_write_fixed) {
     setup();
 
@@ -816,6 +996,53 @@ TEST(registered_files_invalid) {
     assert(ret == -1 && errno == ENOENT);
 
     auraio_destroy(engine);
+}
+
+TEST(registered_files_callback_request_unregister) {
+    setup();
+
+    auraio_engine_t *engine = auraio_create();
+    assert(engine != NULL);
+
+    int fds[1] = { test_fd };
+    int ret = auraio_register_files(engine, fds, 1);
+    assert(ret == 0);
+
+    char *buf = malloc(4096);
+    assert(buf != NULL);
+    memset(buf, 0, 4096);
+
+    files_unreg_cb_ctx_t cb_ctx = {
+        .engine = engine,
+        .request_rc = -1,
+        .update_rc = 0,
+        .update_errno = 0,
+    };
+    callback_called = 0;
+    callback_result = 0;
+
+    auraio_request_t *req =
+        auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, request_unregister_files_in_callback,
+                    &cb_ctx);
+    assert(req != NULL);
+
+    ret = auraio_wait(engine, 1000);
+    assert(ret > 0);
+    assert(callback_called == 1);
+    assert(callback_result == 4096);
+    assert(cb_ctx.request_rc == 0);
+    assert(cb_ctx.update_rc == -1);
+    assert(cb_ctx.update_errno == ENOENT || cb_ctx.update_errno == EBUSY);
+
+    /* File table should be unregistered after callback path. */
+    ret = auraio_register_files(engine, fds, 1);
+    assert(ret == 0);
+    ret = auraio_unregister_files(engine);
+    assert(ret == 0);
+
+    free(buf);
+    auraio_destroy(engine);
+    teardown();
 }
 
 TEST(register_buffers_overflow_count) {
@@ -1587,7 +1814,7 @@ TEST(version_api) {
     assert(strstr(version, ".") != NULL); /* Should contain a dot */
 
     int version_int = auraio_version_int();
-    assert(version_int >= 10000); /* At least 1.0.0 */
+    assert(version_int >= 100); /* At least 0.1.0 */
 }
 
 /* ============================================================================
@@ -1615,6 +1842,8 @@ int main(void) {
 
     /* Phase 5: Registered buffers and SQPOLL */
     RUN_TEST(registered_buffers_basic);
+    RUN_TEST(registered_buffers_callback_deferred_unregister);
+    RUN_TEST(registered_buffers_request_deferred_unregister);
     RUN_TEST(registered_buffers_write_fixed);
     RUN_TEST(registered_buffers_offset);
     RUN_TEST(registered_buffers_invalid);
@@ -1624,6 +1853,7 @@ int main(void) {
     RUN_TEST(registered_files_basic);
     RUN_TEST(registered_files_update);
     RUN_TEST(registered_files_invalid);
+    RUN_TEST(registered_files_callback_request_unregister);
     RUN_TEST(register_buffers_overflow_count);
     RUN_TEST(register_files_overflow_count);
 

@@ -162,6 +162,9 @@ std::cout << bs.total_buffers() << " buffers in " << bs.shard_count() << " shard
 
 AuraIO ships a standalone Prometheus exposition text formatter in `exporters/prometheus/`. It has **no external dependencies** beyond libauraio itself.
 
+Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
+See `docs/OBSERVABILITY_CONTRACT.md` for compatibility and naming rules.
+
 ### Building
 
 ```bash
@@ -191,6 +194,7 @@ Integrate this into whichever HTTP server you already run — there is no built-
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `auraio_ops_completed_total` | counter | — | Total I/O operations completed |
+| `auraio_metrics_schema_info` | gauge | `schema`, `stability` | Exporter schema version/status (`v0`, `experimental` before 1.0) |
 | `auraio_bytes_transferred_total` | counter | — | Total bytes transferred |
 | `auraio_throughput_bytes_per_second` | gauge | — | Current aggregate throughput |
 | `auraio_p99_latency_seconds` | gauge | — | Aggregate P99 latency |

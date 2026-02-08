@@ -400,9 +400,22 @@ See [docs/BFFIO.md](docs/BFFIO.md) for full usage, supported parameters, and bas
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
-- [API Reference](docs/) — Full function documentation
+- [API Reference](docs/api_reference.md) — Full function documentation
+- [Async Lifecycle](docs/ASYNC_LIFECYCLE.md) — Submission vs completion semantics
+- [Release Strategy](docs/RELEASE_STRATEGY.md) — Path to first public open-source release
+- [Compatibility Policy](docs/COMPATIBILITY_POLICY.md) — C ABI + C++/Rust semver guarantees
+- [API Freeze Gate](docs/API_FREEZE_GATE.md) — Snapshot/RFC workflow for public surfaces
+- [Observability Contract](docs/OBSERVABILITY_CONTRACT.md) — Metrics schema and stability rules
 - [BFFIO Benchmark](docs/BFFIO.md) — FIO-compatible benchmark tool
 - [Examples](examples/) — Working code samples
+
+## Stability and Versioning
+
+AuraIO is currently pre-1.0 (`0.x`) and stabilizing toward open-source release.
+
+1. API and ABI may still evolve.
+2. API/ABI compatibility gates are not yet enforced in CI while the project is under active development.
+3. Breaking surface changes are currently expected during internal iteration.
 
 ## Contributing
 

@@ -5,7 +5,7 @@ Self-tuning async I/O library for Linux using io_uring with AIMD congestion cont
 ## Build Environment
 
 - **Linux**: Run commands directly
-- **macOS**: Run commands in the Linux container: `orb -m Caliente-dev bash -c "<command>"`
+- **macOS**: Run commands in the Linux container: `orb -m linux bash -c "<command>"`
 
 ## Quick Reference
 
@@ -19,7 +19,7 @@ make install   # Install to PREFIX=/usr/local (supports DESTDIR)
 
 **Dependencies**: liburing, pthreads, gcc (C11) / g++ (C++20 for bindings)
 
-**Running individual tests** (on Linux or via `orb -m Caliente-dev bash -c`):
+**Running individual tests** (on Linux or via `orb -m linux bash -c`):
 ```bash
 cd tests && make test_ring && ./test_ring
 ```
@@ -50,7 +50,7 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 ## Non-Obvious Patterns
 
 - **Dual-lock strategy** in `adaptive_ring.c`: `lock` protects SQ/request pool, `cq_lock` protects CQ access. Completions are processed outside `cq_lock` to avoid holding it during callbacks.
-- **macOS development**: All build/test commands must run inside `orb -m Caliente-dev bash -c "..."` — native macOS builds are not supported (io_uring is Linux-only).
+- **macOS development**: All build/test commands must run inside `orb -m linux bash -c "..."` — native macOS builds are not supported (io_uring is Linux-only).
 
 ## Agent Preferences
 

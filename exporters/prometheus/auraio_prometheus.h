@@ -25,6 +25,11 @@
 extern "C" {
 #endif
 
+/* Prometheus schema contract.
+ * Before 1.0 this may evolve; the emitted schema info metric reports status. */
+#define AURAIO_PROMETHEUS_SCHEMA_VERSION "v0"
+#define AURAIO_PROMETHEUS_SCHEMA_STABILITY "experimental"
+
 /**
  * Format all AuraIO metrics in Prometheus exposition text format
  *

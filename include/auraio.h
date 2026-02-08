@@ -34,16 +34,16 @@
  * ============================================================================
  */
 
-#define AURAIO_VERSION_MAJOR 1
-#define AURAIO_VERSION_MINOR 0
-#define AURAIO_VERSION_PATCH 1
+#define AURAIO_VERSION_MAJOR 0
+#define AURAIO_VERSION_MINOR 1
+#define AURAIO_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
 #define AURAIO_VERSION                                                                             \
     (AURAIO_VERSION_MAJOR * 10000 + AURAIO_VERSION_MINOR * 100 + AURAIO_VERSION_PATCH)
 
 /** Version as a string */
-#define AURAIO_VERSION_STRING "1.0.1"
+#define AURAIO_VERSION_STRING "0.1.0"
 
 /* Ensure version components stay within packed integer limits */
 #if AURAIO_VERSION_MINOR > 99 || AURAIO_VERSION_PATCH > 99
@@ -797,10 +797,9 @@ AURAIO_API void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t si
  * Call this once at startup, not per-operation. After registration,
  * use auraio_buf_fixed() to reference buffers by index.
  *
- * LIFECYCLE CONSTRAINT: The caller must ensure no I/O operations using
- * these registered buffers are in-flight when calling auraio_unregister_buffers()
- * or auraio_destroy(). The library does not synchronize between I/O operations
- * and buffer unregistration.
+ * Submissions using auraio_buf_fixed() fail with errno=EBUSY while a deferred
+ * unregister is draining. Use auraio_request_unregister_buffers() from callback
+ * contexts, or auraio_unregister_buffers() for a synchronous wait.
  *
  * @param engine Engine handle
  * @param iovs   Array of iovec describing buffers to register
@@ -811,12 +810,25 @@ AURAIO_API AURAIO_WARN_UNUSED int auraio_register_buffers(auraio_engine_t *engin
                                                           const struct iovec *iovs, int count);
 
 /**
- * Unregister previously registered buffers
+ * Request deferred unregister of registered buffers (callback-safe)
  *
- * LIFECYCLE CONSTRAINT: The caller must ensure no I/O operations using
- * registered buffers (via auraio_buf_fixed()) are in-flight when calling
- * this function. Unregistering while I/O is in-flight results in undefined
- * behavior.
+ * Marks registered buffers as draining and returns immediately. New fixed-buffer
+ * submissions fail with errno=EBUSY while draining. Final unregister is
+ * completed lazily once in-flight fixed-buffer operations reach zero.
+ *
+ * Safe to call from completion callbacks.
+ *
+ * @param engine Engine handle
+ * @return 0 on success, -1 on error
+ */
+AURAIO_API int auraio_request_unregister_buffers(auraio_engine_t *engine);
+
+/**
+ * Unregister previously registered buffers (synchronous)
+ *
+ * For non-callback callers, this waits until in-flight fixed-buffer operations
+ * drain and unregister completes. If called from a callback, it degrades to
+ * auraio_request_unregister_buffers() and returns immediately.
  *
  * @param engine Engine handle
  * @return 0 on success, -1 on error
@@ -864,7 +876,22 @@ AURAIO_API AURAIO_WARN_UNUSED int auraio_register_files(auraio_engine_t *engine,
 AURAIO_API AURAIO_WARN_UNUSED int auraio_update_file(auraio_engine_t *engine, int index, int fd);
 
 /**
+ * Request deferred unregister of registered files (callback-safe)
+ *
+ * Marks registered files for unregister and returns immediately. Safe to call
+ * from completion callbacks.
+ *
+ * @param engine Engine handle
+ * @return 0 on success, -1 on error
+ */
+AURAIO_API int auraio_request_unregister_files(auraio_engine_t *engine);
+
+/**
  * Unregister previously registered files
+ *
+ * For non-callback callers, this waits until unregister completes. If called
+ * from a callback, it degrades to auraio_request_unregister_files() and
+ * returns immediately.
  *
  * @param engine Engine handle
  * @return 0 on success, -1 on error
@@ -956,7 +983,7 @@ AURAIO_API const char *auraio_phase_name(int phase);
 /**
  * Get library version string
  *
- * @return Version string (e.g., "1.0.1")
+ * @return Version string (e.g., "0.1.0")
  */
 AURAIO_API const char *auraio_version(void);
 
@@ -964,7 +991,7 @@ AURAIO_API const char *auraio_version(void);
  * Get library version as integer
  *
  * Format: (major * 10000 + minor * 100 + patch)
- * Example: 1.0.1 = 10001
+ * Example: 0.1.0 = 100
  *
  * @return Version integer
  */

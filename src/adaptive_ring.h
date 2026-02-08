@@ -68,6 +68,7 @@ struct auraio_request {
     int ring_idx;                   /**< Which ring owns this request */
     int op_idx;                     /**< Index in ring's request array */
     auraio_request_t *cancel_target; /**< Request to cancel (for AURAIO_OP_CANCEL) */
+    bool uses_registered_buffer;    /**< True if op depends on registered buffer lifetime */
 
     /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending;           /**< True if still in-flight */
@@ -115,12 +116,22 @@ typedef struct {
 
     /* Batching state */
     int queued_sqes;                /**< SQEs queued but not submitted */
+    _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
 
     /* Latency sampling: only timestamp every Nth submission to reduce
      * clock_gettime overhead. Non-sampled ops get submit_time_ns=0 and
      * are skipped in process_completion's adaptive recording. */
     int sample_counter;             /**< Submission counter for sampling */
 } ring_ctx_t;
+
+/**
+ * Check whether current thread is executing an AuraIO completion callback.
+ *
+ * Used to avoid blocking operations from inside callbacks.
+ *
+ * @return true if currently in callback context, false otherwise
+ */
+bool ring_in_callback_context(void);
 
 /** Sample 1 in N submissions for latency measurement.
  *  Must be power of 2. With N=8 and 10K IOPS, gives ~1250 samples/sec

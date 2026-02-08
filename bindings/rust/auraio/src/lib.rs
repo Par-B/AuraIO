@@ -113,7 +113,7 @@ mod tests {
     fn test_version_string() {
         let ver = version();
         assert!(!ver.is_empty());
-        // Version should be in semver format like "1.0.1"
+        // Version should be in semver format like "0.1.0"
         let parts: Vec<&str> = ver.split('.').collect();
         assert!(parts.len() >= 2, "version should have at least major.minor");
     }
@@ -121,13 +121,13 @@ mod tests {
     #[test]
     fn test_version_int() {
         let ver = version_int();
-        // At least version 1.0.0 (10000)
-        assert!(ver >= 10000, "version_int should be >= 10000");
+        // At least version 0.1.0 (100)
+        assert!(ver >= 100, "version_int should be >= 100");
         // Extract major/minor/patch
         let major = ver / 10000;
         let minor = (ver % 10000) / 100;
         let patch = ver % 100;
-        assert!(major >= 1, "major version should be >= 1");
+        assert!(major <= 99, "major version should be <= 99");
         // Verify consistency with string
         let expected = format!("{}.{}.{}", major, minor, patch);
         assert_eq!(version(), expected);
@@ -1002,6 +1002,30 @@ mod tests {
         // Unregister
         let result = engine.unregister_files();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_request_unregister_files() {
+        let engine = Engine::new().unwrap();
+
+        let tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file = File::open(tmpfile.path()).unwrap();
+        let fd = file.as_raw_fd();
+
+        assert!(engine.register_files(&[fd]).is_ok());
+        assert!(engine.request_unregister_files().is_ok());
+        assert!(engine.unregister_files().is_ok());
+    }
+
+    #[test]
+    fn test_request_unregister_buffers() {
+        let engine = Engine::new().unwrap();
+
+        let mut fixed = vec![0u8; 4096];
+        unsafe { engine.register_buffers(&[fixed.as_mut_slice()]).unwrap() };
+        engine.request_unregister_buffers().unwrap();
+        assert!(engine.unregister_buffers().is_ok());
+        assert!(engine.unregister_buffers().is_ok());
     }
 
     // =========================================================================

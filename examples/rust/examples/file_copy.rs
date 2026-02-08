@@ -79,13 +79,15 @@ fn main() -> Result<()> {
         let result_clone = result_bytes.clone();
 
         // Submit async read
-        engine.read(src_fd, (&buf).into(), chunk, offset as i64, move |result| {
-            match result {
-                Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
-                Err(_) => result_clone.store(-1, Ordering::SeqCst),
-            }
-            done_clone.store(true, Ordering::SeqCst);
-        })?;
+        unsafe {
+            engine.read(src_fd, (&buf).into(), chunk, offset as i64, move |result| {
+                match result {
+                    Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
+                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                }
+                done_clone.store(true, Ordering::SeqCst);
+            })?;
+        }
 
         // Wait for read to complete
         while !done.load(Ordering::SeqCst) {
@@ -109,13 +111,15 @@ fn main() -> Result<()> {
         let result_clone = result_bytes.clone();
 
         // Submit async write
-        engine.write(dst_fd, (&buf).into(), bytes_read as usize, offset as i64, move |result| {
-            match result {
-                Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
-                Err(_) => result_clone.store(-1, Ordering::SeqCst),
-            }
-            done_clone.store(true, Ordering::SeqCst);
-        })?;
+        unsafe {
+            engine.write(dst_fd, (&buf).into(), bytes_read as usize, offset as i64, move |result| {
+                match result {
+                    Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
+                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                }
+                done_clone.store(true, Ordering::SeqCst);
+            })?;
+        }
 
         // Wait for write to complete
         while !done.load(Ordering::SeqCst) {

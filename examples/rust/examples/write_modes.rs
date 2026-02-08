@@ -80,12 +80,14 @@ fn run_write_test(filename: &str, use_direct: bool) -> Result<()> {
         let offset = (i * WRITE_SIZE) as i64;
         let state_clone = state.clone();
 
-        engine.write(fd, (&buf).into(), WRITE_SIZE, offset, move |result| {
-            if let Err(e) = result {
-                eprintln!("Write failed: {}", e);
-            }
-            state_clone.completed.fetch_add(1, Ordering::SeqCst);
-        })?;
+        unsafe {
+            engine.write(fd, (&buf).into(), WRITE_SIZE, offset, move |result| {
+                if let Err(e) = result {
+                    eprintln!("Write failed: {}", e);
+                }
+                state_clone.completed.fetch_add(1, Ordering::SeqCst);
+            })?;
+        }
     }
 
     // Wait for all completions

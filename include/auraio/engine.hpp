@@ -22,6 +22,7 @@
 #include <span>
 #include <stdexcept>
 #include <utility>
+#include <atomic>
 
 namespace auraio {
 
@@ -77,10 +78,12 @@ class Engine {
             throw Error(errno, "auraio_create");
         }
         try {
+            engine_alive_ = std::make_shared<std::atomic<bool>>(true);
             pool_ = std::make_unique<detail::CallbackPool>(handle_);
         } catch (...) {
             auraio_destroy(handle_);
             handle_ = nullptr;
+            engine_alive_.reset();
             throw;
         }
     }
@@ -96,10 +99,12 @@ class Engine {
             throw Error(errno, "auraio_create_with_options");
         }
         try {
+            engine_alive_ = std::make_shared<std::atomic<bool>>(true);
             pool_ = std::make_unique<detail::CallbackPool>(handle_);
         } catch (...) {
             auraio_destroy(handle_);
             handle_ = nullptr;
+            engine_alive_.reset();
             throw;
         }
     }
@@ -107,7 +112,9 @@ class Engine {
     /**
      * Move constructor
      */
-    Engine(Engine &&other) noexcept : handle_(other.handle_), pool_(std::move(other.pool_)) {
+    Engine(Engine &&other) noexcept
+        : handle_(other.handle_), pool_(std::move(other.pool_)),
+          engine_alive_(std::move(other.engine_alive_)) {
         other.handle_ = nullptr;
     }
 
@@ -119,6 +126,7 @@ class Engine {
             destroy();
             handle_ = other.handle_;
             pool_ = std::move(other.pool_);
+            engine_alive_ = std::move(other.engine_alive_);
             other.handle_ = nullptr;
         }
         return *this;
@@ -487,7 +495,7 @@ class Engine {
         if (!ptr) {
             throw Error(errno, "auraio_buffer_alloc");
         }
-        return Buffer(handle_, ptr, size);
+        return Buffer(handle_, engine_alive_, ptr, size);
     }
 
     /**
@@ -513,6 +521,20 @@ class Engine {
     void unregister_buffers() {
         if (auraio_unregister_buffers(handle_) != 0) {
             throw Error(errno, "auraio_unregister_buffers");
+        }
+    }
+
+    /**
+     * Request deferred unregister of registered buffers (callback-safe)
+     *
+     * Marks registered buffers for lazy unregister and returns immediately.
+     * New fixed-buffer submissions fail with EBUSY while draining.
+     *
+     * @throws Error on failure
+     */
+    void request_unregister_buffers() {
+        if (auraio_request_unregister_buffers(handle_) != 0) {
+            throw Error(errno, "auraio_request_unregister_buffers");
         }
     }
 
@@ -556,6 +578,17 @@ class Engine {
     void unregister_files() {
         if (auraio_unregister_files(handle_) != 0) {
             throw Error(errno, "auraio_unregister_files");
+        }
+    }
+
+    /**
+     * Request deferred unregister of registered files (callback-safe)
+     *
+     * @throws Error on failure
+     */
+    void request_unregister_files() {
+        if (auraio_request_unregister_files(handle_) != 0) {
+            throw Error(errno, "auraio_request_unregister_files");
         }
     }
 
@@ -642,14 +675,19 @@ class Engine {
   private:
     void destroy() noexcept {
         if (handle_) {
+            if (engine_alive_) {
+                engine_alive_->store(false, std::memory_order_release);
+            }
             auraio_destroy(handle_);
             handle_ = nullptr;
         }
         pool_.reset();
+        engine_alive_.reset();
     }
 
     auraio_engine_t *handle_ = nullptr;
     std::unique_ptr<detail::CallbackPool> pool_;
+    std::shared_ptr<std::atomic<bool>> engine_alive_;
     std::mutex event_loop_mutex_;
 };
 

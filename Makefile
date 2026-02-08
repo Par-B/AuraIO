@@ -3,19 +3,22 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations \
          -std=c11 -O2 -fPIC -fvisibility=hidden -Iinclude -Isrc
-LDFLAGS = -luring -lpthread
+HARDEN_CFLAGS = -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -Wformat -Wformat-security
+HARDEN_LDFLAGS = -Wl,-z,relro,-z,now
+LDFLAGS = $(HARDEN_LDFLAGS) -luring -lpthread
+CFLAGS += $(HARDEN_CFLAGS)
 
 # Version (keep in sync with include/auraio.h)
-VERSION_MAJOR = 1
-VERSION_MINOR = 0
-VERSION_PATCH = 1
+VERSION_MAJOR = 0
+VERSION_MINOR = 1
+VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
 SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c
 OBJ = $(SRC:.c=.o)
 
-# Library names (SO versioning: libauraio.so -> libauraio.so.1 -> libauraio.so.1.0.1)
+# Library names (SO versioning: libauraio.so -> libauraio.so.0 -> libauraio.so.0.1.0)
 LIB_SHARED = lib/libauraio.so.$(VERSION)
 LIB_SONAME = libauraio.so.$(VERSION_MAJOR)
 LIB_LINKNAME = libauraio.so
@@ -29,7 +32,11 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 
 # Default target
-all: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
+# Build everything users typically expect from a full build.
+all: core examples cpp-examples rust rust-examples exporters
+
+# Core library artifacts only (fast path for local iteration)
+core: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
 
 # Create lib directory
 lib:
@@ -55,12 +62,12 @@ $(LIB_STATIC): $(OBJ) | lib
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -DAURAIO_SHARED_BUILD -c $< -o $@
 
-# Build and run C tests
-test: all
+# Build and run C tests (local/in-container)
+test-local: core
 	$(MAKE) -C tests
 
 # Run all tests (C, C++, Rust) with combined summary
-test-all: all
+test-all: core
 	@echo "========================================"
 	@echo "AuraIO Test Suite"
 	@echo "========================================"
@@ -141,14 +148,14 @@ test-all: all
 	fi
 
 # Build metrics exporters (Prometheus)
-exporters: all
+exporters: core
 	$(CC) $(CFLAGS) -Iexporters/prometheus \
 		exporters/prometheus/example.c exporters/prometheus/auraio_prometheus.c \
 		-o exporters/prometheus/prometheus_example \
 		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
 
 # Build BFFIO benchmark tool
-BFFIO: all
+BFFIO: core
 	$(MAKE) -C tools/BFFIO
 
 # Run BFFIO functional tests
@@ -160,15 +167,15 @@ BFFIO-baseline: BFFIO
 	$(MAKE) -C tools/BFFIO baseline
 
 # Build examples
-examples: all
+examples: core
 	$(MAKE) -C examples
 
 # Build C++ examples
-cpp-examples: all
+cpp-examples: core
 	$(MAKE) -C examples cpp-examples
 
 # Run C++ tests
-cpp-test: all
+cpp-test: core
 	$(MAKE) -C tests cpp-test
 
 # =============================================================================
@@ -178,14 +185,13 @@ cpp-test: all
 # Rust environment setup (source cargo if installed via rustup)
 CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 RUST_LIB_PATH = $(CURDIR)/lib
-ORB_MACHINE ?= Caliente-dev
 
 # Build Rust bindings
-rust: all
+rust: core
 	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path bindings/rust/Cargo.toml --release
 
 # Run Rust tests
-rust-test: all
+rust-test: core
 	@printf "Running Rust tests...\n"
 	@rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
 	echo "$$rust_out" | awk ' \
@@ -226,7 +232,7 @@ rust-clean:
 	-$(CARGO) clean --manifest-path examples/rust/Cargo.toml 2>/dev/null || true
 
 # Install
-install: all
+install: core
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	install -d $(DESTDIR)$(PREFIX)/include
@@ -262,7 +268,7 @@ clean: rust-clean
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
-debug: all
+debug: core
 
 # =============================================================================
 # Sanitizer builds
@@ -299,7 +305,7 @@ asan: $(LIB_ASAN)
 # =============================================================================
 
 # Run tests under valgrind
-test-valgrind: all
+test-valgrind: core
 	$(MAKE) -C tests valgrind
 
 # Run tests with ThreadSanitizer
@@ -311,7 +317,7 @@ test-asan: asan
 	$(MAKE) -C tests asan
 
 # Run all sanitizer tests with summary
-test-sanitizers: all tsan asan
+test-sanitizers: core tsan asan
 	@echo ""
 	@echo "========================================"
 	@echo "  Sanitizer Test Suite"
@@ -361,36 +367,36 @@ test-sanitizers: all tsan asan
 BENCH_DIR_FLAG = $(if $(BENCH_DIR),--dir $(BENCH_DIR))
 
 # Quick benchmark (3s per test)
-bench-quick: all
+bench-quick: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --quick $(BENCH_DIR_FLAG)
 
 # Standard benchmark with FIO comparison (5s per test)
-bench: all
+bench: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --standard $(BENCH_DIR_FLAG)
 
 # Full benchmark (10s per test, more stable numbers)
-bench-full: all
+bench-full: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --full $(BENCH_DIR_FLAG)
 
 # Benchmark without FIO baseline
-bench-no-fio: all
+bench-no-fio: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --skip-fio $(BENCH_DIR_FLAG)
 
 # Check benchmark dependencies (fio, perf, numactl, etc.)
-bench-deps: all
+bench-deps: core
 	$(MAKE) -C tests check-deps
 
 # Deep performance analysis (flamegraphs, cachegrind, pahole, callgrind)
-bench-deep: all
+bench-deep: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_deep_analysis.sh $(BENCH_DIR_FLAG)
 
 # Quick deep analysis (~10 min)
-bench-deep-quick: all
+bench-deep-quick: core
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_deep_analysis.sh --quick $(BENCH_DIR_FLAG)
 
@@ -400,217 +406,11 @@ bench-deep-quick: all
 
 # Install all required dependencies
 deps:
-	@echo "========================================"
-	@echo "AuraIO Dependency Installer"
-	@echo "========================================"
-	@echo ""
-	@# --- Kernel version check ---
-	@echo "--- Checking kernel version ---"
-	@KMAJOR=$$(uname -r | cut -d. -f1); \
-	if [ "$$KMAJOR" -lt 6 ] 2>/dev/null; then \
-		echo "  [FAIL] Kernel $$(uname -r) — AuraIO requires kernel >= 6.0"; \
-		echo "         io_uring features (registered buffers, SQPOLL) need v6+"; \
-		exit 1; \
-	else \
-		echo "  [OK] Kernel $$(uname -r)"; \
-	fi
-	@echo ""
-	@# --- Check sudo availability ---
-	@echo "--- Checking sudo access ---"
-	@if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then \
-		echo "  [OK] sudo available"; \
-	elif command -v sudo >/dev/null 2>&1; then \
-		echo "  [OK] sudo available (may prompt for password)"; \
-	else \
-		echo "  [WARN] sudo not available — cannot install packages"; \
-		echo "         Install manually: apt-get install gcc g++ make liburing-dev pkg-config python3"; \
-	fi
-	@echo ""
-	@# --- Mandatory packages (C, C++, liburing, python3) ---
-	@echo "--- Installing mandatory packages ---"
-	@if command -v sudo >/dev/null 2>&1; then \
-		echo "  Installing: gcc g++ make liburing-dev pkg-config python3..."; \
-		sudo apt-get install -y gcc g++ make liburing-dev pkg-config python3 \
-			&& echo "  [OK] Mandatory packages installed" \
-			|| { echo "  [FAIL] apt-get install failed"; exit 1; }; \
-	else \
-		echo "  [SKIP] No sudo — checking if packages are already present..."; \
-		MISSING=""; \
-		command -v gcc >/dev/null 2>&1 || MISSING="$$MISSING gcc"; \
-		command -v g++ >/dev/null 2>&1 || MISSING="$$MISSING g++"; \
-		command -v make >/dev/null 2>&1 || MISSING="$$MISSING make"; \
-		command -v pkg-config >/dev/null 2>&1 || MISSING="$$MISSING pkg-config"; \
-		command -v python3 >/dev/null 2>&1 || MISSING="$$MISSING python3"; \
-		pkg-config --exists liburing 2>/dev/null || MISSING="$$MISSING liburing-dev"; \
-		if [ -n "$$MISSING" ]; then \
-			echo "  [FAIL] Missing packages:$$MISSING"; \
-			echo "         Run: sudo apt-get install -y$$MISSING"; \
-			exit 1; \
-		else \
-			echo "  [OK] All mandatory packages already present"; \
-		fi; \
-	fi
-	@echo ""
-	@# --- Verify mandatory packages ---
-	@echo "--- Verifying mandatory packages ---"
-	@FAIL=0; \
-	command -v gcc >/dev/null 2>&1 \
-		&& echo "  [OK] gcc: $$(gcc --version | head -1)" \
-		|| { echo "  [FAIL] gcc not found"; FAIL=1; }; \
-	command -v g++ >/dev/null 2>&1 \
-		&& echo "  [OK] g++: $$(g++ --version | head -1)" \
-		|| { echo "  [FAIL] g++ not found"; FAIL=1; }; \
-	command -v make >/dev/null 2>&1 \
-		&& echo "  [OK] make: $$(make --version | head -1)" \
-		|| { echo "  [FAIL] make not found"; FAIL=1; }; \
-	command -v pkg-config >/dev/null 2>&1 \
-		&& echo "  [OK] pkg-config: $$(pkg-config --version)" \
-		|| { echo "  [FAIL] pkg-config not found"; FAIL=1; }; \
-	command -v python3 >/dev/null 2>&1 \
-		&& echo "  [OK] python3: $$(python3 --version 2>&1)" \
-		|| { echo "  [FAIL] python3 not found"; FAIL=1; }; \
-	pkg-config --exists liburing 2>/dev/null \
-		&& echo "  [OK] liburing: $$(pkg-config --modversion liburing)" \
-		|| { echo "  [FAIL] liburing-dev not found"; FAIL=1; }; \
-	if [ "$$FAIL" -ne 0 ]; then \
-		echo ""; \
-		echo "  Mandatory packages missing. Cannot continue."; \
-		exit 1; \
-	fi
-	@echo ""
-	@# --- Optional: Rust toolchain ---
-	@echo "--- Rust toolchain (optional — needed for: make rust, make rust-test) ---"
-	@if command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then \
-		echo "  [OK] rustc: $$(rustc --version)"; \
-		echo "  [OK] cargo: $$(cargo --version)"; \
-	else \
-		printf "  Install Rust toolchain? (y/N): "; \
-		read REPLY; \
-		case "$$REPLY" in \
-			[yY]|[yY][eE][sS]) \
-				echo "  Installing Rust..."; \
-				if command -v sudo >/dev/null 2>&1; then \
-					sudo apt-get install -y libclang-dev \
-						&& echo "  [OK] libclang-dev installed (needed by bindgen)" \
-						|| echo "  [WARN] Failed to install libclang-dev"; \
-				else \
-					echo "  [WARN] No sudo — skipping libclang-dev (install manually if needed)"; \
-				fi; \
-				if command -v curl >/dev/null 2>&1; then \
-					curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
-						&& echo "  [OK] Rust installed — run: . $$HOME/.cargo/env" \
-						|| echo "  [FAIL] Rust installation failed"; \
-				else \
-					echo "  [FAIL] curl not found — install curl or visit https://rustup.rs"; \
-				fi; \
-				;; \
-			*) \
-				echo "  [SKIP] Rust not installed"; \
-				;; \
-		esac; \
-	fi
-	@echo ""
-	@# --- Optional tools status ---
-	@echo "--- Optional tools (install manually as needed) ---"
-	@command -v fio >/dev/null 2>&1 \
-		&& echo "  [OK] fio: $$(fio --version 2>&1)" \
-		|| echo "  [--] fio (apt-get install fio)"
-	@command -v valgrind >/dev/null 2>&1 \
-		&& echo "  [OK] valgrind: $$(valgrind --version 2>&1)" \
-		|| echo "  [--] valgrind (apt-get install valgrind)"
-	@command -v perf >/dev/null 2>&1 \
-		&& echo "  [OK] perf: $$(perf version 2>&1 | head -1)" \
-		|| echo "  [--] perf (apt-get install linux-tools-common linux-tools-$$(uname -r))"
-	@command -v strace >/dev/null 2>&1 \
-		&& echo "  [OK] strace: $$(strace --version 2>&1 | head -1)" \
-		|| echo "  [--] strace (apt-get install strace)"
-	@command -v numactl >/dev/null 2>&1 \
-		&& echo "  [OK] numactl" \
-		|| echo "  [--] numactl (apt-get install numactl)"
-	@command -v iostat >/dev/null 2>&1 \
-		&& echo "  [OK] iostat" \
-		|| echo "  [--] iostat (apt-get install sysstat)"
-	@command -v cppcheck >/dev/null 2>&1 \
-		&& echo "  [OK] cppcheck: $$(cppcheck --version 2>&1)" \
-		|| echo "  [--] cppcheck (apt-get install cppcheck)"
-	@command -v bear >/dev/null 2>&1 \
-		&& echo "  [OK] bear: $$(bear --version 2>&1 | head -1)" \
-		|| echo "  [--] bear (apt-get install bear)"
-	@echo ""
-	@echo "========================================"
-	@echo "Done!"
-	@echo "========================================"
+	bash tools/deps/install_all.sh
 
 # Check dependencies without installing
 deps-check:
-	@echo "========================================"
-	@echo "AuraIO Dependency Check"
-	@echo "========================================"
-	@echo ""
-	@FAIL=0; WARN=0; \
-	echo "--- Kernel ---"; \
-	KMAJOR=$$(uname -r | cut -d. -f1); \
-	if [ "$$KMAJOR" -lt 6 ] 2>/dev/null; then \
-		echo "  [FAIL] Kernel $$(uname -r) — requires >= 6.0"; FAIL=1; \
-	else \
-		echo "  [OK] Kernel $$(uname -r)"; \
-	fi; \
-	echo ""; \
-	echo "--- Mandatory (C/C++) ---"; \
-	command -v gcc >/dev/null 2>&1 \
-		&& echo "  [OK] gcc: $$(gcc --version | head -1)" \
-		|| { echo "  [FAIL] gcc"; FAIL=1; }; \
-	command -v g++ >/dev/null 2>&1 \
-		&& echo "  [OK] g++: $$(g++ --version | head -1)" \
-		|| { echo "  [FAIL] g++"; FAIL=1; }; \
-	command -v make >/dev/null 2>&1 \
-		&& echo "  [OK] make: $$(make --version | head -1)" \
-		|| { echo "  [FAIL] make"; FAIL=1; }; \
-	command -v pkg-config >/dev/null 2>&1 \
-		&& echo "  [OK] pkg-config: $$(pkg-config --version)" \
-		|| { echo "  [FAIL] pkg-config"; FAIL=1; }; \
-	command -v python3 >/dev/null 2>&1 \
-		&& echo "  [OK] python3: $$(python3 --version 2>&1)" \
-		|| { echo "  [FAIL] python3"; FAIL=1; }; \
-	pkg-config --exists liburing 2>/dev/null \
-		&& echo "  [OK] liburing: $$(pkg-config --modversion liburing)" \
-		|| { echo "  [FAIL] liburing-dev"; FAIL=1; }; \
-	echo "  [OK] pthread (always available)"; \
-	echo ""; \
-	echo "--- Rust (optional) ---"; \
-	command -v rustc >/dev/null 2>&1 \
-		&& echo "  [OK] rustc: $$(rustc --version)" \
-		|| { echo "  [--] rustc: not found"; WARN=1; }; \
-	command -v cargo >/dev/null 2>&1 \
-		&& echo "  [OK] cargo: $$(cargo --version)" \
-		|| { echo "  [--] cargo: not found"; WARN=1; }; \
-	echo ""; \
-	echo "--- Optional tools ---"; \
-	command -v fio >/dev/null 2>&1 \
-		&& echo "  [OK] fio" || echo "  [--] fio"; \
-	command -v valgrind >/dev/null 2>&1 \
-		&& echo "  [OK] valgrind" || echo "  [--] valgrind"; \
-	command -v perf >/dev/null 2>&1 \
-		&& echo "  [OK] perf" || echo "  [--] perf"; \
-	command -v strace >/dev/null 2>&1 \
-		&& echo "  [OK] strace" || echo "  [--] strace"; \
-	command -v numactl >/dev/null 2>&1 \
-		&& echo "  [OK] numactl" || echo "  [--] numactl"; \
-	command -v iostat >/dev/null 2>&1 \
-		&& echo "  [OK] iostat" || echo "  [--] iostat"; \
-	command -v cppcheck >/dev/null 2>&1 \
-		&& echo "  [OK] cppcheck" || echo "  [--] cppcheck"; \
-	command -v bear >/dev/null 2>&1 \
-		&& echo "  [OK] bear" || echo "  [--] bear"; \
-	echo ""; \
-	if [ "$$FAIL" -ne 0 ]; then \
-		echo "RESULT: FAIL — missing mandatory dependencies (run: make deps)"; \
-		exit 1; \
-	elif [ "$$WARN" -ne 0 ]; then \
-		echo "RESULT: OK (some optional tools missing)"; \
-	else \
-		echo "RESULT: ALL OK"; \
-	fi
+	bash tools/deps/check.sh
 
 # =============================================================================
 # Linting and static analysis
@@ -637,6 +437,7 @@ lint-cppcheck:
 	@echo "Running cppcheck..."
 	@cppcheck --enable=warning,performance,portability \
 		--suppress=missingIncludeSystem \
+		--suppress=normalCheckLevelMaxBranches \
 		--error-exitcode=1 \
 		-I include -I src \
 		$(SRC) $(HEADERS)
@@ -644,7 +445,8 @@ lint-cppcheck:
 # cppcheck - strict mode with style checks
 lint-strict:
 	@echo "Running cppcheck (strict)..."
-	@cppcheck --enable=all \
+	@cppcheck --check-level=exhaustive \
+		--enable=all \
 		--suppress=missingIncludeSystem \
 		--error-exitcode=1 \
 		-I include -I src \
@@ -660,7 +462,8 @@ lint-clang-tidy: compile_commands.json
 # =============================================================================
 
 # Generate compile_commands.json using bear
-compile_commands.json: $(SRC)
+# Keep this strict: rebuild when source, headers, or build flags change.
+compile_commands.json: $(SRC) $(HEADERS) Makefile
 	@echo "Generating compile_commands.json..."
 	@bear -- $(MAKE) clean all 2>/dev/null || \
 		$(MAKE) compdb-manual
@@ -682,29 +485,42 @@ compdb-manual:
 # Alias for compile database
 compdb: compile_commands.json
 
+coverage:
+	tools/coverage/run_llvm_cov.sh coverage
+
+coverage-check:
+	MIN_LINE_COVERAGE=$(MIN_LINE_COVERAGE) tools/coverage/run_llvm_cov.sh coverage
+
 # =============================================================================
 # Help
 # =============================================================================
 
-orb-build:
-	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR) && make -j4"
+test:
+	$(MAKE) -j4 all
+	$(MAKE) -j1 test-all
 
-orb-test:
-	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR)/tests && make -j1 all"
+test-memory:
+	$(MAKE) -j4 all
+	$(MAKE) -j1 test-tsan
+	$(MAKE) -j1 test-asan
 
-orb-rust-test:
-	orb -m $(ORB_MACHINE) bash -c "cd $(CURDIR)/bindings/rust && LD_LIBRARY_PATH=$(CURDIR)/lib:\$$LD_LIBRARY_PATH cargo test --workspace"
-
-orb-validate:
-	orb -m $(ORB_MACHINE) bash -c "set -e; cd $(CURDIR); make -j4; cd tests; make -j1 all; cd ../bindings/rust; LD_LIBRARY_PATH=$(CURDIR)/lib:\$$LD_LIBRARY_PATH cargo test --workspace"
+test-strict:
+	$(MAKE) -j4 all exporters
+	$(MAKE) -j1 test-all
+	$(MAKE) -j1 test-tsan
+	$(MAKE) -j1 test-asan
 
 help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make / make all     Build libraries and pkg-config file"
+	@echo "  make / make all     Build core library + examples + Rust/C++ bindings + exporters"
+	@echo "  make core           Build libraries and pkg-config file only"
 	@echo "  make debug          Build with debug symbols (-g -O0)"
-	@echo "  make test           Build and run C unit tests"
+	@echo "  make test           Build library/examples/bindings/exporters + run all tests"
+	@echo "  make test-memory    Build library/examples/bindings/exporters + run TSan/ASan tests"
+	@echo "  make test-strict    Run test + test-memory"
+	@echo "  make test-local     Build and run C unit tests"
 	@echo "  make test-all       Run all tests (C, C++, Rust)"
 	@echo "  make examples       Build C example programs"
 	@echo "  make clean          Remove all build artifacts"
@@ -719,18 +535,11 @@ help:
 	@echo "  make rust-examples  Build Rust example programs"
 	@echo "  make rust-clean     Clean Rust build artifacts"
 	@echo ""
-	@echo "Orb (macOS host -> Linux container):"
-	@echo "  make orb-build      Build in Orb machine ($(ORB_MACHINE))"
-	@echo "  make orb-test       Run C/C++ tests in Orb machine"
-	@echo "  make orb-rust-test  Run Rust tests in Orb machine"
-	@echo "  make orb-validate   Build + C/C++ tests + Rust tests in Orb machine"
-	@echo "  ORB_MACHINE=name    Override Orb machine (default: $(ORB_MACHINE))"
-	@echo ""
 	@echo "Installation:"
 	@echo "  make install        Install to $(PREFIX) (includes pkg-config)"
 	@echo "  make uninstall      Remove installed files"
-	@echo "  make deps           Install required dependencies (sudo apt-get)"
-	@echo "  make deps-check     Check dependencies without installing"
+	@echo "  make deps           Install full AuraIO toolchain dependencies"
+	@echo "  make deps-check     Verify full AuraIO dependency set"
 	@echo ""
 	@echo "Sanitizers:"
 	@echo "  make tsan           Build library with ThreadSanitizer"
@@ -755,6 +564,8 @@ help:
 	@echo "  make lint-strict    Run cppcheck with style checks"
 	@echo "  make lint-clang-tidy Run clang-tidy"
 	@echo "  make compdb         Generate compile_commands.json"
+	@echo "  make coverage       Build/run tests with llvm-cov and generate coverage artifacts"
+	@echo "  make coverage-check MIN_LINE_COVERAGE=N enforce minimum line coverage percentage"
 	@echo ""
 	@echo "BFFIO (Better Faster FIO):"
 	@echo "  make BFFIO          Build BFFIO benchmark tool"
@@ -768,12 +579,12 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all test test-all examples install uninstall clean debug deps deps-check help \
+.PHONY: all core test test-memory test-strict test-local test-all examples install uninstall clean debug deps deps-check help \
         cpp-test cpp-examples \
         rust rust-test rust-examples rust-clean \
-        orb-build orb-test orb-rust-test orb-validate \
-        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
-        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
-        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
-        exporters \
-        BFFIO BFFIO-test BFFIO-baseline
+	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
+	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
+	        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
+	        coverage coverage-check \
+	        exporters \
+	        BFFIO BFFIO-test BFFIO-baseline

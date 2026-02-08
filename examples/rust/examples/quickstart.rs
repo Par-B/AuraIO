@@ -51,19 +51,21 @@ fn main() -> Result<()> {
 
     // Submit async read
     println!("Submitting async read...");
-    engine.read(fd, (&buf).into(), BUF_SIZE, 0, move |result| {
-        match result {
-            Ok(n) => {
-                println!("Read completed: {} bytes", n);
-                result_clone.store(n as isize, Ordering::SeqCst);
+    unsafe {
+        engine.read(fd, (&buf).into(), BUF_SIZE, 0, move |result| {
+            match result {
+                Ok(n) => {
+                    println!("Read completed: {} bytes", n);
+                    result_clone.store(n as isize, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    eprintln!("Read failed: {}", e);
+                    result_clone.store(-1, Ordering::SeqCst);
+                }
             }
-            Err(e) => {
-                eprintln!("Read failed: {}", e);
-                result_clone.store(-1, Ordering::SeqCst);
-            }
-        }
-        done_clone.store(true, Ordering::SeqCst);
-    })?;
+            done_clone.store(true, Ordering::SeqCst);
+        })?;
+    }
 
     // Wait for completion
     while !done.load(Ordering::SeqCst) {

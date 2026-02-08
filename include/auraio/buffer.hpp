@@ -13,6 +13,9 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <atomic>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
@@ -105,9 +108,8 @@ inline BufferRef buf_fixed(int index, size_t offset = 0) noexcept {
  * Automatically returns buffer to pool on destruction.
  * Move-only (cannot be copied).
  *
- * @warning The Buffer must not outlive the Engine that allocated it.
- * Dropping a Buffer after its Engine has been destroyed is undefined
- * behavior (the engine pointer stored internally would be dangling).
+ * If a Buffer outlives its Engine, AuraIO falls back to direct free()
+ * rather than touching destroyed engine state.
  *
  * Example:
  * @code
@@ -322,6 +324,7 @@ class Buffer {
         size_ = 0;
         owned_ = false;
         engine_ = nullptr;
+        engine_alive_.reset();
         return released;
     }
 
@@ -329,12 +332,15 @@ class Buffer {
     friend class Engine;
 
     // Private constructor for Engine::allocate_buffer
-    Buffer(auraio_engine_t *engine, void *ptr, size_t size) noexcept
-        : engine_(engine), ptr_(ptr), size_(size), owned_(true) {}
+    Buffer(auraio_engine_t *engine, std::shared_ptr<std::atomic<bool>> engine_alive, void *ptr,
+           size_t size) noexcept
+        : engine_(engine), engine_alive_(std::move(engine_alive)), ptr_(ptr), size_(size),
+          owned_(true) {}
 
     void release_internal() noexcept;
 
     auraio_engine_t *engine_ = nullptr;
+    std::shared_ptr<std::atomic<bool>> engine_alive_;
     void *ptr_ = nullptr;
     size_t size_ = 0;
     bool owned_ = false;
@@ -342,9 +348,17 @@ class Buffer {
 
 // Implementation of release_internal (needs auraio.h)
 inline void Buffer::release_internal() noexcept {
-    if (owned_ && ptr_ && engine_) {
-        auraio_buffer_free(engine_, ptr_, size_);
+    if (owned_ && ptr_) {
+        bool engine_alive = engine_ && engine_alive_ &&
+                           engine_alive_->load(std::memory_order_acquire);
+        if (engine_alive) {
+            auraio_buffer_free(engine_, ptr_, size_);
+        } else {
+            /* Engine already destroyed: fail-safe fallback for pool allocations. */
+            free(ptr_);
+        }
     }
+    engine_alive_.reset();
     ptr_ = nullptr;
     size_ = 0;
     owned_ = false;

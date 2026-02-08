@@ -13,13 +13,13 @@
 
 /* Append formatted text to the output buffer, tracking position.
  * NOTE: Jumps to 'overflow' label on buffer exhaustion. */
-#define PROM_APPEND(fmt, ...)                                         \
-    do {                                                              \
-        int _n = snprintf(pos, remain, fmt, ##__VA_ARGS__);           \
-        if (_n < 0 || (size_t)_n >= remain) goto overflow;            \
-        pos += _n;                                                    \
-        remain -= (size_t)_n;                                         \
-        written += _n;                                                \
+#define PROM_APPEND(...)                                               \
+    do {                                                               \
+        int _n = snprintf(pos, remain, __VA_ARGS__);                   \
+        if (_n < 0 || (size_t)_n >= remain) goto overflow;             \
+        pos += _n;                                                     \
+        remain -= (size_t)_n;                                          \
+        written += _n;                                                 \
     } while (0)
 
 /* Clamp non-finite doubles to 0.0 to avoid emitting lowercase "nan"/"inf"
@@ -40,6 +40,12 @@ int auraio_metrics_prometheus(auraio_engine_t *engine, char *buf, size_t buf_siz
     /* --- Aggregate engine stats --- */
     auraio_stats_t stats;
     auraio_get_stats(engine, &stats);
+
+    PROM_APPEND(
+        "# HELP auraio_metrics_schema_info Exporter metrics schema and stability\n"
+        "# TYPE auraio_metrics_schema_info gauge\n"
+        "auraio_metrics_schema_info{schema=\"" AURAIO_PROMETHEUS_SCHEMA_VERSION
+        "\",stability=\"" AURAIO_PROMETHEUS_SCHEMA_STABILITY "\"} 1\n\n");
 
     PROM_APPEND(
         "# HELP auraio_ops_completed_total Total I/O operations completed\n"

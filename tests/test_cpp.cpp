@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cassert>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <fcntl.h>
@@ -383,6 +384,82 @@ TEST(stats_all_fields) {
 }
 
 // =============================================================================
+// Registration Tests
+// =============================================================================
+
+TEST(request_unregister_buffers) {
+    TempFile file(4096);
+    file.reopen(O_RDONLY);
+
+    auraio::Engine engine;
+    auto fixed_storage = engine.allocate_buffer(4096);
+    std::array<iovec, 1> iovs = { iovec{ fixed_storage.data(), fixed_storage.size() } };
+    engine.register_buffers(iovs);
+
+    std::atomic<bool> completed{false};
+    std::atomic<ssize_t> read_result{0};
+    (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 4096, 0,
+                      [&](auraio::Request &, ssize_t result) {
+                          read_result.store(result, std::memory_order_seq_cst);
+                          completed.store(true, std::memory_order_seq_cst);
+                      });
+
+    engine.request_unregister_buffers();
+
+    bool rejected_during_drain = false;
+    try {
+        (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 64, 0,
+                          [](auraio::Request &, ssize_t) {});
+    } catch (const auraio::Error &e) {
+        rejected_during_drain = e.is_busy() || e.is_not_found();
+    }
+    ASSERT(rejected_during_drain);
+
+    while (!completed.load(std::memory_order_seq_cst)) {
+        engine.wait(100);
+    }
+    ASSERT_EQ(read_result.load(std::memory_order_seq_cst), 4096);
+
+    bool got_not_found = false;
+    try {
+        (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 64, 0,
+                          [](auraio::Request &, ssize_t) {});
+    } catch (const auraio::Error &e) {
+        got_not_found = e.is_not_found();
+    }
+    ASSERT(got_not_found);
+
+    /* No-op once already finalized */
+    engine.unregister_buffers();
+}
+
+TEST(request_unregister_files) {
+    TempFile file(4096);
+    file.reopen(O_RDONLY);
+
+    auraio::Engine engine;
+    std::array<int, 1> fds = { file.fd() };
+    engine.register_files(fds);
+
+    engine.request_unregister_files();
+
+    bool rejected_update = false;
+    try {
+        engine.update_file(0, file.fd());
+    } catch (const auraio::Error &e) {
+        rejected_update = e.is_busy() || e.is_not_found();
+    }
+    ASSERT(rejected_update);
+
+    /* No-op once already finalized */
+    engine.unregister_files();
+
+    /* Registration should still work after deferred path */
+    engine.register_files(fds);
+    engine.unregister_files();
+}
+
+// =============================================================================
 // I/O Tests (Callback-based)
 // =============================================================================
 
@@ -670,6 +747,17 @@ TEST(raii_exception_safety) {
     ASSERT_NE(buffer2.data(), nullptr);
 }
 
+TEST(raii_buffer_outlives_engine_scope) {
+    auraio::Buffer escaped;
+    {
+        auraio::Engine engine;
+        escaped = engine.allocate_buffer(4096);
+        ASSERT_NE(escaped.data(), nullptr);
+    }
+    /* Engine is destroyed here. Buffer cleanup must remain safe. */
+    ASSERT_NE(escaped.data(), nullptr);
+}
+
 // =============================================================================
 // Error Path Tests
 // =============================================================================
@@ -844,6 +932,8 @@ int main() {
     RUN_TEST(error_predicates);
     RUN_TEST(request_null_handle);
     RUN_TEST(stats_all_fields);
+    RUN_TEST(request_unregister_buffers);
+    RUN_TEST(request_unregister_files);
     RUN_TEST(read_basic);
     RUN_TEST(read_with_capture);
     RUN_TEST(write_basic);
@@ -858,6 +948,7 @@ int main() {
     RUN_TEST(raii_engine_scope);
     RUN_TEST(raii_buffer_scope);
     RUN_TEST(raii_exception_safety);
+    RUN_TEST(raii_buffer_outlives_engine_scope);
     RUN_TEST(read_invalid_fd_throws);
     RUN_TEST(buffer_as_null_throws);
 

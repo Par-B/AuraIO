@@ -15,6 +15,10 @@
 #include <limits.h>
 #include <unistd.h>
 
+/* Per-thread callback context depth.
+ * >0 means current thread is inside AuraIO completion callback(s). */
+static _Thread_local int callback_context_depth = 0;
+
 /* ============================================================================
  * Ring Lifecycle
  * ============================================================================ */
@@ -117,10 +121,12 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     for (int i = 0; i < queue_depth; i++) {
         ctx->free_request_stack[i] = i;
         ctx->requests[i].op_idx = i;
+        ctx->requests[i].uses_registered_buffer = false;
         atomic_init(&ctx->requests[i].pending, false);
         atomic_init(&ctx->requests[i].cancel_requested, false);
     }
     ctx->free_request_count = queue_depth;
+    atomic_init(&ctx->fixed_buf_inflight, 0);
 
     /* Initialize adaptive controller */
     int initial_inflight = queue_depth / 4;
@@ -146,6 +152,10 @@ cleanup_mutex:
     return (-1);
 }
 
+bool ring_in_callback_context(void) {
+    return callback_context_depth > 0;
+}
+
 void ring_destroy(ring_ctx_t *ctx) {
     if (!ctx) {
         return;
@@ -155,7 +165,7 @@ void ring_destroy(ring_ctx_t *ctx) {
      * Without this, ring_wait() would block waiting for CQEs that
      * correspond to SQEs never submitted to the kernel. */
     pthread_mutex_lock(&ctx->lock);
-    ring_flush(ctx);
+    (void)ring_flush(ctx);
     pthread_mutex_unlock(&ctx->lock);
 
     /* Wait for pending operations to complete with a timeout.
@@ -166,6 +176,10 @@ void ring_destroy(ring_ctx_t *ctx) {
     int drain_attempts = 0;
     while (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0 &&
            drain_attempts < 100) {
+        /* Retry flush in case an earlier submit failed transiently. */
+        pthread_mutex_lock(&ctx->lock);
+        (void)ring_flush(ctx);
+        pthread_mutex_unlock(&ctx->lock);
         ring_wait(ctx, 100);
         drain_attempts++;
     }
@@ -212,6 +226,7 @@ auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->buf_offset = 0;
     req->iov = NULL;
     req->cancel_target = NULL;
+    req->uses_registered_buffer = false;
     atomic_store_explicit(&req->pending, false, memory_order_relaxed);
     atomic_store_explicit(&req->cancel_requested, false, memory_order_relaxed);
 
@@ -570,7 +585,13 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
      * The req pointer remains valid because ring_put_request hasn't
      * been called yet. */
     if (callback) {
+        callback_context_depth++;
         callback((auraio_request_t *)req, result, user_data);
+        callback_context_depth--;
+    }
+
+    if (req->uses_registered_buffer) {
+        atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
     }
 
     /* After callback: update counters and return slot in one lock region.

@@ -106,50 +106,50 @@ fn main() -> Result<()> {
 
         // Need to prevent file from being closed before callback
         // In real code, you'd use proper resource management
+        let buf_ptr = buf.as_ptr() as *mut std::ffi::c_void;
         std::mem::forget(file);
         std::mem::forget(buf);
 
         files_pending.fetch_add(1, Ordering::SeqCst);
 
-        // Note: This is a simplified example. In production code, you'd need
-        // proper resource management for the file handle and buffer.
-        let _buf_ptr = std::ptr::null_mut::<u8>(); // Placeholder - buffer already forgotten
-
         // Submit the read using a simpler callback that doesn't capture pointers
         // For this example, we just track completion counts
-        engine.read(
-            fd,
-            auraio::BufferRef::from_slice(&[0u8; 1]), // Placeholder - real buffer forgotten
-            READ_SIZE,
-            0,
-            move |result| {
-                match result {
-                    Ok(n) => {
-                        bytes_read_clone.fetch_add(n as i64, Ordering::SeqCst);
+        let buf_ref = unsafe { auraio::BufferRef::from_ptr(buf_ptr) };
+        unsafe {
+            engine.read(
+                fd,
+                buf_ref,
+                READ_SIZE,
+                0,
+                move |result| {
+                    match result {
+                        Ok(n) => {
+                            bytes_read_clone.fetch_add(n as i64, Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            errors_clone.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
-                    Err(_) => {
-                        errors_clone.fetch_add(1, Ordering::SeqCst);
+
+                    // Note: In real code, we'd close the fd and free the buffer here
+                    // but this example simplifies resource management
+
+                    let completed = files_completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    files_pending_clone.fetch_sub(1, Ordering::SeqCst);
+
+                    // Print periodic stats
+                    if completed % STATS_INTERVAL == 0 {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let bytes = bytes_read_clone.load(Ordering::SeqCst);
+                        let mb = bytes as f64 / (1024.0 * 1024.0);
+                        let mb_per_sec = mb / elapsed;
+
+                        eprint!("\rProgress: {} files, {:.2} MB, {:.2} MB/s",
+                                completed, mb, mb_per_sec);
                     }
-                }
-
-                // Note: In real code, we'd close the fd and free the buffer here
-                // but this example simplifies resource management
-
-                let completed = files_completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                files_pending_clone.fetch_sub(1, Ordering::SeqCst);
-
-                // Print periodic stats
-                if completed % STATS_INTERVAL == 0 {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let bytes = bytes_read_clone.load(Ordering::SeqCst);
-                    let mb = bytes as f64 / (1024.0 * 1024.0);
-                    let mb_per_sec = mb / elapsed;
-
-                    eprint!("\rProgress: {} files, {:.2} MB, {:.2} MB/s",
-                            completed, mb, mb_per_sec);
-                }
-            },
-        ).ok(); // Ignore submission errors for simplicity
+                },
+            ).ok(); // Ignore submission errors for simplicity
+        }
     }
 
     // Wait for all completions

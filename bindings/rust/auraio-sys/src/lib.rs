@@ -46,7 +46,7 @@ mod tests {
             let version = auraio_version();
             assert!(!version.is_null());
             let version_int = auraio_version_int();
-            assert!(version_int >= 10000); // At least version 1.0.0
+            assert!(version_int >= 100); // At least version 0.1.0
         }
     }
 

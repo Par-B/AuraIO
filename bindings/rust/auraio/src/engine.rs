@@ -170,6 +170,17 @@ impl Engine {
         }
     }
 
+    /// Request deferred unregister of registered buffers (callback-safe)
+    pub fn request_unregister_buffers(&self) -> Result<()> {
+        let ret =
+            unsafe { auraio_sys::auraio_request_unregister_buffers(self.inner.raw()) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
     /// Register file descriptors with the kernel
     pub fn register_files(&self, fds: &[RawFd]) -> Result<()> {
         if fds.len() > i32::MAX as usize {
@@ -203,6 +214,17 @@ impl Engine {
     /// Unregister previously registered files
     pub fn unregister_files(&self) -> Result<()> {
         let ret = unsafe { auraio_sys::auraio_unregister_files(self.inner.raw()) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
+    /// Request deferred unregister of registered files (callback-safe)
+    pub fn request_unregister_files(&self) -> Result<()> {
+        let ret =
+            unsafe { auraio_sys::auraio_request_unregister_files(self.inner.raw()) };
         if ret == 0 {
             Ok(())
         } else {
