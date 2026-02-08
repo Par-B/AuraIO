@@ -54,7 +54,9 @@ TEST(pool_alloc_basic) {
 
     void *buf = buffer_pool_alloc(&pool, 1024);
     assert(buf != NULL);
-    assert(pool.total_buffers == 1);
+    /* total_buffers >= 1: batch pre-fill may allocate extra buffers
+     * into the thread cache to reduce future heap operations. */
+    assert(atomic_load(&pool.total_buffers) >= 1);
 
     /* Check alignment */
     assert(((uintptr_t)buf % 4096) == 0);
@@ -77,7 +79,9 @@ TEST(pool_alloc_multiple) {
         assert(((uintptr_t)bufs[i] % 4096) == 0);
     }
 
-    assert(pool.total_buffers == 10);
+    /* With batch pre-fill, total_buffers >= 10 (some may have been
+     * pre-allocated into the thread cache beyond the 10 requested). */
+    assert(atomic_load(&pool.total_buffers) >= 10);
 
     /* Free all */
     for (int i = 0; i < 10; i++) {

@@ -27,11 +27,13 @@
  *  Increase from 64 to reduce alloc/free churn through posix_memalign. */
 #define BUFFER_POOL_DEFAULT_MAX_FREE_PER_SHARD 256
 
-/** Buffers per size class in thread-local cache (power of 2 for efficient batching) */
-#define THREAD_CACHE_SIZE 16
+/** Buffers per size class in thread-local cache (power of 2 for efficient batching).
+ *  Larger cache reduces frequency of shard lock + posix_memalign on the hot path.
+ *  At 4KB size class, 32 buffers = 128KB per thread — acceptable overhead. */
+#define THREAD_CACHE_SIZE 32
 
 /** Batch size when transferring between thread cache and global pool */
-#define THREAD_CACHE_BATCH_SIZE 8
+#define THREAD_CACHE_BATCH_SIZE 16
 
 /** Maximum pool shards (power of 2). Actual count determined at runtime. */
 #define BUFFER_POOL_MAX_SHARDS 256
@@ -115,17 +117,22 @@ typedef struct {
  * - 1024 cores → 256 shards (max)
  */
 typedef struct buffer_pool {
+    /* === CL 0: Read-only after init (no contention) === */
     buffer_shard_t *shards;                  /**< Dynamically allocated shards */
     int shard_count;                         /**< Number of shards (power of 2) */
     int shard_mask;                          /**< shard_count - 1 for fast modulo */
     uint64_t pool_id;                        /**< Unique generation ID (set once at init) */
     size_t alignment;                        /**< Buffer alignment (typically 4096) */
-    _Atomic size_t total_allocated;          /**< Total bytes allocated (atomic) */
-    _Atomic size_t total_buffers;            /**< Total buffer count (atomic) */
-    _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
-    _Atomic int next_shard;                  /**< Round-robin shard assignment */
+
+    /* === CL 1: Read-heavy atomics (get_thread_cache hot path) === */
+    _Alignas(64) _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
     _Atomic bool destroyed;                  /**< Pool destroyed flag for safety */
     _Atomic int registrations_inflight;      /**< Caches currently in registration path */
+
+    /* === CL 2: Write-heavy counters (slow path only) === */
+    _Alignas(64) _Atomic size_t total_allocated; /**< Total bytes allocated (atomic) */
+    _Atomic size_t total_buffers;            /**< Total buffer count (atomic) */
+    _Atomic int next_shard;                  /**< Round-robin shard assignment */
 } buffer_pool_t;
 
 /**

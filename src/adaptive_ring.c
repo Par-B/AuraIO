@@ -108,11 +108,15 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     }
     ctx->ring_initialized = true;
 
-    /* Allocate request tracking */
-    ctx->requests = calloc(queue_depth, sizeof(auraio_request_t));
+    /* Allocate request tracking.
+     * Cache-line aligned so requests[0] starts on a 64-byte boundary.
+     * Combined with the 128-byte struct size this guarantees each request
+     * occupies exactly 2 cache lines with no neighbor sharing. */
+    ctx->requests = aligned_alloc(64, (size_t)queue_depth * sizeof(auraio_request_t));
     if (!ctx->requests) {
         goto cleanup_ring;
     }
+    memset(ctx->requests, 0, (size_t)queue_depth * sizeof(auraio_request_t));
 
     ctx->free_request_stack = malloc(queue_depth * sizeof(int));
     if (!ctx->free_request_stack) {

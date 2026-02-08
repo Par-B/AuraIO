@@ -189,10 +189,15 @@ typedef struct {
  *
  * Two histograms with atomic index swap for O(1) reset.
  * Recording writes to active histogram, tick swaps and clears inactive.
+ *
+ * active_index is placed first so that reading it brings the first ~15
+ * buckets of histogram[0] into the same cache line.  For NVMe workloads
+ * most latencies fall in these low buckets, giving a single cache line
+ * fetch for the index lookup + most common recording path.
  */
 typedef struct {
-    adaptive_histogram_t histograms[2]; /**< Double buffer */
     _Atomic int active_index;           /**< Active histogram (0 or 1) */
+    adaptive_histogram_t histograms[2]; /**< Double buffer */
 } adaptive_histogram_pair_t;
 
 /**

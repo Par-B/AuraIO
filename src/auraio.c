@@ -74,8 +74,8 @@ struct auraio_engine {
     int event_fd; /**< Unified eventfd for all rings */
     auraio_ring_select_t ring_select; /**< Ring selection mode */
     bool adaptive_enabled; /**< Adaptive tuning enabled */
-    bool buffers_registered; /**< True if buffers are registered */
-    bool files_registered; /**< True if files are registered */
+    _Atomic bool buffers_registered; /**< True if buffers are registered */
+    _Atomic bool files_registered; /**< True if files are registered */
     bool buffers_unreg_pending; /**< Deferred buffer unregister requested */
     bool files_unreg_pending; /**< Deferred file unregister requested */
     bool sqpoll_enabled; /**< True if SQPOLL is active on any ring */
@@ -752,10 +752,12 @@ auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
 
         int submit_fd = fd;
         bool use_registered_file = false;
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
+        if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+            pthread_rwlock_rdlock(&engine->reg_lock);
+            use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+            if (!use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
         }
 
         submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
@@ -866,10 +868,12 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
 
         int submit_fd = fd;
         bool use_registered_file = false;
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
+        if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+            pthread_rwlock_rdlock(&engine->reg_lock);
+            use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+            if (!use_registered_file) {
+                pthread_rwlock_unlock(&engine->reg_lock);
+            }
         }
 
         submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
@@ -979,10 +983,12 @@ auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd, auraio_fsync_
 
     int submit_fd = fd;
     bool use_registered_file = false;
-    pthread_rwlock_rdlock(&engine->reg_lock);
-    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-    if (!use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+        if (!use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
     }
 
     submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
@@ -1035,10 +1041,12 @@ auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd, const struct iov
 
     int submit_fd = fd;
     bool use_registered_file = false;
-    pthread_rwlock_rdlock(&engine->reg_lock);
-    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-    if (!use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+        if (!use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
     }
 
     submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
@@ -1083,10 +1091,12 @@ auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd, const struct io
 
     int submit_fd = fd;
     bool use_registered_file = false;
-    pthread_rwlock_rdlock(&engine->reg_lock);
-    use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-    if (!use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+        if (!use_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+        }
     }
 
     submit_ctx_t ctx = submit_begin(engine, !use_registered_file);

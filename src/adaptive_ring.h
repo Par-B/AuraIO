@@ -72,6 +72,14 @@ struct auraio_request {
 
     /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending; /**< True if still in-flight */
+
+    /* Pad to 128 bytes (2 full cache lines) so that adjacent requests in
+     * the request array never share a cache line.  Without this padding
+     * the struct is 96 bytes: requests[N].pending at offset 90 and
+     * requests[N+1].op_type at offset 96 land on the same 64-byte line,
+     * causing every completion write to invalidate the next request's
+     * submission-path data.  See cache_analysis_report.md §3, H1. */
+    char _cacheline_pad[128 - 91];
 };
 
 /**
@@ -108,19 +116,17 @@ typedef struct {
     /* Adaptive controller */
     adaptive_controller_t adaptive; /**< AIMD controller */
 
-    /* Statistics */
-    int64_t bytes_submitted; /**< Total bytes requested at submission */
-    int64_t bytes_completed; /**< Total bytes actually transferred (from CQE results) */
-    int64_t ops_completed;   /**< Total ops completed */
+    /* Submit-path counters (written during ring_submit_*).
+     * Separated from completion-path counters to avoid false sharing
+     * between the submit and completion code paths. */
+    _Alignas(64) _Atomic int queued_sqes;  /**< SQEs queued but not submitted */
+    int sample_counter;                    /**< Submission counter for sampling */
+    int64_t bytes_submitted;               /**< Total bytes requested at submission */
 
-    /* Batching state */
-    _Atomic int queued_sqes;             /**< SQEs queued but not submitted */
-    _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
-
-    /* Latency sampling: only timestamp every Nth submission to reduce
-     * clock_gettime overhead. Non-sampled ops get submit_time_ns=0 and
-     * are skipped in process_completion's adaptive recording. */
-    int sample_counter; /**< Submission counter for sampling */
+    /* Completion-path counters (written during process_completion) */
+    _Alignas(64) int64_t bytes_completed;  /**< Total bytes actually transferred (from CQE results) */
+    int64_t ops_completed;                 /**< Total ops completed */
+    _Atomic uint32_t fixed_buf_inflight;   /**< Registered-buffer ops currently in-flight */
 } ring_ctx_t;
 
 /**

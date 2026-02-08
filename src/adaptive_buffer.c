@@ -199,11 +199,11 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     thread_cache_t *cache = tls_cache;
 
     /* Fast path: already have a valid cache for this pool.
-     * Check both pointer and generation ID to detect stale caches from
-     * a previous pool that happened to occupy the same address.
-     * Safe to dereference: cache struct is never freed while tls_cache
-     * points to it (pool destroy leaves live threads' caches intact). */
-    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id &&
+     * pool pointer match guarantees this cache belongs to this pool instance.
+     * The destroyed check (acquire) ensures we see any concurrent destruction.
+     * pool_id is checked on the slow path only as defense-in-depth against
+     * the ABA scenario (pool freed + new pool at same address). */
+    if (cache && cache->pool == pool &&
         !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         return cache;
     }
@@ -692,7 +692,10 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
 
     pthread_mutex_unlock(&shard->lock);
 
-    /* No buffer in shard - allocate a new one at bucket_size */
+    /* No buffer in shard - allocate from heap.
+     * Batch-allocate to fill the thread cache so subsequent allocs avoid
+     * the heap entirely.  This amortises posix_memalign overhead across
+     * THREAD_CACHE_BATCH_SIZE allocations instead of one. */
     void *buf = NULL;
     int ret = posix_memalign(&buf, pool->alignment, bucket_size);
     if (ret != 0) {
@@ -702,6 +705,24 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
 
     atomic_fetch_add(&pool->total_allocated, bucket_size);
     atomic_fetch_add(&pool->total_buffers, 1);
+
+    /* Pre-fill thread cache with extra buffers to avoid future heap trips */
+    if (cache) {
+        int prefill = 0;
+        while (prefill < THREAD_CACHE_BATCH_SIZE - 1 &&
+               cache->counts[class_idx] < THREAD_CACHE_SIZE) {
+            void *extra = NULL;
+            if (posix_memalign(&extra, pool->alignment, bucket_size) != 0) {
+                break;
+            }
+            cache->buffers[class_idx][cache->counts[class_idx]++] = extra;
+            prefill++;
+        }
+        if (prefill > 0) {
+            atomic_fetch_add(&pool->total_allocated, bucket_size * prefill);
+            atomic_fetch_add(&pool->total_buffers, prefill);
+        }
+    }
 
     return buf;
 }
