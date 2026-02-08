@@ -12,6 +12,10 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include "../include/auraio.h"
 #include "../exporters/otel/auraio_otel.h"
@@ -98,6 +102,129 @@ static auraio_engine_t *make_engine(int rings, int qdepth) {
     opts.ring_count = rings;
     opts.queue_depth = qdepth;
     return auraio_create_with_options(&opts);
+}
+
+struct push_server_ctx {
+    int listen_fd;
+    int port;
+    int status_code;
+    char request[8192];
+    size_t request_len;
+    pthread_t thread;
+};
+
+static void *push_server_thread(void *arg) {
+    struct push_server_ctx *ctx = arg;
+
+    int client_fd;
+    for (;;) {
+        client_fd = accept(ctx->listen_fd, NULL, NULL);
+        if (client_fd >= 0) break;
+        if (errno == EINTR) continue;
+        close(ctx->listen_fd);
+        ctx->listen_fd = -1;
+        return NULL;
+    }
+
+    size_t used = 0;
+    size_t expected_total = 0;
+    int have_expected = 0;
+
+    while (used + 1 < sizeof(ctx->request)) {
+        ssize_t n = read(client_fd, ctx->request + used, sizeof(ctx->request) - 1 - used);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0) break;
+        used += (size_t)n;
+        ctx->request[used] = '\0';
+
+        if (!have_expected) {
+            char *header_end = strstr(ctx->request, "\r\n\r\n");
+            if (header_end) {
+                size_t header_len = (size_t)(header_end - ctx->request) + 4;
+                size_t body_len = 0;
+                char *cl = strstr(ctx->request, "Content-Length:");
+                if (cl) body_len = (size_t)strtoul(cl + strlen("Content-Length:"), NULL, 10);
+                expected_total = header_len + body_len;
+                have_expected = 1;
+            }
+        }
+
+        if (have_expected && used >= expected_total) break;
+    }
+
+    ctx->request_len = used;
+    ctx->request[used] = '\0';
+
+    char resp[128];
+    int nresp = snprintf(resp, sizeof(resp), "HTTP/1.1 %d Test\r\nContent-Length: 0\r\n\r\n",
+                         ctx->status_code);
+    if (nresp > 0) {
+        size_t sent = 0;
+        while (sent < (size_t)nresp) {
+            ssize_t n = write(client_fd, resp + sent, (size_t)nresp - sent);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (n == 0) break;
+            sent += (size_t)n;
+        }
+    }
+
+    close(client_fd);
+    close(ctx->listen_fd);
+    ctx->listen_fd = -1;
+    return NULL;
+}
+
+static int push_server_start(struct push_server_ctx *ctx, int status_code) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (ctx->listen_fd < 0) return -1;
+
+    int one = 1;
+    setsockopt(ctx->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = 0;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    if (bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(ctx->listen_fd);
+        ctx->listen_fd = -1;
+        return -1;
+    }
+    if (listen(ctx->listen_fd, 1) < 0) {
+        close(ctx->listen_fd);
+        ctx->listen_fd = -1;
+        return -1;
+    }
+
+    socklen_t alen = sizeof(addr);
+    if (getsockname(ctx->listen_fd, (struct sockaddr *)&addr, &alen) < 0) {
+        close(ctx->listen_fd);
+        ctx->listen_fd = -1;
+        return -1;
+    }
+
+    ctx->port = ntohs(addr.sin_port);
+    ctx->status_code = status_code;
+    if (pthread_create(&ctx->thread, NULL, push_server_thread, ctx) != 0) {
+        close(ctx->listen_fd);
+        ctx->listen_fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static void push_server_join(struct push_server_ctx *ctx) {
+    pthread_join(ctx->thread, NULL);
 }
 
 /* ============================================================================
@@ -518,6 +645,62 @@ TEST(push_connection_refused) {
     assert(rc == -1);
 }
 
+TEST(push_success_status_and_request_shape) {
+    struct push_server_ctx srv;
+    assert(push_server_start(&srv, 200) == 0);
+
+    char endpoint[128];
+    snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d/v1/metrics", srv.port);
+
+    int rc = auraio_otel_push(endpoint, "{}", 2);
+    assert(rc == 200);
+
+    push_server_join(&srv);
+
+    assert(contains(srv.request, "POST /v1/metrics HTTP/1.1\r\n"));
+    assert(contains(srv.request, "Content-Type: application/json\r\n"));
+    assert(contains(srv.request, "Content-Length: 2\r\n"));
+    assert(contains(srv.request, "\r\n\r\n{}"));
+}
+
+TEST(push_status_passthrough) {
+    struct push_server_ctx srv;
+    assert(push_server_start(&srv, 503) == 0);
+
+    char endpoint[128];
+    snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d/v1/metrics", srv.port);
+
+    int rc = auraio_otel_push(endpoint, "{}", 2);
+    assert(rc == 503);
+
+    push_server_join(&srv);
+}
+
+TEST(push_default_path_when_missing) {
+    struct push_server_ctx srv;
+    assert(push_server_start(&srv, 200) == 0);
+
+    char endpoint[128];
+    snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d", srv.port);
+
+    int rc = auraio_otel_push(endpoint, "{}", 2);
+    assert(rc == 200);
+
+    push_server_join(&srv);
+    assert(contains(srv.request, "POST / HTTP/1.1\r\n"));
+}
+
+TEST(push_invalid_authority_forms) {
+    /* Empty host */
+    assert(auraio_otel_push("http:///v1/metrics", "{}", 2) == -1);
+    /* Empty port */
+    assert(auraio_otel_push("http://localhost:/v1/metrics", "{}", 2) == -1);
+    /* Invalid IPv6 authority (missing closing bracket) */
+    assert(auraio_otel_push("http://[::1/v1/metrics", "{}", 2) == -1);
+    /* Ambiguous unbracketed IPv6-like authority */
+    assert(auraio_otel_push("http://::1:4318/v1/metrics", "{}", 2) == -1);
+}
+
 /* ============================================================================
  * Idempotency / Consistency Tests
  * ============================================================================ */
@@ -585,6 +768,10 @@ int main(void) {
     RUN_TEST(push_null_args);
     RUN_TEST(push_invalid_scheme);
     RUN_TEST(push_connection_refused);
+    RUN_TEST(push_success_status_and_request_shape);
+    RUN_TEST(push_status_passthrough);
+    RUN_TEST(push_default_path_when_missing);
+    RUN_TEST(push_invalid_authority_forms);
 
     /* Consistency */
     RUN_TEST(two_calls_consistent);
