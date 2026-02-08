@@ -282,6 +282,8 @@ TEST(readv_basic) {
     assert(engine);
 
     char buf1[2048], buf2[2048];
+    memset(buf1, 0, sizeof(buf1));
+    memset(buf2, 0, sizeof(buf2));
     struct iovec iov[2] = {
         { .iov_base = buf1, .iov_len = sizeof(buf1) },
         { .iov_base = buf2, .iov_len = sizeof(buf2) },
@@ -627,6 +629,7 @@ TEST(register_buffers_and_use) {
     void *regbuf = NULL;
     int rc = posix_memalign(&regbuf, 4096, 4096);
     assert(rc == 0 && regbuf);
+    memset(regbuf, 0, 4096);
 
     struct iovec iov = { .iov_base = regbuf, .iov_len = 4096 };
     rc = auraio_register_buffers(engine, &iov, 1);
@@ -1021,11 +1024,12 @@ static void *buffer_thread_late_exit(void *arg) {
     while (atomic_load(&ctx->iterations) == 0) {
         usleep(1000);
     }
-    /* Now try to free after pool destroy - should go to direct free path */
+    /* Engine is destroyed at this point, so the engine pointer is invalid.
+     * Use plain free() here; direct buffer_pool_free-after-destroy coverage is
+     * exercised by a dedicated test on a standalone pool instance. */
     void *buf = malloc(4096);
     if (buf) {
-        auraio_buffer_free(ctx->engine, buf, 4096);
-        /* Note: buffer is leaked here since pool is destroyed */
+        free(buf);
     }
     return NULL;
 }
@@ -1057,6 +1061,20 @@ TEST(buffer_pool_thread_exit) {
 TEST(buffer_pool_destroy_null) {
     /* NULL check should be no-op */
     buffer_pool_destroy(NULL);
+}
+
+TEST(buffer_pool_free_after_destroy_direct) {
+    buffer_pool_t pool;
+    int rc = buffer_pool_init(&pool, 4096);
+    assert(rc == 0);
+
+    void *buf = malloc(4096);
+    assert(buf != NULL);
+
+    buffer_pool_destroy(&pool);
+
+    /* Valid use: pool object still exists, destroyed flag is set. */
+    buffer_pool_free(&pool, buf, 4096);
 }
 
 TEST(buffer_pool_huge_alloc) {
@@ -1731,6 +1749,7 @@ TEST(ring_latency_sampling) {
     ring_ctx_t ctx;
     int rc = ring_init(&ctx, 64, -1, NULL);
     assert(rc == 0);
+    char *bufs[32] = { 0 };
 
     /* Submit many operations to trigger latency sampling at different phases */
     for (int i = 0; i < 32; i++) {
@@ -1740,6 +1759,7 @@ TEST(ring_latency_sampling) {
 
         char *buf = malloc(1024);
         assert(buf);
+        bufs[i] = buf;
         req->fd = test_fd;
         req->buffer = buf;
         req->len = 1024;
@@ -1759,6 +1779,10 @@ TEST(ring_latency_sampling) {
         ring_wait(&ctx, 1000);
     }
 
+    for (int i = 0; i < 32; i++) {
+        free(bufs[i]);
+    }
+
     ring_destroy(&ctx);
     io_teardown();
 }
@@ -1766,6 +1790,7 @@ TEST(ring_latency_sampling) {
 TEST(buffer_pool_thread_cache_refill) {
     auraio_engine_t *engine = make_engine(1, 32);
     assert(engine);
+    void *bufs[30] = { 0 };
 
     /* Allocate buffers from main thread and free them */
     for (int i = 0; i < 20; i++) {
@@ -1776,8 +1801,12 @@ TEST(buffer_pool_thread_cache_refill) {
 
     /* Allocate again - should hit cache refill path from shard */
     for (int i = 0; i < 30; i++) {
-        void *buf = auraio_buffer_alloc(engine, 4096);
-        assert(buf);
+        bufs[i] = auraio_buffer_alloc(engine, 4096);
+        assert(bufs[i]);
+    }
+
+    for (int i = 0; i < 30; i++) {
+        auraio_buffer_free(engine, bufs[i], 4096);
     }
 
     auraio_destroy(engine);
@@ -2024,6 +2053,7 @@ int main(void) {
     RUN_TEST(buffer_pool_multithread);
     RUN_TEST(buffer_pool_thread_exit);
     RUN_TEST(buffer_pool_destroy_null);
+    RUN_TEST(buffer_pool_free_after_destroy_direct);
     RUN_TEST(buffer_pool_huge_alloc);
     RUN_TEST(buffer_pool_shard_capacity);
     RUN_TEST(buffer_pool_cross_thread_reuse);
