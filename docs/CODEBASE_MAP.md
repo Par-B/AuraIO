@@ -34,6 +34,7 @@ graph TB
 
     subgraph "Exporters"
         Prom[prometheus<br/>Metrics formatter]
+        OTel[otel<br/>OTLP/JSON formatter]
     end
 
     subgraph "Core C Library"
@@ -57,6 +58,7 @@ graph TB
     RustSafe --> RustSys
     RustSys --> CAPI
     Prom --> CAPI
+    OTel --> CAPI
     CAPI --> Impl
     Impl --> Ring
     Impl --> Adaptive
@@ -113,10 +115,16 @@ AuraIO/
 │               ├── error.rs      # Error enum (thiserror)
 │               └── stats.rs      # Stats snapshot
 ├── exporters/
-│   └── prometheus/
-│       ├── auraio_prometheus.h   # Prometheus formatter API
-│       ├── auraio_prometheus.c   # Text exposition format implementation
-│       └── example.c             # Minimal HTTP server on :9091/metrics
+│   ├── prometheus/
+│   │   ├── auraio_prometheus.h   # Prometheus formatter API
+│   │   ├── auraio_prometheus.c   # Text exposition format implementation
+│   │   └── example.c             # Minimal HTTP server on :9091/metrics
+│   └── otel/
+│       ├── auraio_otel.h         # OTLP/JSON formatter API
+│       ├── auraio_otel.c         # OTLP JSON format implementation
+│       ├── auraio_otel_push.h    # HTTP push helper API
+│       ├── auraio_otel_push.c    # Blocking HTTP POST to OTel collector
+│       └── example.c             # Periodic push loop with --dry-run
 ├── examples/
 │   ├── C/
 │   │   ├── quickstart.c      # Minimal read example
@@ -429,6 +437,38 @@ libauraio.so (C library)
 - Histogram sum is estimated using bucket midpoints (not exact)
 - On overflow, returns `-(written * 2 + 4096)` as conservative retry estimate (clamped to `INT_MIN` if needed)
 - Example server is demo-quality (not production-grade, best-effort writes)
+
+---
+
+### OpenTelemetry Exporter (`exporters/otel/`)
+
+**Purpose**: OTLP/JSON metrics formatter and HTTP push helper for AuraIO metrics
+
+| File | Purpose | Tokens |
+|------|---------|--------|
+| `auraio_otel.h` | Formatter API, schema version constants | ~450 |
+| `auraio_otel.c` | OTLP JSON format implementation | ~4,500 |
+| `auraio_otel_push.h` | HTTP push helper API | ~250 |
+| `auraio_otel_push.c` | Blocking HTTP POST to OTel collector | ~1,200 |
+| `example.c` | Periodic push loop with --dry-run | ~800 |
+
+**API**: `auraio_metrics_otel(engine, buf, buf_size)` — returns bytes written, or negative on error (same contract as Prometheus exporter)
+
+**Push API**: `auraio_otel_push(endpoint, buf, len)` — returns HTTP status code (200 = success), or -1 on error
+
+**OTLP Mapping**:
+- Monotonic cumulative sums: ops_completed, bytes_transferred, adaptive_spills
+- Gauges: throughput, p99_latency, in_flight, optimal_in_flight, optimal_batch_size, ring_count, buffer pool stats
+- Per-ring: same types with `ring` attribute
+- Per-ring histogram: explicit bucket histogram with non-cumulative counts, min/max/sum/count
+
+**Patterns**:
+- `OTEL_APPEND` macro (same pattern as `PROM_APPEND`)
+- Hand-written JSON via snprintf (no JSON library dependency)
+- NaN/Inf clamped to 0.0
+- `clock_gettime(CLOCK_REALTIME)` for `timeUnixNano`
+- Cumulative sums use `startTimeUnixNano: "0"` (unknown origin)
+- HTTP push: plain POSIX sockets, no TLS, blocking
 
 ---
 

@@ -80,7 +80,7 @@ test-all: core
 	echo "--- C Tests ---"; \
 	c_out=$$($(MAKE) -C tests 2>&1) && c_ok=1 || c_ok=0; \
 	echo "$$c_out"; \
-	c_pass=$$(echo "$$c_out" | grep -oE '^[0-9]+ tests passed' | tail -1 | grep -oE '^[0-9]+'); \
+	c_pass=$$(echo "$$c_out" | grep -A1 'C Tests Summary' | grep -oE '[0-9]+ tests passed' | grep -oE '[0-9]+'); \
 	[ -z "$$c_pass" ] && c_pass=0; \
 	if [ "$$c_ok" -eq 0 ]; then c_fail=1; fi; \
 	echo ""; \
@@ -151,11 +151,15 @@ test-all: core
 		echo "RESULT: ALL PASSED"; \
 	fi
 
-# Build metrics exporters (Prometheus)
+# Build metrics exporters (Prometheus + OpenTelemetry)
 exporters: core
 	$(CC) $(CFLAGS) -Iexporters/prometheus \
 		exporters/prometheus/example.c exporters/prometheus/auraio_prometheus.c \
 		-o exporters/prometheus/prometheus_example \
+		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
+	$(CC) $(CFLAGS) -Iexporters/otel \
+		exporters/otel/example.c exporters/otel/auraio_otel.c exporters/otel/auraio_otel_push.c \
+		-o exporters/otel/otel_example \
 		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
 
 # Build BFFIO benchmark tool
@@ -250,6 +254,8 @@ install: core
 	install -m 644 include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
 	install -d $(DESTDIR)$(PREFIX)/include/auraio/exporters
 	install -m 644 exporters/prometheus/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
+	install -m 644 exporters/otel/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
+	install -m 644 exporters/otel/auraio_otel_push.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall
@@ -271,6 +277,7 @@ clean: rust-clean
 	-$(MAKE) -C examples clean 2>/dev/null || true
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	rm -f exporters/prometheus/prometheus_example
+	rm -f exporters/otel/otel_example
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
@@ -579,7 +586,7 @@ help:
 	@echo "  make BFFIO-baseline Run BFFIO vs FIO comparison"
 	@echo ""
 	@echo "Exporters:"
-	@echo "  make exporters      Build metrics exporters (Prometheus)"
+	@echo "  make exporters      Build metrics exporters (Prometheus + OpenTelemetry)"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"

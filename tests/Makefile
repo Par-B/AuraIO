@@ -11,7 +11,7 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../lib'
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress
+TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage
 CPP_TESTS = test_cpp
 
 .PHONY: all build-tests
@@ -26,7 +26,7 @@ all:
 		echo "=== $$t ==="; \
 		output=$$(./$$t) || exit 1; \
 		echo "$$output"; \
-		count=$$(echo "$$output" | grep -oE '^[0-9]+ tests passed' | grep -oE '^[0-9]+'); \
+		count=$$(echo "$$output" | grep -oE '[0-9]+ tests passed' | tail -1 | grep -oE '[0-9]+' | head -1); \
 		if [ -n "$$count" ]; then total=$$((total + count)); fi; \
 	done; \
 	echo ""; \
@@ -55,6 +55,12 @@ test_stats: test_stats.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 test_concurrency_stress: test_concurrency_stress.c ../lib/libauraio.a
+	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+test_otel: test_otel.c ../lib/libauraio.a ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c
+	$(CC) $(CFLAGS) -I../exporters/otel $< ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+test_coverage: test_coverage.c ../lib/libauraio.a
 	$(CC) $(CFLAGS) $< -o $@ ../lib/libauraio.a $(LDFLAGS) $(RPATH)
 
 # ============================================================================
@@ -196,7 +202,7 @@ valgrind-quick: $(TESTS)
 # ============================================================================
 # ThreadSanitizer tests (requires rebuild with TSAN)
 # ============================================================================
-TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan test_concurrency_stress_tsan
+TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan test_concurrency_stress_tsan test_otel_tsan test_coverage_tsan
 
 tsan: $(TSAN_TESTS)
 	@echo "Running ThreadSanitizer tests..."
@@ -250,10 +256,16 @@ test_ring_select_tsan: test_ring_select.c ../lib/libauraio_tsan.a
 test_concurrency_stress_tsan: test_concurrency_stress.c ../lib/libauraio_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
 
+test_otel_tsan: test_otel.c ../lib/libauraio_tsan.a ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) -I../exporters/otel $< ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c -o $@ ../lib/libauraio_tsan.a -luring -lpthread
+
+test_coverage_tsan: test_coverage.c ../lib/libauraio_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../lib/libauraio_tsan.a -luring -lpthread
+
 # ============================================================================
 # AddressSanitizer tests (requires rebuild with ASAN)
 # ============================================================================
-ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan test_concurrency_stress_asan
+ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan test_concurrency_stress_asan test_otel_asan test_coverage_asan
 
 asan: $(ASAN_TESTS)
 	@echo "Running AddressSanitizer tests..."
@@ -281,6 +293,12 @@ test_ring_select_asan: test_ring_select.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 test_concurrency_stress_asan: test_concurrency_stress.c ../lib/libauraio_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
+
+test_otel_asan: test_otel.c ../lib/libauraio_asan.a ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -I../exporters/otel $< ../exporters/otel/auraio_otel.c ../exporters/otel/auraio_otel_push.c -o $@ ../lib/libauraio_asan.a -luring -lpthread
+
+test_coverage_asan: test_coverage.c ../lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../lib/libauraio_asan.a -luring -lpthread
 
 clean:
