@@ -267,7 +267,7 @@ typedef struct {
     size_t buffer_alignment;   /**< Buffer alignment (default: system page size) */
     bool disable_adaptive;     /**< Disable adaptive tuning */
 
-    /* Advanced io_uring features (Phase 5) */
+    /* Advanced io_uring features */
     bool enable_sqpoll; /**< Enable SQPOLL mode (requires root/CAP_SYS_NICE) */
     int sqpoll_idle_ms; /**< SQPOLL idle timeout in ms (default: 1000) */
 
@@ -835,7 +835,7 @@ AURAIO_API int auraio_request_unregister_buffers(auraio_engine_t *engine);
 AURAIO_API int auraio_unregister_buffers(auraio_engine_t *engine);
 
 /* ============================================================================
- * Registered Files (Advanced - Phase 5)
+ * Registered Files (Advanced)
  * ============================================================================
  *
  * Registered file descriptors eliminate fd lookup overhead in the kernel.
