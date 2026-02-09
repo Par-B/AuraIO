@@ -61,22 +61,22 @@ mkdir -p "$OUT_DIR/profraw" "$OUT_DIR/html"
 rm -f "$OUT_DIR/profraw"/*.profraw "$OUT_DIR"/coverage.profdata "$OUT_DIR"/report.txt \
     "$OUT_DIR"/summary.json "$OUT_DIR"/lcov.info "$OUT_DIR"/line_coverage.txt
 
-LIB_CFLAGS="-Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations -std=c11 -O0 -g -fPIC -fvisibility=hidden -Icore/include -Icore/src -fprofile-instr-generate -fcoverage-mapping"
-TEST_CFLAGS="-Wall -Wextra -Wpedantic -std=c11 -g -O0 -I../core/include -I../core/src -fprofile-instr-generate -fcoverage-mapping"
-# Rebuild core library and tests with coverage instrumentation.
-# Use `core` instead of `all` so example/binding builds do not inherit
+LIB_CFLAGS="-Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations -std=c11 -O0 -g -fPIC -fvisibility=hidden -Iengine/include -Iengine/src -fprofile-instr-generate -fcoverage-mapping"
+TEST_CFLAGS="-Wall -Wextra -Wpedantic -std=c11 -g -O0 -I../engine/include -I../engine/src -fprofile-instr-generate -fcoverage-mapping"
+# Rebuild engine library and tests with coverage instrumentation.
+# Use `engine` instead of `all` so example/binding builds do not inherit
 # instrumentation CFLAGS that are scoped for top-level library paths.
 make -C "$ROOT" clean >/dev/null
-make -C "$ROOT" -j4 core CC="$CC_BIN" CFLAGS="$LIB_CFLAGS" >/dev/null
+make -C "$ROOT" -j4 engine CC="$CC_BIN" CFLAGS="$LIB_CFLAGS" >/dev/null
 make -C "$ROOT/tests" clean >/dev/null
 make -C "$ROOT/tests" \
     CC="$CC_BIN" CFLAGS="$TEST_CFLAGS" \
     test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_coverage >/dev/null
 
 # Build test_otel separately (needs exporter sources and include path)
-"$CC_BIN" $TEST_CFLAGS -I"$ROOT/core/include" -I"$ROOT/integrations/opentelemetry/C" \
+"$CC_BIN" $TEST_CFLAGS -I"$ROOT/engine/include" -I"$ROOT/integrations/opentelemetry/C" \
     "$ROOT/tests/test_otel.c" "$ROOT/integrations/opentelemetry/C/auraio_otel.c" "$ROOT/integrations/opentelemetry/C/auraio_otel_push.c" \
-    -o "$ROOT/tests/test_otel" "$ROOT/core/lib/libauraio.a" -luring -lpthread \
+    -o "$ROOT/tests/test_otel" "$ROOT/engine/lib/libauraio.a" -luring -lpthread \
     -fprofile-instr-generate -fcoverage-mapping >/dev/null
 
 TEST_BINS=(

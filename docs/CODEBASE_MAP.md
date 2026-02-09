@@ -15,8 +15,8 @@ AuraIO (Adaptive Uring Runtime Architecture) is a self-tuning asynchronous I/O l
 ```mermaid
 graph TB
     subgraph "Public APIs"
-        CAPI[core/include/auraio.h<br/>C API]
-        CPPAPI[core/include/auraio.hpp<br/>C++ API]
+        CAPI[engine/include/auraio.h<br/>C API]
+        CPPAPI[engine/include/auraio.hpp<br/>C++ API]
         RustAPI[auraio crate<br/>Rust API]
     end
 
@@ -78,7 +78,7 @@ graph TB
 
 ```
 AuraIO/
-├── core/                     # C library + C++ header-only bindings
+├── engine/                     # C library + C++ header-only bindings
 │   ├── include/
 │   │   ├── auraio.h              # Public C API (opaque types, all user-facing functions)
 │   │   ├── auraio.hpp            # C++ umbrella header
@@ -231,16 +231,16 @@ AuraIO/
 
 ## Module Guide
 
-### Public C API (`core/include/auraio.h` + `core/src/auraio.c`)
+### Public C API (`engine/include/auraio.h` + `engine/src/auraio.c`)
 
 **Purpose**: User-facing C interface tying together rings, buffers, and adaptive control
 
-**Entry point**: `core/include/auraio.h`
+**Entry point**: `engine/include/auraio.h`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/include/auraio.h` | Public types and function declarations | 8,317 |
-| `core/src/auraio.c` | API implementation, ring selection modes, merged flush+poll | 15,434 |
+| `engine/include/auraio.h` | Public types and function declarations | 8,317 |
+| `engine/src/auraio.c` | API implementation, ring selection modes, merged flush+poll | 15,434 |
 
 **Key Types**:
 - `auraio_engine_t` - Opaque engine handle
@@ -296,24 +296,24 @@ AuraIO/
 
 ---
 
-### C++ Bindings (`core/include/auraio.hpp` + `core/include/auraio/*.hpp`)
+### C++ Bindings (`engine/include/auraio.hpp` + `engine/include/auraio/*.hpp`)
 
 **Purpose**: Modern C++20 interface with RAII, exceptions, concepts, and coroutines
 
-**Entry point**: `core/include/auraio.hpp`
+**Entry point**: `engine/include/auraio.hpp`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/include/auraio.hpp` | Umbrella header | 427 |
-| `core/include/auraio/engine.hpp` | Engine class, callbacks, concepts, per-ring stats, deferred unregister | 4,688 |
-| `core/include/auraio/coro.hpp` | Task<T>, IoAwaitable, FsyncAwaitable | 3,250 |
-| `core/include/auraio/buffer.hpp` | Buffer (RAII), BufferRef (explicit const ctor), engine lifetime tracking | 2,546 |
-| `core/include/auraio/options.hpp` | Options wrapper with RingSelect | 1,242 |
-| `core/include/auraio/request.hpp` | Request wrapper | 442 |
-| `core/include/auraio/stats.hpp` | Stats, RingStats, Histogram, BufferStats | 1,316 |
-| `core/include/auraio/error.hpp` | auraio::Error exception | 476 |
-| `core/include/auraio/fwd.hpp` | Forward declarations | 94 |
-| `core/include/auraio/detail/callback_storage.hpp` | 8-shard CallbackPool, type erasure | 2,135 |
+| `engine/include/auraio.hpp` | Umbrella header | 427 |
+| `engine/include/auraio/engine.hpp` | Engine class, callbacks, concepts, per-ring stats, deferred unregister | 4,688 |
+| `engine/include/auraio/coro.hpp` | Task<T>, IoAwaitable, FsyncAwaitable | 3,250 |
+| `engine/include/auraio/buffer.hpp` | Buffer (RAII), BufferRef (explicit const ctor), engine lifetime tracking | 2,546 |
+| `engine/include/auraio/options.hpp` | Options wrapper with RingSelect | 1,242 |
+| `engine/include/auraio/request.hpp` | Request wrapper | 442 |
+| `engine/include/auraio/stats.hpp` | Stats, RingStats, Histogram, BufferStats | 1,316 |
+| `engine/include/auraio/error.hpp` | auraio::Error exception | 476 |
+| `engine/include/auraio/fwd.hpp` | Forward declarations | 94 |
+| `engine/include/auraio/detail/callback_storage.hpp` | 8-shard CallbackPool, type erasure | 2,135 |
 
 **Key Classes**:
 - `auraio::Engine` - **Non-movable** engine wrapper (locked `event_loop_mutex_` can't move); use `std::unique_ptr<Engine>` for heap allocation
@@ -566,16 +566,16 @@ See [docs/BFFIO.md](BFFIO.md) for full usage documentation.
 
 ---
 
-### Ring Manager (`core/src/adaptive_ring.c/.h`)
+### Ring Manager (`engine/src/adaptive_ring.c/.h`)
 
 **Purpose**: io_uring wrapper with request tracking, batching, and per-ring adaptive control
 
-**Entry point**: `core/src/adaptive_ring.h`
+**Entry point**: `engine/src/adaptive_ring.h`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/src/adaptive_ring.h` | Ring interface, request struct, latency sampling config | 2,296 |
-| `core/src/adaptive_ring.c` | Ring implementation, COOP_TASKRUN, batched CQE extraction, callback context tracking | 7,008 |
+| `engine/src/adaptive_ring.h` | Ring interface, request struct, latency sampling config | 2,296 |
+| `engine/src/adaptive_ring.c` | Ring implementation, COOP_TASKRUN, batched CQE extraction, callback context tracking | 7,008 |
 
 **Key Types**:
 - `ring_ctx_t` - Per-ring context (io_uring, request pool, mutex, adaptive controller, `fixed_buf_inflight` counter)
@@ -614,16 +614,16 @@ See [docs/BFFIO.md](BFFIO.md) for full usage documentation.
 
 ---
 
-### Adaptive Engine (`core/src/adaptive_engine.c/.h`)
+### Adaptive Engine (`engine/src/adaptive_engine.c/.h`)
 
 **Purpose**: AIMD congestion control for automatic I/O tuning
 
-**Entry point**: `core/src/adaptive_engine.h`
+**Entry point**: `engine/src/adaptive_engine.h`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/src/adaptive_engine.h` | Controller interface, constants, cache-line layout | 3,204 |
-| `core/src/adaptive_engine.c` | AIMD implementation, low-IOPS handling | 4,020 |
+| `engine/src/adaptive_engine.h` | Controller interface, constants, cache-line layout | 3,204 |
+| `engine/src/adaptive_engine.c` | AIMD implementation, low-IOPS handling | 4,020 |
 
 **Key Types**:
 - `adaptive_controller_t` - Per-ring controller state
@@ -678,16 +678,16 @@ ADAPTIVE_DEFAULT_LATENCY_GUARD = 10.0   // Hard ceiling: 10ms P99
 
 ---
 
-### Buffer Pool (`core/src/adaptive_buffer.c/.h`)
+### Buffer Pool (`engine/src/adaptive_buffer.c/.h`)
 
 **Purpose**: Thread-safe 4KB-aligned buffer pool with size-class buckets
 
-**Entry point**: `core/src/adaptive_buffer.h`
+**Entry point**: `engine/src/adaptive_buffer.h`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/src/adaptive_buffer.h` | Pool interface | 1,433 |
-| `core/src/adaptive_buffer.c` | Pool implementation, TLS caching, CAS registration | 6,431 |
+| `engine/src/adaptive_buffer.h` | Pool interface | 1,433 |
+| `engine/src/adaptive_buffer.c` | Pool implementation, TLS caching, CAS registration | 6,431 |
 
 **Three-Tier Architecture**:
 ```
@@ -721,16 +721,16 @@ posix_memalign (slow path)
 
 ---
 
-### Log Infrastructure (`core/src/log.c/.h`)
+### Log Infrastructure (`engine/src/log.c/.h`)
 
 **Purpose**: User-settable log callback so library never writes to stderr. Default is silent (NULL handler).
 
-**Entry point**: `core/src/log.h`
+**Entry point**: `engine/src/log.h`
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/src/log.h` | Internal log header (auraio_log_fn, auraio_log) | ~300 |
-| `core/src/log.c` | Library-wide log callback implementation | ~600 |
+| `engine/src/log.h` | Internal log header (auraio_log_fn, auraio_log) | ~300 |
+| `engine/src/log.c` | Library-wide log callback implementation | ~600 |
 
 **Key Exports**:
 - **`auraio_set_log_handler()`**: Set global handler + userdata
@@ -749,13 +749,13 @@ posix_memalign (slow path)
 
 ---
 
-### Internal Utilities (`core/src/internal.h`)
+### Internal Utilities (`engine/src/internal.h`)
 
 **Purpose**: Shared utilities across modules
 
 | File | Purpose | Tokens |
 |------|---------|--------|
-| `core/src/internal.h` | Timing, iovec helpers, TSan annotations | 525 |
+| `engine/src/internal.h` | Timing, iovec helpers, TSan annotations | 525 |
 
 **Exports**:
 - `get_time_ns()` - Monotonic nanosecond clock (CLOCK_MONOTONIC)
@@ -1116,22 +1116,22 @@ make exporters         # Build Prometheus + OpenTelemetry C examples
 ## Navigation Guide
 
 **To add a new public API function**:
-1. Declare in `core/include/auraio.h`
-2. Implement in `core/src/auraio.c` (use `submit_begin()`/`submit_end()` pattern for I/O ops)
-3. Add C++ wrapper in `core/include/auraio/engine.hpp`
+1. Declare in `engine/include/auraio.h`
+2. Implement in `engine/src/auraio.c` (use `submit_begin()`/`submit_end()` pattern for I/O ops)
+3. Add C++ wrapper in `engine/include/auraio/engine.hpp`
 4. Add Rust wrapper in `bindings/rust/auraio/src/engine.rs`
 5. Re-export from `bindings/rust/auraio/src/lib.rs`
 
 **To modify adaptive tuning behavior**:
-1. Constants at top of `core/src/adaptive_engine.h`
-2. Algorithm in `adaptive_tick()` in `core/src/adaptive_engine.c`
+1. Constants at top of `engine/src/adaptive_engine.h`
+2. Algorithm in `adaptive_tick()` in `engine/src/adaptive_engine.c`
 
 **To add a new I/O operation type**:
-1. Add enum value to `auraio_op_type_t` in `core/src/adaptive_ring.h`
-2. Add `ring_submit_*()` function in `core/src/adaptive_ring.c`
+1. Add enum value to `auraio_op_type_t` in `engine/src/adaptive_ring.h`
+2. Add `ring_submit_*()` function in `engine/src/adaptive_ring.c`
 3. Expose via public API in `auraio.c` and `auraio.h`
-4. Add C++ method in `core/include/auraio/engine.hpp`
-5. Add awaitable in `core/include/auraio/coro.hpp` if applicable
+4. Add C++ method in `engine/include/auraio/engine.hpp`
+5. Add awaitable in `engine/include/auraio/coro.hpp` if applicable
 6. Add Rust method in `bindings/rust/auraio/src/engine.rs`
 7. Add async variant in `bindings/rust/auraio/src/async_io.rs` if applicable
 
@@ -1143,11 +1143,11 @@ make exporters         # Build Prometheus + OpenTelemetry C examples
 5. Add test case in `test_BFFIO.sh`
 
 **To add Prometheus metrics**:
-1. Add stat to public API in `core/include/auraio.h` (if new)
+1. Add stat to public API in `engine/include/auraio.h` (if new)
 2. Add formatting in `integrations/prometheus/C/auraio_prometheus.c`
 
 **To add OpenTelemetry metrics**:
-1. Add stat to public API in `core/include/auraio.h` (if new)
+1. Add stat to public API in `engine/include/auraio.h` (if new)
 2. Add formatting in `integrations/opentelemetry/C/auraio_otel.c`
 
 **To add a new Rust feature**:

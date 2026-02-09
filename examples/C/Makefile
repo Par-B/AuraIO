@@ -26,10 +26,10 @@ ifeq ($(HAS_AURAIO),yes)
     LDFLAGS = $(shell $(PKG_CONFIG) --libs libauraio)
     DEPS =
 else
-    $(info Building with local libauraio (../../core/lib))
-    CFLAGS += -I../../core/include
-    LDFLAGS = -L../../core/lib -lauraio -luring -lpthread -Wl,-rpath,'$$ORIGIN/../../core/lib'
-    DEPS = ../../core/lib/libauraio.so
+    $(info Building with local libauraio (../../engine/lib))
+    CFLAGS += -I../../engine/include
+    LDFLAGS = -L../../engine/lib -lauraio -luring -lpthread -Wl,-rpath,'$$ORIGIN/../../engine/lib'
+    DEPS = ../../engine/lib/libauraio.so
 endif
 
 # All C examples

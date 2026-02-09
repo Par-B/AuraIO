@@ -17,7 +17,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#include "../core/include/auraio.h"
+#include "../engine/include/auraio.h"
 #include "../integrations/opentelemetry/C/auraio_otel.h"
 #include "../integrations/opentelemetry/C/auraio_otel_push.h"
 

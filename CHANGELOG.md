@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Public `auraio_log_emit()` API and log level constants (`AURAIO_LOG_ERR` through `AURAIO_LOG_DEBUG`)
-- C++ log bindings (`core/include/auraio/log.hpp`) - `auraio::set_log_handler()`, `auraio::log_emit()`, `LogLevel` enum
+- C++ log bindings (`engine/include/auraio/log.hpp`) - `auraio::set_log_handler()`, `auraio::log_emit()`, `LogLevel` enum
 - Rust log bindings (`bindings/rust/auraio/src/log.rs`) - `set_log_handler()`, `log_emit()`, `LogLevel` enum with 10 unit tests
 - Log handler examples in all three languages:
   - C example (`examples/C/log_handler.c`) with custom stderr logging, timestamps, and severity filtering
@@ -30,11 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Directory structure reorganization** for improved clarity and scalability
-  - Moved C library and C++ bindings to `core/` directory
-    - `core/src/` - C implementation
-    - `core/include/` - C and C++ public headers
-    - `core/lib/` - Compiled libraries
-    - `core/pkg/` - Packaging templates
+  - Moved C library and C++ bindings to `engine/` directory
+    - `engine/src/` - C implementation
+    - `engine/include/` - C and C++ public headers
+    - `engine/lib/` - Compiled libraries
+    - `engine/pkg/` - Packaging templates
   - Renamed `exporters/` to `integrations/` to better reflect general-purpose integration support
     - `integrations/prometheus/C/` - Prometheus exporter (C implementation)
     - `integrations/opentelemetry/C/` - OpenTelemetry exporter (C implementation)
@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed TSAN/ASAN library paths in root Makefile
-- Updated sanitizer build rules to use `core/` structure
+- Updated sanitizer build rules to use `engine/` structure
 
 ### Notes
 - **No API changes** - existing code continues to work without modification

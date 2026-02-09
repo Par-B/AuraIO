@@ -2,31 +2,31 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations \
-         -std=c11 -O2 -fPIC -fvisibility=hidden -Icore/include -Icore/src
+         -std=c11 -O2 -fPIC -fvisibility=hidden -Iengine/include -Iengine/src
 HARDEN_CFLAGS = -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -Wformat -Wformat-security
 HARDEN_LDFLAGS = -Wl,-z,relro,-z,now
 LDFLAGS = $(HARDEN_LDFLAGS) -luring -lpthread
 CFLAGS += $(HARDEN_CFLAGS)
 
-# Version (keep in sync with core/include/auraio.h)
+# Version (keep in sync with engine/include/auraio.h)
 VERSION_MAJOR = 0
 VERSION_MINOR = 2
 VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
-SRC = core/src/auraio.c core/src/adaptive_engine.c core/src/adaptive_ring.c core/src/adaptive_buffer.c core/src/log.c
+SRC = engine/src/auraio.c engine/src/adaptive_engine.c engine/src/adaptive_ring.c engine/src/adaptive_buffer.c engine/src/log.c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 
 # Library names (SO versioning: libauraio.so -> libauraio.so.0 -> libauraio.so.0.1.0)
-LIB_SHARED = core/lib/libauraio.so.$(VERSION)
+LIB_SHARED = engine/lib/libauraio.so.$(VERSION)
 LIB_SONAME = libauraio.so.$(VERSION_MAJOR)
 LIB_LINKNAME = libauraio.so
-LIB_STATIC = core/lib/libauraio.a
+LIB_STATIC = engine/lib/libauraio.a
 
 # pkg-config file
-PKGCONFIG = core/lib/libauraio.pc
+PKGCONFIG = engine/lib/libauraio.pc
 
 # Installation paths
 PREFIX ?= /usr/local
@@ -34,44 +34,44 @@ DESTDIR ?=
 
 # Default target
 # Build library, bindings, and integrations (examples are opt-in via 'make examples')
-all: core rust integrations
+all: engine rust integrations
 
-# Core library artifacts only (fast path for local iteration)
-core: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
+# Engine library artifacts only (fast path for local iteration)
+engine: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
 
 # Create lib directory
-core/lib:
-	mkdir -p core/lib
+engine/lib:
+	mkdir -p engine/lib
 
 # Generate pkg-config file
-$(PKGCONFIG): core/pkg/libauraio.pc.in | core/lib
+$(PKGCONFIG): engine/pkg/libauraio.pc.in | engine/lib
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    $< > $@
 
 # Shared library (with soname for ABI versioning)
-$(LIB_SHARED): $(OBJ) | core/lib
+$(LIB_SHARED): $(OBJ) | engine/lib
 	$(CC) -shared -Wl,-soname,$(LIB_SONAME) -DAURAIO_SHARED_BUILD -o $@ $^ $(LDFLAGS)
-	ln -sf $(notdir $(LIB_SHARED)) core/lib/$(LIB_SONAME)
-	ln -sf $(LIB_SONAME) core/lib/$(LIB_LINKNAME)
+	ln -sf $(notdir $(LIB_SHARED)) engine/lib/$(LIB_SONAME)
+	ln -sf $(LIB_SONAME) engine/lib/$(LIB_LINKNAME)
 
 # Static library
-$(LIB_STATIC): $(OBJ) | core/lib
+$(LIB_STATIC): $(OBJ) | engine/lib
 	ar rcs $@ $^
 
 # Object files (AURAIO_SHARED_BUILD exports public symbols via AURAIO_API)
 # -MMD -MP generates .d dependency files for automatic header tracking
-core/src/%.o: core/src/%.c
+engine/src/%.o: engine/src/%.c
 	$(CC) $(CFLAGS) -MMD -MP -DAURAIO_SHARED_BUILD -c $< -o $@
 
 -include $(DEP)
 
 # Build and run C tests (local/in-container)
-test-local: core
+test-local: engine
 	$(MAKE) -C tests
 
 # Run all tests (C, C++, Rust) with combined summary
-test-all: core
+test-all: engine
 	@echo "========================================"
 	@echo "AuraIO Test Suite"
 	@echo "========================================"
@@ -152,22 +152,22 @@ test-all: core
 	fi
 
 # Build metrics integrations (Prometheus + OpenTelemetry)
-integrations: core
+integrations: engine
 	$(CC) $(CFLAGS) -Iintegrations/prometheus/C \
 		integrations/prometheus/C/example.c integrations/prometheus/C/auraio_prometheus.c \
 		-o integrations/prometheus/C/prometheus_example \
-		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
+		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 	$(CC) $(CFLAGS) -Iintegrations/opentelemetry/C \
 		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/auraio_otel.c integrations/opentelemetry/C/auraio_otel_push.c \
 		-o integrations/opentelemetry/C/otel_example \
-		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
+		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 	$(CC) $(CFLAGS) -Iintegrations/syslog/C \
 		integrations/syslog/C/example.c integrations/syslog/C/auraio_syslog.c \
 		-o integrations/syslog/C/syslog_example \
-		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
+		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 
 # Build BFFIO benchmark tool
-BFFIO: core
+BFFIO: engine
 	$(MAKE) -C tools/BFFIO
 
 # Run BFFIO functional tests
@@ -182,15 +182,15 @@ BFFIO-baseline: BFFIO
 examples: c-examples cpp-examples rust-examples
 
 # Build C examples only
-c-examples: core
+c-examples: engine
 	$(MAKE) -C examples/C
 
 # Build C++ examples only
-cpp-examples: core
+cpp-examples: engine
 	$(MAKE) -C examples/cpp
 
 # Run C++ tests
-cpp-test: core
+cpp-test: engine
 	$(MAKE) -C tests cpp-test
 
 # =============================================================================
@@ -199,14 +199,14 @@ cpp-test: core
 
 # Rust environment setup (source cargo if installed via rustup)
 CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
-RUST_LIB_PATH = $(CURDIR)/core/lib
+RUST_LIB_PATH = $(CURDIR)/engine/lib
 
 # Build Rust bindings
-rust: core
+rust: engine
 	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path bindings/rust/Cargo.toml --release
 
 # Run Rust tests
-rust-test: core
+rust-test: engine
 	@printf "Running Rust tests...\n"
 	@rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
 	echo "$$rust_out" | awk ' \
@@ -247,7 +247,7 @@ rust-clean:
 	-$(CARGO) clean --manifest-path examples/rust/Cargo.toml 2>/dev/null || true
 
 # Install
-install: core
+install: engine
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	install -d $(DESTDIR)$(PREFIX)/include
@@ -257,8 +257,8 @@ install: core
 	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
-	install -m 644 core/include/auraio.h $(DESTDIR)$(PREFIX)/include/
-	install -m 644 core/include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
+	install -m 644 engine/include/auraio.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 engine/include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
 	install -d $(DESTDIR)$(PREFIX)/include/auraio/integrations
 	install -m 644 integrations/prometheus/C/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
 	install -m 644 integrations/opentelemetry/C/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
@@ -279,8 +279,8 @@ uninstall:
 # Clean
 clean: rust-clean
 	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
-	rm -f $(LIB_SHARED) core/lib/$(LIB_SONAME) core/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
-	rm -rf core/lib
+	rm -f $(LIB_SHARED) engine/lib/$(LIB_SONAME) engine/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
+	rm -rf engine/lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples/C clean 2>/dev/null || true
 	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
@@ -291,7 +291,7 @@ clean: rust-clean
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
-debug: core
+debug: engine
 
 # =============================================================================
 # Sanitizer builds
@@ -300,12 +300,12 @@ debug: core
 # ThreadSanitizer build
 TSAN_CFLAGS = $(CFLAGS) -fsanitize=thread -fPIE -g
 TSAN_OBJ = $(SRC:.c=.tsan.o)
-LIB_TSAN = core/lib/libauraio_tsan.a
+LIB_TSAN = engine/lib/libauraio_tsan.a
 
-core/src/%.tsan.o: core/src/%.c
+engine/src/%.tsan.o: engine/src/%.c
 	$(CC) $(TSAN_CFLAGS) -c $< -o $@
 
-$(LIB_TSAN): $(TSAN_OBJ) | core/lib
+$(LIB_TSAN): $(TSAN_OBJ) | engine/lib
 	ar rcs $@ $^
 
 tsan: $(LIB_TSAN)
@@ -313,12 +313,12 @@ tsan: $(LIB_TSAN)
 # AddressSanitizer build
 ASAN_CFLAGS = $(CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g
 ASAN_OBJ = $(SRC:.c=.asan.o)
-LIB_ASAN = core/lib/libauraio_asan.a
+LIB_ASAN = engine/lib/libauraio_asan.a
 
-core/src/%.asan.o: core/src/%.c
+engine/src/%.asan.o: engine/src/%.c
 	$(CC) $(ASAN_CFLAGS) -c $< -o $@
 
-$(LIB_ASAN): $(ASAN_OBJ) | core/lib
+$(LIB_ASAN): $(ASAN_OBJ) | engine/lib
 	ar rcs $@ $^
 
 asan: $(LIB_ASAN)
@@ -328,7 +328,7 @@ asan: $(LIB_ASAN)
 # =============================================================================
 
 # Run tests under valgrind
-test-valgrind: core
+test-valgrind: engine
 	$(MAKE) -C tests valgrind
 
 # Run tests with ThreadSanitizer
@@ -340,7 +340,7 @@ test-asan: asan
 	$(MAKE) -C tests asan
 
 # Run all sanitizer tests with summary
-test-sanitizers: core tsan asan
+test-sanitizers: engine tsan asan
 	@echo ""
 	@echo "========================================"
 	@echo "  Sanitizer Test Suite"
@@ -390,36 +390,36 @@ test-sanitizers: core tsan asan
 BENCH_DIR_FLAG = $(if $(BENCH_DIR),--dir $(BENCH_DIR))
 
 # Quick benchmark (3s per test)
-bench-quick: core
+bench-quick: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --quick $(BENCH_DIR_FLAG)
 
 # Standard benchmark with FIO comparison (5s per test)
-bench: core
+bench: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --standard $(BENCH_DIR_FLAG)
 
 # Full benchmark (10s per test, more stable numbers)
-bench-full: core
+bench-full: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --full $(BENCH_DIR_FLAG)
 
 # Benchmark without FIO baseline
-bench-no-fio: core
+bench-no-fio: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_analysis.sh --skip-fio $(BENCH_DIR_FLAG)
 
 # Check benchmark dependencies (fio, perf, numactl, etc.)
-bench-deps: core
+bench-deps: engine
 	$(MAKE) -C tests check-deps
 
 # Deep performance analysis (flamegraphs, cachegrind, pahole, callgrind)
-bench-deep: core
+bench-deep: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_deep_analysis.sh $(BENCH_DIR_FLAG)
 
 # Quick deep analysis (~10 min)
-bench-deep-quick: core
+bench-deep-quick: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_deep_analysis.sh --quick $(BENCH_DIR_FLAG)
 
@@ -441,7 +441,7 @@ deps-check:
 
 # All source files for linting (library + tests + examples)
 ALL_SRC = $(SRC) $(wildcard tests/*.c) $(wildcard examples/*.c)
-HEADERS = $(wildcard core/include/*.h) $(wildcard core/src/*.h)
+HEADERS = $(wildcard engine/include/*.h) $(wildcard engine/src/*.h)
 
 # Run lint: prefer cppcheck, fall back to clang-tidy
 lint:
@@ -462,7 +462,7 @@ lint-cppcheck:
 		--suppress=missingIncludeSystem \
 		--suppress=normalCheckLevelMaxBranches \
 		--error-exitcode=1 \
-		-I core/include -I core/src \
+		-I engine/include -I engine/src \
 		$(SRC) $(HEADERS)
 
 # cppcheck - strict mode with style checks
@@ -472,7 +472,7 @@ lint-strict:
 		--enable=all \
 		--suppress=missingIncludeSystem \
 		--error-exitcode=1 \
-		-I core/include -I core/src \
+		-I engine/include -I engine/src \
 		$(SRC) $(HEADERS)
 
 # clang-tidy (requires compile_commands.json)
@@ -537,8 +537,8 @@ help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make / make all     Build core library + Rust/C++ bindings + integrations"
-	@echo "  make core           Build libraries and pkg-config file only"
+	@echo "  make / make all     Build engine library + Rust/C++ bindings + integrations"
+	@echo "  make engine         Build libraries and pkg-config file only"
 	@echo "  make debug          Build with debug symbols (-g -O0)"
 	@echo "  make test           Build library/bindings/integrations + run all tests"
 	@echo "  make test-memory    Build library/bindings/integrations + run TSan/ASan tests"
@@ -603,7 +603,7 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all core test test-memory test-strict test-local test-all examples c-examples cpp-examples install uninstall clean debug deps deps-check help \
+.PHONY: all engine test test-memory test-strict test-local test-all examples c-examples cpp-examples install uninstall clean debug deps deps-check help \
         cpp-test \
         rust rust-test rust-examples rust-clean \
 	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \

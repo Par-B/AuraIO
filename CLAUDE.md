@@ -26,12 +26,12 @@ cd tests && make test_ring && ./test_ring
 
 ## Codebase Overview
 
-**Stack**: C11 core library + C++20 bindings + Rust bindings, io_uring via liburing
+**Stack**: C11 engine library + C++20 bindings + Rust bindings, io_uring via liburing
 
 **Structure**:
-- `core/src/` - Core C library (auraio.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
-- `core/include/auraio.h` - Public C API
-- `core/include/auraio.hpp` - C++ bindings with RAII, coroutines, and concepts
+- `engine/src/` - Engine C library (auraio.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
+- `engine/include/auraio.h` - Public C API
+- `engine/include/auraio.hpp` - C++ bindings with RAII, coroutines, and concepts
 - `bindings/rust/` - Rust bindings (auraio-sys FFI + safe auraio crate with async support)
 - `integrations/` - External system integrations (Prometheus, OpenTelemetry) with C/C++/Rust examples
 - `tools/BFFIO/` - FIO-compatible benchmark with AIMD auto-tuning
@@ -44,13 +44,13 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 
 - C11, 4-space indent, snake_case
 - Prefixes: `auraio_` (public), `ring_`/`adaptive_`/`buffer_` (internal)
-- Public API in `core/include/auraio.h`, implementation in `core/src/auraio.c`
-- Tuning constants at top of `core/src/adaptive_engine.h`
+- Public API in `engine/include/auraio.h`, implementation in `engine/src/auraio.c`
+- Tuning constants at top of `engine/src/adaptive_engine.h`
 
 ## Development Workflow
 
 - **CHANGELOG.md**: Update before committing major changes (new features, breaking changes, significant refactors). Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
-- **Version bumping**: Update `Makefile` (VERSION_*) and `core/include/auraio.h` (AURAIO_VERSION_*) together with CHANGELOG.md.
+- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/auraio.h` (AURAIO_VERSION_*) together with CHANGELOG.md.
 
 ## Non-Obvious Patterns
 
@@ -62,4 +62,4 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 - Prefer launching parallel subagents for independent tasks (code review, exploration, builds)
 - Use Explore subagents for any codebase search spanning more than 2-3 files
 - Use Plan subagents for non-trivial implementation design
-- When reviewing code or investigating issues, fan out parallel subagents by area (e.g., C core, C++ bindings, Rust bindings) rather than searching sequentially
+- When reviewing code or investigating issues, fan out parallel subagents by area (e.g., C engine, C++ bindings, Rust bindings) rather than searching sequentially
