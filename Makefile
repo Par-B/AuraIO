@@ -429,11 +429,11 @@ bench-deep-quick: engine
 
 # Install all required dependencies
 deps:
-	bash tools/deps/install_all.sh
+	bash build-tools/deps/install_all.sh
 
 # Check dependencies without installing
 deps-check:
-	bash tools/deps/check.sh
+	bash build-tools/deps/check.sh
 
 # =============================================================================
 # Linting and static analysis
@@ -509,10 +509,10 @@ compdb-manual:
 compdb: compile_commands.json
 
 coverage:
-	tools/coverage/run_llvm_cov.sh coverage
+	build-tools/coverage/run_llvm_cov.sh coverage
 
 coverage-check:
-	MIN_LINE_COVERAGE=$(MIN_LINE_COVERAGE) tools/coverage/run_llvm_cov.sh coverage
+	MIN_LINE_COVERAGE=$(MIN_LINE_COVERAGE) build-tools/coverage/run_llvm_cov.sh coverage
 
 # =============================================================================
 # Help

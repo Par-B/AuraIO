@@ -101,7 +101,7 @@ for t in "${TEST_BINS[@]:1}"; do
     COV_ARGS+=("-object" "$ROOT/tests/$t")
 done
 
-IGNORE_RE='.*/(tests|exporters|tools|bindings/rust|usr/include|include/c\+\+)/.*'
+IGNORE_RE='.*/(tests|exporters|tools|build-tools|bindings/rust|usr/include|include/c\+\+)/.*'
 
 $LLVM_COV_BIN report "${COV_ARGS[@]}" -ignore-filename-regex="$IGNORE_RE" > "$OUT_DIR/report.txt"
 $LLVM_COV_BIN export "${COV_ARGS[@]}" -summary-only -ignore-filename-regex="$IGNORE_RE" > "$OUT_DIR/summary.json"
