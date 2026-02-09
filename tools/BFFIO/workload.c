@@ -406,9 +406,14 @@ static void *worker_thread(void *arg) {
         return NULL;
     }
 
-    /* Pre-allocate aligned buffers for each pool slot (zero-malloc hot path) */
+    /* Pre-allocate aligned buffers for each pool slot (zero-malloc hot path).
+     * Fill with non-zero data once to avoid zero-page optimization on writes.
+     * FIO also fills once at init (--refill_buffers is opt-in). */
     for (int s = 0; s < config->iodepth; s++) {
         tctx->pool.slots[s].buffer = auraio_buffer_alloc(engine, (size_t)config->bs);
+        if (tctx->pool.slots[s].buffer) {
+            memset(tctx->pool.slots[s].buffer, 0xA5 ^ (s & 0xFF), (size_t)config->bs);
+        }
         if (!tctx->pool.slots[s].buffer) {
             fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", tctx->thread_id,
                     s);
@@ -500,11 +505,6 @@ static void *worker_thread(void *arg) {
                 do_write = 1;
             } else {
                 do_write = 0;
-            }
-
-            /* Fill write buffer to avoid zero-page optimization */
-            if (do_write) {
-                memset(buf, (int)(xorshift64(&rng) & 0xFF), (size_t)bs);
             }
 
             /* Fill callback context */
