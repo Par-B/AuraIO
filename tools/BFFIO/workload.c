@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -346,11 +347,14 @@ static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) 
     (void)req;
     io_ctx_t *ctx = user_data;
 
-    uint64_t latency = now_ns() - ctx->submit_time_ns;
-
     /* Record stats only outside the ramp period */
     if (!atomic_load(ctx->ramping)) {
-        stats_record_io(ctx->stats, latency, ctx->io_size, ctx->is_write);
+        if (ctx->submit_time_ns != 0) {
+            uint64_t latency = now_ns() - ctx->submit_time_ns;
+            stats_record_io(ctx->stats, latency, ctx->io_size, ctx->is_write);
+        } else {
+            stats_record_io_count(ctx->stats, ctx->io_size, ctx->is_write);
+        }
     }
 
     if (result < 0) {
@@ -374,10 +378,13 @@ static void fsync_callback(auraio_request_t *req, ssize_t result, void *user_dat
     (void)req;
     io_ctx_t *ctx = user_data;
 
-    uint64_t latency = now_ns() - ctx->submit_time_ns;
-
     if (!atomic_load(ctx->ramping)) {
-        stats_record_io(ctx->stats, latency, 0, 1);
+        if (ctx->submit_time_ns != 0) {
+            uint64_t latency = now_ns() - ctx->submit_time_ns;
+            stats_record_io(ctx->stats, latency, 0, 1);
+        } else {
+            stats_record_io_count(ctx->stats, 0, 1);
+        }
     }
 
     if (result < 0) {
@@ -434,6 +441,11 @@ static void *worker_thread(void *arg) {
         rng ^= (uint64_t)ts.tv_nsec;
     }
     if (rng == 0) rng = 1;
+
+    /* Initialize adaptive latency sampling */
+    tctx->sample_interval = 1;
+    tctx->sample_calib_ns = now_ns();
+    tctx->sample_io_count = 0;
 
     int iodepth = config->iodepth;
     uint64_t bs = config->bs;
@@ -507,9 +519,26 @@ static void *worker_thread(void *arg) {
                 do_write = 0;
             }
 
+            /* Adaptive latency sampling: recalibrate every ~65K I/Os to
+             * maintain ~100K samples/sec budget. Use PRNG to select which
+             * I/Os to sample, avoiding aliasing with power-of-2 batches. */
+            tctx->sample_io_count++;
+            if ((tctx->sample_io_count & 0xFFFF) == 0) {
+                uint64_t cal_now = now_ns();
+                uint64_t elapsed = cal_now - tctx->sample_calib_ns;
+                if (elapsed > 0) {
+                    uint64_t iops_est = 65536ULL * 1000000000ULL / elapsed;
+                    tctx->sample_interval = (iops_est > 100000) ? (uint32_t)(iops_est / 100000) : 1;
+                }
+                tctx->sample_calib_ns = cal_now;
+            }
+
+            bool do_sample =
+                (tctx->sample_interval <= 1) || (xorshift64(&rng) % tctx->sample_interval == 0);
+
             /* Fill callback context */
             ctx->stats = stats;
-            ctx->submit_time_ns = now_ns();
+            ctx->submit_time_ns = do_sample ? now_ns() : 0;
             ctx->io_size = (size_t)bs;
             ctx->buffer = buf;
             ctx->engine = engine;
@@ -546,7 +575,7 @@ static void *worker_thread(void *arg) {
                     io_ctx_t *fsync_ctx = io_ctx_pool_get(&tctx->pool);
                     if (fsync_ctx) {
                         fsync_ctx->stats = stats;
-                        fsync_ctx->submit_time_ns = now_ns();
+                        fsync_ctx->submit_time_ns = do_sample ? now_ns() : 0;
                         fsync_ctx->io_size = 0;
                         fsync_ctx->buffer = NULL;
                         fsync_ctx->engine = engine;

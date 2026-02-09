@@ -102,6 +102,16 @@ void stats_record_io(thread_stats_t *s, uint64_t latency_ns, size_t bytes, int i
     atomic_fetch_add_explicit(&s->lat_count, 1, memory_order_relaxed);
 }
 
+void stats_record_io_count(thread_stats_t *s, size_t bytes, int is_write) {
+    if (is_write) {
+        atomic_fetch_add_explicit(&s->write_ops, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&s->write_bytes, bytes, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&s->read_ops, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&s->read_bytes, bytes, memory_order_relaxed);
+    }
+}
+
 /* --------------------------------------------------------------------
  * Sampling (called from main thread every 1s)
  * -------------------------------------------------------------------- */

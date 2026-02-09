@@ -113,8 +113,11 @@ void stats_init(thread_stats_t *s);
 /* Reset stats (for ramp_time boundary) */
 void stats_reset(thread_stats_t *s);
 
-/* Record one completed I/O */
+/* Record one completed I/O (with latency) */
 void stats_record_io(thread_stats_t *s, uint64_t latency_ns, size_t bytes, int is_write);
+
+/* Record IOPS/BW counters only (no latency — for non-sampled I/Os) */
+void stats_record_io_count(thread_stats_t *s, size_t bytes, int is_write);
 
 /* Take a BW/IOPS sample (called every 1s from main thread) */
 void stats_take_sample(thread_stats_t *s);

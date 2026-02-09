@@ -58,6 +58,12 @@ typedef struct {
     /* Offset tracking */
     uint64_t seq_offset; /* for sequential patterns */
     uint64_t file_size;  /* actual file size for offset generation */
+
+    /* Adaptive latency sampling: budget-based recalibration + PRNG selection.
+     * Caps timestamp overhead at ~100K samples/sec regardless of IOPS. */
+    uint32_t sample_interval; /* 1 = every I/O, N = every Nth */
+    uint64_t sample_calib_ns; /* last recalibration timestamp */
+    uint64_t sample_io_count; /* I/Os since last recalibration */
 } thread_ctx_t;
 
 /* File management results */
