@@ -35,7 +35,7 @@
  */
 
 #define AURAIO_VERSION_MAJOR 0
-#define AURAIO_VERSION_MINOR 1
+#define AURAIO_VERSION_MINOR 2
 #define AURAIO_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
@@ -43,7 +43,7 @@
     (AURAIO_VERSION_MAJOR * 10000 + AURAIO_VERSION_MINOR * 100 + AURAIO_VERSION_PATCH)
 
 /** Version as a string */
-#define AURAIO_VERSION_STRING "0.1.0"
+#define AURAIO_VERSION_STRING "0.2.0"
 
 /* Ensure version components stay within packed integer limits */
 #if AURAIO_VERSION_MINOR > 99 || AURAIO_VERSION_PATCH > 99

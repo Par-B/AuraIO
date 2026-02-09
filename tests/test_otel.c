@@ -17,9 +17,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#include "../include/auraio.h"
-#include "../exporters/otel/auraio_otel.h"
-#include "../exporters/otel/auraio_otel_push.h"
+#include "../core/include/auraio.h"
+#include "../integrations/opentelemetry/C/auraio_otel.h"
+#include "../integrations/opentelemetry/C/auraio_otel_push.h"
 
 static int test_count = 0;
 

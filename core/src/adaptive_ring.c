@@ -787,7 +787,6 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                     /* Signal interrupted the wait — not an error.
                      * Fall through to re-acquire cq_lock and peek
                      * for any CQEs that arrived before the signal. */
-                    ret = 0;
                 } else {
                     errno = -ret;
                     return (-1);

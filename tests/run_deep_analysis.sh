@@ -143,12 +143,12 @@ build_debug() {
     # Clean and rebuild with -g -fno-omit-frame-pointer for accurate profiling
     # Keep -O2 for realistic optimization (not -O0 which distorts profiles)
     # Pass CFLAGS as make argument to override Makefile's assignment
-    local DEBUG_CFLAGS="-Wall -Wextra -std=c11 -O2 -fPIC -Iinclude -Isrc -g -fno-omit-frame-pointer"
+    local DEBUG_CFLAGS="-Wall -Wextra -std=c11 -O2 -fPIC -Icore/include -Icore/src -g -fno-omit-frame-pointer"
     make clean > /dev/null 2>&1
     make -j"$(nproc)" all CFLAGS="$DEBUG_CFLAGS" > /dev/null 2>&1
 
     # Rebuild perf_bench with same flags
-    local BENCH_CFLAGS="-Wall -Wextra -std=c11 -O2 -g -fno-omit-frame-pointer -I../include -I../src"
+    local BENCH_CFLAGS="-Wall -Wextra -std=c11 -O2 -g -fno-omit-frame-pointer -I../core/include -I../core/src"
     make -C tests perf_bench CFLAGS="$BENCH_CFLAGS" > /dev/null 2>&1
 
     ok "  Build complete (-O2 -g -fno-omit-frame-pointer)"
@@ -287,7 +287,7 @@ phase_struct_layout() {
         return
     fi
 
-    local lib="$PROJECT_ROOT/lib/libauraio.a"
+    local lib="$PROJECT_ROOT/core/lib/libauraio.a"
     if [ ! -f "$lib" ]; then
         warn "  $lib not found"
         return

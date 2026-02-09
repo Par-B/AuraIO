@@ -8,13 +8,13 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations \
-         -std=c11 -O2 -I../../include
+         -std=c11 -O2 -I../../core/include
 LDFLAGS = -lpthread -luring -lm
 
 SRC = main.c job_parser.c workload.c stats.c output.c
 OBJ = $(SRC:.c=.o)
 BIN = BFFIO
-PARENT_LIB = ../../lib/libauraio.a
+PARENT_LIB = ../../core/lib/libauraio.a
 
 all: $(BIN)
 

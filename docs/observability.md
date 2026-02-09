@@ -161,7 +161,7 @@ std::cout << bs.total_buffers() << " buffers in " << bs.shard_count() << " shard
 
 ## Prometheus Integration
 
-AuraIO ships a standalone Prometheus exposition text formatter in `exporters/prometheus/`. It has **no external dependencies** beyond libauraio itself.
+AuraIO ships a standalone Prometheus exposition text formatter in `integrations/prometheus/C/`. It has **no external dependencies** beyond libauraio itself.
 
 Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
 
@@ -229,7 +229,7 @@ Integrate this into whichever HTTP server you already run — there is no built-
 A minimal example server is included for testing:
 
 ```bash
-./exporters/prometheus/prometheus_example &
+./integrations/prometheus/C/prometheus_example &
 curl -s http://localhost:9091/metrics
 ```
 

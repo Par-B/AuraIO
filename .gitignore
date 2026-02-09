@@ -4,7 +4,7 @@
 *.a
 *.so
 *.so.*
-lib/
+core/lib/
 .cache
 
 # Test binaries
@@ -53,10 +53,11 @@ examples/cpp/cancel_request
 tools/BFFIO/BFFIO
 tools/BFFIO/*.o
 tools/BFFIO/baseline_results/
+tools/bin/
 
-# Exporter binaries
-exporters/prometheus/prometheus_example
-exporters/otel/otel_example
+# Integration binaries
+integrations/prometheus/C/prometheus_example
+integrations/opentelemetry/C/otel_example
 
 # Claude Code
 .claude/
@@ -81,7 +82,7 @@ core.*
 # Temporary files
 *.tmp
 *.log
-coverage/
+tests/coverage/
 
 # Rust build artifacts
 **/target/

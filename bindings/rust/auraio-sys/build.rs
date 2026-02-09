@@ -11,7 +11,7 @@ fn main() {
     // Tell cargo to rerun if these change
     println!("cargo:rerun-if-env-changed=AURAIO_LIB_DIR");
     println!("cargo:rerun-if-env-changed=AURAIO_INCLUDE_DIR");
-    println!("cargo:rerun-if-changed=../../../include/auraio.h");
+    println!("cargo:rerun-if-changed=../../../core/include/auraio.h");
 
     let mut include_path: Option<PathBuf> = None;
 
@@ -27,10 +27,10 @@ fn main() {
             println!("cargo:rustc-link-search=native={}", lib_dir);
         } else {
             // Default: assume building from bindings/rust/auraio-sys/
-            // Library is at ../../lib/
+            // Library is at ../../../core/lib/
             let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
             let lib_path = PathBuf::from(&manifest_dir)
-                .join("../../../lib");
+                .join("../../../core/lib");
             if lib_path.exists() {
                 let lib_path = lib_path.canonicalize().unwrap_or(lib_path);
                 println!("cargo:rustc-link-search=native={}", lib_path.display());
@@ -41,10 +41,10 @@ fn main() {
             include_path = Some(PathBuf::from(inc_dir));
         } else {
             // Default: assume building from bindings/rust/auraio-sys/
-            // Headers are at ../../../include/
+            // Headers are at ../../../core/include/
             let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
             let inc_path = PathBuf::from(&manifest_dir)
-                .join("../../../include");
+                .join("../../../core/include");
             if inc_path.exists() {
                 let inc_path = inc_path.canonicalize().unwrap_or(inc_path);
                 include_path = Some(inc_path);

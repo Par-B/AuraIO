@@ -2,66 +2,66 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -Wshadow -Wpedantic -Wstrict-prototypes -Wmissing-declarations \
-         -std=c11 -O2 -fPIC -fvisibility=hidden -Iinclude -Isrc
+         -std=c11 -O2 -fPIC -fvisibility=hidden -Icore/include -Icore/src
 HARDEN_CFLAGS = -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -Wformat -Wformat-security
 HARDEN_LDFLAGS = -Wl,-z,relro,-z,now
 LDFLAGS = $(HARDEN_LDFLAGS) -luring -lpthread
 CFLAGS += $(HARDEN_CFLAGS)
 
-# Version (keep in sync with include/auraio.h)
+# Version (keep in sync with core/include/auraio.h)
 VERSION_MAJOR = 0
-VERSION_MINOR = 1
+VERSION_MINOR = 2
 VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
-SRC = src/auraio.c src/adaptive_engine.c src/adaptive_ring.c src/adaptive_buffer.c src/log.c
+SRC = core/src/auraio.c core/src/adaptive_engine.c core/src/adaptive_ring.c core/src/adaptive_buffer.c core/src/log.c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 
 # Library names (SO versioning: libauraio.so -> libauraio.so.0 -> libauraio.so.0.1.0)
-LIB_SHARED = lib/libauraio.so.$(VERSION)
+LIB_SHARED = core/lib/libauraio.so.$(VERSION)
 LIB_SONAME = libauraio.so.$(VERSION_MAJOR)
 LIB_LINKNAME = libauraio.so
-LIB_STATIC = lib/libauraio.a
+LIB_STATIC = core/lib/libauraio.a
 
 # pkg-config file
-PKGCONFIG = lib/libauraio.pc
+PKGCONFIG = core/lib/libauraio.pc
 
 # Installation paths
 PREFIX ?= /usr/local
 DESTDIR ?=
 
 # Default target
-# Build library, bindings, and exporters (examples are opt-in via 'make examples')
-all: core rust exporters
+# Build library, bindings, and integrations (examples are opt-in via 'make examples')
+all: core rust integrations
 
 # Core library artifacts only (fast path for local iteration)
 core: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
 
 # Create lib directory
-lib:
-	mkdir -p lib
+core/lib:
+	mkdir -p core/lib
 
 # Generate pkg-config file
-$(PKGCONFIG): pkg/libauraio.pc.in | lib
+$(PKGCONFIG): core/pkg/libauraio.pc.in | core/lib
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    $< > $@
 
 # Shared library (with soname for ABI versioning)
-$(LIB_SHARED): $(OBJ) | lib
+$(LIB_SHARED): $(OBJ) | core/lib
 	$(CC) -shared -Wl,-soname,$(LIB_SONAME) -DAURAIO_SHARED_BUILD -o $@ $^ $(LDFLAGS)
-	ln -sf $(notdir $(LIB_SHARED)) lib/$(LIB_SONAME)
-	ln -sf $(LIB_SONAME) lib/$(LIB_LINKNAME)
+	ln -sf $(notdir $(LIB_SHARED)) core/lib/$(LIB_SONAME)
+	ln -sf $(LIB_SONAME) core/lib/$(LIB_LINKNAME)
 
 # Static library
-$(LIB_STATIC): $(OBJ) | lib
+$(LIB_STATIC): $(OBJ) | core/lib
 	ar rcs $@ $^
 
 # Object files (AURAIO_SHARED_BUILD exports public symbols via AURAIO_API)
 # -MMD -MP generates .d dependency files for automatic header tracking
-src/%.o: src/%.c
+core/src/%.o: core/src/%.c
 	$(CC) $(CFLAGS) -MMD -MP -DAURAIO_SHARED_BUILD -c $< -o $@
 
 -include $(DEP)
@@ -151,16 +151,16 @@ test-all: core
 		echo "RESULT: ALL PASSED"; \
 	fi
 
-# Build metrics exporters (Prometheus + OpenTelemetry)
-exporters: core
-	$(CC) $(CFLAGS) -Iexporters/prometheus \
-		exporters/prometheus/example.c exporters/prometheus/auraio_prometheus.c \
-		-o exporters/prometheus/prometheus_example \
-		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
-	$(CC) $(CFLAGS) -Iexporters/otel \
-		exporters/otel/example.c exporters/otel/auraio_otel.c exporters/otel/auraio_otel_push.c \
-		-o exporters/otel/otel_example \
-		-Llib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../lib'
+# Build metrics integrations (Prometheus + OpenTelemetry)
+integrations: core
+	$(CC) $(CFLAGS) -Iintegrations/prometheus/C \
+		integrations/prometheus/C/example.c integrations/prometheus/C/auraio_prometheus.c \
+		-o integrations/prometheus/C/prometheus_example \
+		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
+	$(CC) $(CFLAGS) -Iintegrations/opentelemetry/C \
+		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/auraio_otel.c integrations/opentelemetry/C/auraio_otel_push.c \
+		-o integrations/opentelemetry/C/otel_example \
+		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
 
 # Build BFFIO benchmark tool
 BFFIO: core
@@ -195,7 +195,7 @@ cpp-test: core
 
 # Rust environment setup (source cargo if installed via rustup)
 CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
-RUST_LIB_PATH = $(CURDIR)/lib
+RUST_LIB_PATH = $(CURDIR)/core/lib
 
 # Build Rust bindings
 rust: core
@@ -253,12 +253,12 @@ install: core
 	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
-	install -m 644 include/auraio.h $(DESTDIR)$(PREFIX)/include/
-	install -m 644 include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
-	install -d $(DESTDIR)$(PREFIX)/include/auraio/exporters
-	install -m 644 exporters/prometheus/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
-	install -m 644 exporters/otel/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
-	install -m 644 exporters/otel/auraio_otel_push.h $(DESTDIR)$(PREFIX)/include/auraio/exporters/
+	install -m 644 core/include/auraio.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 core/include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
+	install -d $(DESTDIR)$(PREFIX)/include/auraio/integrations
+	install -m 644 integrations/prometheus/C/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
+	install -m 644 integrations/opentelemetry/C/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
+	install -m 644 integrations/opentelemetry/C/auraio_otel_push.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall
@@ -274,14 +274,14 @@ uninstall:
 # Clean
 clean: rust-clean
 	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
-	rm -f $(LIB_SHARED) lib/$(LIB_SONAME) lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
-	rm -rf lib
+	rm -f $(LIB_SHARED) core/lib/$(LIB_SONAME) core/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
+	rm -rf core/lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples/C clean 2>/dev/null || true
 	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
-	rm -f exporters/prometheus/prometheus_example
-	rm -f exporters/otel/otel_example
+	rm -f integrations/prometheus/C/prometheus_example
+	rm -f integrations/opentelemetry/C/otel_example
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
@@ -294,12 +294,12 @@ debug: core
 # ThreadSanitizer build
 TSAN_CFLAGS = $(CFLAGS) -fsanitize=thread -fPIE -g
 TSAN_OBJ = $(SRC:.c=.tsan.o)
-LIB_TSAN = lib/libauraio_tsan.a
+LIB_TSAN = core/lib/libauraio_tsan.a
 
-src/%.tsan.o: src/%.c
+core/src/%.tsan.o: core/src/%.c
 	$(CC) $(TSAN_CFLAGS) -c $< -o $@
 
-$(LIB_TSAN): $(TSAN_OBJ) | lib
+$(LIB_TSAN): $(TSAN_OBJ) | core/lib
 	ar rcs $@ $^
 
 tsan: $(LIB_TSAN)
@@ -307,12 +307,12 @@ tsan: $(LIB_TSAN)
 # AddressSanitizer build
 ASAN_CFLAGS = $(CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g
 ASAN_OBJ = $(SRC:.c=.asan.o)
-LIB_ASAN = lib/libauraio_asan.a
+LIB_ASAN = core/lib/libauraio_asan.a
 
-src/%.asan.o: src/%.c
+core/src/%.asan.o: core/src/%.c
 	$(CC) $(ASAN_CFLAGS) -c $< -o $@
 
-$(LIB_ASAN): $(ASAN_OBJ) | lib
+$(LIB_ASAN): $(ASAN_OBJ) | core/lib
 	ar rcs $@ $^
 
 asan: $(LIB_ASAN)
@@ -435,7 +435,7 @@ deps-check:
 
 # All source files for linting (library + tests + examples)
 ALL_SRC = $(SRC) $(wildcard tests/*.c) $(wildcard examples/*.c)
-HEADERS = $(wildcard include/*.h) $(wildcard src/*.h)
+HEADERS = $(wildcard core/include/*.h) $(wildcard core/src/*.h)
 
 # Run lint: prefer cppcheck, fall back to clang-tidy
 lint:
@@ -456,7 +456,7 @@ lint-cppcheck:
 		--suppress=missingIncludeSystem \
 		--suppress=normalCheckLevelMaxBranches \
 		--error-exitcode=1 \
-		-I include -I src \
+		-I core/include -I core/src \
 		$(SRC) $(HEADERS)
 
 # cppcheck - strict mode with style checks
@@ -466,7 +466,7 @@ lint-strict:
 		--enable=all \
 		--suppress=missingIncludeSystem \
 		--error-exitcode=1 \
-		-I include -I src \
+		-I core/include -I core/src \
 		$(SRC) $(HEADERS)
 
 # clang-tidy (requires compile_commands.json)
@@ -522,7 +522,7 @@ test-memory:
 	$(MAKE) -j1 test-asan
 
 test-strict:
-	$(MAKE) -j4 all exporters
+	$(MAKE) -j4 all integrations
 	$(MAKE) -j1 test-all
 	$(MAKE) -j1 test-tsan
 	$(MAKE) -j1 test-asan
@@ -531,11 +531,11 @@ help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make / make all     Build core library + Rust/C++ bindings + exporters"
+	@echo "  make / make all     Build core library + Rust/C++ bindings + integrations"
 	@echo "  make core           Build libraries and pkg-config file only"
 	@echo "  make debug          Build with debug symbols (-g -O0)"
-	@echo "  make test           Build library/bindings/exporters + run all tests"
-	@echo "  make test-memory    Build library/bindings/exporters + run TSan/ASan tests"
+	@echo "  make test           Build library/bindings/integrations + run all tests"
+	@echo "  make test-memory    Build library/bindings/integrations + run TSan/ASan tests"
 	@echo "  make test-strict    Run test + test-memory"
 	@echo "  make test-local     Build and run C unit tests"
 	@echo "  make test-all       Run all tests (C, C++, Rust)"
@@ -590,8 +590,8 @@ help:
 	@echo "  make BFFIO-test     Run BFFIO functional tests"
 	@echo "  make BFFIO-baseline Run BFFIO vs FIO comparison"
 	@echo ""
-	@echo "Exporters:"
-	@echo "  make exporters      Build metrics exporters (Prometheus + OpenTelemetry)"
+	@echo "Integrations:"
+	@echo "  make integrations   Build metrics integrations (Prometheus + OpenTelemetry)"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
@@ -604,5 +604,5 @@ help:
 	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
 	        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
 	        coverage coverage-check \
-	        exporters \
+	        integrations \
 	        BFFIO BFFIO-test BFFIO-baseline

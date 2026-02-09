@@ -5,7 +5,35 @@ All notable changes to AuraIO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.1] - 2025-02-05
+## [Unreleased]
+
+## [0.2.0] - 2025-02-08
+
+### Changed
+- **Directory structure reorganization** for improved clarity and scalability
+  - Moved C library and C++ bindings to `core/` directory
+    - `core/src/` - C implementation
+    - `core/include/` - C and C++ public headers
+    - `core/lib/` - Compiled libraries
+    - `core/pkg/` - Packaging templates
+  - Renamed `exporters/` to `integrations/` to better reflect general-purpose integration support
+    - `integrations/prometheus/C/` - Prometheus exporter (C implementation)
+    - `integrations/opentelemetry/C/` - OpenTelemetry exporter (C implementation)
+    - Added placeholder directories for C++ and Rust variants
+  - Relocated coverage reports to `tests/coverage/` to keep project root clean
+  - Updated all build systems, Makefiles, and scripts to use new paths
+  - Library naming updated: `libauraio.so.0.2.0` (from `libauraio.so.0.1.0`)
+
+### Fixed
+- Fixed TSAN/ASAN library paths in root Makefile
+- Updated sanitizer build rules to use `core/` structure
+
+### Notes
+- **No API changes** - existing code continues to work without modification
+- Build system paths updated - source builds need updated include/lib paths
+- All 369 tests passing (240 C + 44 C++ + 85 Rust)
+
+## [0.1.0] - 2025-02-05
 
 ### Added
 - AIMD adaptive controller with +1 additive increase, x0.80 multiplicative decrease
@@ -17,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Event loop integration via pollable fd
 - Comprehensive benchmark suite with FIO comparison
 - Symbol visibility control (`AURAIO_API` / `-fvisibility=hidden`)
-- SO versioning (`libauraio.so.1.0.1`)
+- SO versioning (`libauraio.so.0.1.0`)
 
 ### Performance
 - ~24K IOPS / ~1500 MB/s throughput (64K random reads, i7-1280P)
@@ -25,13 +53,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ~7% latency overhead vs FIO
 - ~1.66x throughput advantage over FIO for 64K reads (adaptive batching)
 - ~6.3M ops/sec buffer pool (4 threads)
-
-## [1.0.0] - 2025-01-15
-
-Initial release.
-
-### Added
-- Core io_uring engine with adaptive queue depth tuning
-- C and C++ APIs
-- Basic buffer pool
-- Unit tests and examples

@@ -29,11 +29,11 @@ cd tests && make test_ring && ./test_ring
 **Stack**: C11 core library + C++20 bindings + Rust bindings, io_uring via liburing
 
 **Structure**:
-- `src/` - Core C library (auraio.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
-- `include/auraio.h` - Public C API
-- `include/auraio.hpp` - C++ bindings with RAII, coroutines, and concepts
+- `core/src/` - Core C library (auraio.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
+- `core/include/auraio.h` - Public C API
+- `core/include/auraio.hpp` - C++ bindings with RAII, coroutines, and concepts
 - `bindings/rust/` - Rust bindings (auraio-sys FFI + safe auraio crate with async support)
-- `exporters/prometheus/` - Prometheus metrics exporter
+- `integrations/` - External system integrations (Prometheus, OpenTelemetry) with C/C++/Rust examples
 - `tools/BFFIO/` - FIO-compatible benchmark with AIMD auto-tuning
 - `examples/` - C, C++, and Rust examples
 - `tests/` - Unit tests, stress tests, benchmarks, and analysis scripts
@@ -44,8 +44,13 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 
 - C11, 4-space indent, snake_case
 - Prefixes: `auraio_` (public), `ring_`/`adaptive_`/`buffer_` (internal)
-- Public API in `include/auraio.h`, implementation in `src/auraio.c`
-- Tuning constants at top of `src/adaptive_engine.h`
+- Public API in `core/include/auraio.h`, implementation in `core/src/auraio.c`
+- Tuning constants at top of `core/src/adaptive_engine.h`
+
+## Development Workflow
+
+- **CHANGELOG.md**: Update before committing major changes (new features, breaking changes, significant refactors). Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
+- **Version bumping**: Update `Makefile` (VERSION_*) and `core/include/auraio.h` (AURAIO_VERSION_*) together with CHANGELOG.md.
 
 ## Non-Obvious Patterns
 
