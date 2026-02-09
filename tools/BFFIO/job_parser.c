@@ -175,6 +175,8 @@ void job_config_defaults(job_config_t *job) {
     job->direct = 0;
     job->numjobs = 1;
     job->iodepth = 256;
+    job->nrfiles = 1;
+    job->file_service_type = FST_ROUNDROBIN;
     job->rwmixread = 50;
     job->rw_set = false;
 }
@@ -376,6 +378,43 @@ static int apply_param(job_config_t *job, const char *key, const char *value) {
             return -1;
         }
         job->target_p99_ms = ms;
+        return 0;
+    }
+
+    if (strcmp(key, "nrfiles") == 0) {
+        int v;
+        if (parse_int(value, &v) != 0 || v < 1) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->nrfiles = v;
+        return 0;
+    }
+
+    if (strcmp(key, "filesize") == 0) {
+        uint64_t sz = parse_size(value);
+        if (sz == 0) {
+            fprintf(stderr, "BFFIO: invalid filesize '%s'\n", value);
+            return -1;
+        }
+        job->filesize = sz;
+        return 0;
+    }
+
+    if (strcmp(key, "file_service_type") == 0) {
+        if (strcasecmp(value, "roundrobin") == 0) {
+            job->file_service_type = FST_ROUNDROBIN;
+        } else if (strcasecmp(value, "sequential") == 0) {
+            job->file_service_type = FST_SEQUENTIAL;
+        } else if (strcasecmp(value, "random") == 0) {
+            job->file_service_type = FST_RANDOM;
+        } else {
+            fprintf(stderr,
+                    "BFFIO: unknown file_service_type '%s' "
+                    "(use: roundrobin, sequential, random)\n",
+                    value);
+            return -1;
+        }
         return 0;
     }
 
@@ -616,6 +655,30 @@ int job_parse_cli(int argc, char **argv, bench_config_t *config) {
  * Validation
  * ============================================================================ */
 
+const char *file_service_type_name(file_service_type_t fst) {
+    switch (fst) {
+    case FST_ROUNDROBIN:
+        return "roundrobin";
+    case FST_SEQUENTIAL:
+        return "sequential";
+    case FST_RANDOM:
+        return "random";
+    }
+    return "unknown";
+}
+
+void job_config_normalize(job_config_t *job) {
+    if (job->nrfiles <= 1) return;
+
+    if (job->filesize > 0) {
+        /* filesize explicitly set: size = filesize * nrfiles */
+        job->size = job->filesize * (uint64_t)job->nrfiles;
+    } else if (job->size > 0) {
+        /* size set but not filesize: filesize = size / nrfiles */
+        job->filesize = job->size / (uint64_t)job->nrfiles;
+    }
+}
+
 int job_config_validate(const job_config_t *job) {
     if (!job->rw_set) {
         fprintf(stderr, "BFFIO: job '%s': 'rw' parameter is required\n", job->name);
@@ -655,6 +718,14 @@ int job_config_validate(const job_config_t *job) {
 
     if (job->bs == 0) {
         fprintf(stderr, "BFFIO: job '%s': block size must be > 0\n", job->name);
+        return -1;
+    }
+
+    if (job->nrfiles > 1 && job->filename[0] != '\0') {
+        fprintf(stderr,
+                "BFFIO: job '%s': nrfiles > 1 requires --directory "
+                "(--filename uses a single explicit file)\n",
+                job->name);
         return -1;
     }
 

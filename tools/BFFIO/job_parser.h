@@ -25,26 +25,36 @@ typedef enum {
     OUTPUT_JSON,   /* FIO-compatible JSON */
 } output_format_t;
 
+/* File service type (how threads select files for I/O) */
+typedef enum {
+    FST_ROUNDROBIN, /* cycle through files in order */
+    FST_SEQUENTIAL, /* exhaust one file, then next */
+    FST_RANDOM,     /* random file per I/O */
+} file_service_type_t;
+
 /* Single job configuration */
 typedef struct {
     char name[128];
     rw_pattern_t rw;
-    bool rw_set;              /* true if rw was explicitly set */
-    uint64_t bs;              /* block size in bytes (default 4096) */
-    uint64_t size;            /* file size in bytes */
-    char filename[PATH_MAX];  /* explicit file/device path */
-    char directory[PATH_MAX]; /* auto-create files here */
-    int direct;               /* O_DIRECT (0 or 1) */
-    int runtime_sec;          /* max runtime in seconds */
-    int time_based;           /* run for fixed time */
-    int ramp_time_sec;        /* warmup seconds (stats discarded) */
-    int numjobs;              /* worker thread count */
-    int iodepth;              /* max in-flight cap */
-    int rwmixread;            /* read percentage for mixed (0-100) */
-    int group_reporting;      /* aggregate stats across threads */
-    int fsync_freq;           /* fsync every N writes (0=never) */
-    double target_p99_ms;     /* P99 latency ceiling (0=disabled) */
-    int ring_select;          /* ring selection mode (0=adaptive, 1=cpu_local, 2=round_robin) */
+    bool rw_set;                           /* true if rw was explicitly set */
+    uint64_t bs;                           /* block size in bytes (default 4096) */
+    uint64_t size;                         /* file size in bytes */
+    char filename[PATH_MAX];               /* explicit file/device path */
+    char directory[PATH_MAX];              /* auto-create files here */
+    int direct;                            /* O_DIRECT (0 or 1) */
+    int runtime_sec;                       /* max runtime in seconds */
+    int time_based;                        /* run for fixed time */
+    int ramp_time_sec;                     /* warmup seconds (stats discarded) */
+    int numjobs;                           /* worker thread count */
+    int iodepth;                           /* max in-flight cap */
+    int nrfiles;                           /* number of files per job (default 1) */
+    uint64_t filesize;                     /* per-file size (0 = auto: size/nrfiles) */
+    file_service_type_t file_service_type; /* how threads pick files */
+    int rwmixread;                         /* read percentage for mixed (0-100) */
+    int group_reporting;                   /* aggregate stats across threads */
+    int fsync_freq;                        /* fsync every N writes (0=never) */
+    double target_p99_ms;                  /* P99 latency ceiling (0=disabled) */
+    int ring_select; /* ring selection mode (0=adaptive, 1=cpu_local, 2=round_robin) */
 } job_config_t;
 
 /* Top-level benchmark config */
@@ -82,5 +92,11 @@ const char *rw_pattern_name(rw_pattern_t rw);
 
 /* Parse latency string with us/ms/s suffixes. Returns milliseconds, -1 on error. */
 double parse_latency(const char *str);
+
+/* Get string name for file service type */
+const char *file_service_type_name(file_service_type_t fst);
+
+/* Normalize filesize/size/nrfiles relationship. Call before validate. */
+void job_config_normalize(job_config_t *job);
 
 #endif /* BFFIO_JOB_PARSER_H */

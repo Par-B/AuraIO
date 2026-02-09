@@ -517,6 +517,29 @@ static void json_job_options(FILE *out, const job_config_t *job, const char *ind
     fprintf(out, "%s  \"numjobs\" : \"%d\",\n", indent, job->numjobs);
     fprintf(out, "%s  \"iodepth\" : \"%d\"", indent, job->iodepth);
 
+    if (job->nrfiles > 1) {
+        fprintf(out, ",\n%s  \"nrfiles\" : \"%d\"", indent, job->nrfiles);
+    }
+    if (job->filesize > 0) {
+        char filesize_buf[32];
+        if (job->filesize >= (uint64_t)1024 * 1024 * 1024) {
+            snprintf(filesize_buf, sizeof(filesize_buf), "%" PRIu64 "G",
+                     job->filesize / ((uint64_t)1024 * 1024 * 1024));
+        } else if (job->filesize >= (uint64_t)1024 * 1024) {
+            snprintf(filesize_buf, sizeof(filesize_buf), "%" PRIu64 "M",
+                     job->filesize / ((uint64_t)1024 * 1024));
+        } else if (job->filesize >= 1024) {
+            snprintf(filesize_buf, sizeof(filesize_buf), "%" PRIu64 "K", job->filesize / 1024);
+        } else {
+            snprintf(filesize_buf, sizeof(filesize_buf), "%" PRIu64, job->filesize);
+        }
+        fprintf(out, ",\n%s  \"filesize\" : \"%s\"", indent, filesize_buf);
+    }
+    if (job->file_service_type != FST_ROUNDROBIN) {
+        fprintf(out, ",\n%s  \"file_service_type\" : \"%s\"", indent,
+                file_service_type_name(job->file_service_type));
+    }
+
     if (job->runtime_sec > 0) {
         fprintf(out, ",\n%s  \"runtime\" : \"%d\"", indent, job->runtime_sec);
     }

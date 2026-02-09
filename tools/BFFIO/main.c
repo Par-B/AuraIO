@@ -46,6 +46,9 @@ static void print_usage(void) {
            "  --numjobs=N            Number of worker threads (default: 1)\n"
            "  --iodepth=N            Max queue depth cap (default: 256, AuraIO auto-tunes below "
            "this)\n"
+           "  --nrfiles=N            Number of files per job (default: 1, directory mode only)\n"
+           "  --filesize=SIZE        Per-file size (default: size/nrfiles). Suffixes: K, M, G\n"
+           "  --file_service_type=T  File selection: roundrobin (default), sequential, random\n"
            "  --rwmixread=N          Read percentage for mixed workloads (default: 50)\n"
            "  --group_reporting      Aggregate stats across threads\n"
            "  --fsync=N              fsync every N writes (default: 0)\n"
@@ -132,8 +135,9 @@ int main(int argc, char *argv[]) {
         format = bench.output_format;
     }
 
-    /* 3. Validate all jobs */
+    /* 3. Normalize and validate all jobs */
     for (int i = 0; i < bench.num_jobs; i++) {
+        job_config_normalize(&bench.jobs[i]);
         if (job_config_validate(&bench.jobs[i]) != 0) {
             bench_config_free(&bench);
             return 1;

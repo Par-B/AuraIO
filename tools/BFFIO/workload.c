@@ -191,7 +191,19 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
         base_flags = O_RDWR;
     }
 
-    int numfiles = config->numjobs > 0 ? config->numjobs : 1;
+    /* Number of files: nrfiles for directory mode, 1 for explicit filename */
+    int numfiles;
+    if (config->filename[0] != '\0') {
+        numfiles = 1;
+    } else {
+        numfiles = config->nrfiles > 0 ? config->nrfiles : 1;
+    }
+
+    /* Per-file size for directory mode file creation */
+    uint64_t per_file_size =
+        config->filesize > 0
+            ? config->filesize
+            : (numfiles > 1 && config->size > 0 ? config->size / (uint64_t)numfiles : config->size);
 
     /* Allocate arrays */
     fset->fds = calloc((size_t)numfiles, sizeof(int));
@@ -218,10 +230,8 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
             return -1;
         }
 
-        for (int i = 0; i < numfiles; i++) {
-            fset->fds[i] = fd;
-        }
-        fset->fd_count = numfiles;
+        fset->fds[0] = fd;
+        fset->fd_count = 1;
         return 0;
     }
 
@@ -251,7 +261,7 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
              * unwritten extents — ext4 returns zeros without disk I/O on
              * read, defeating O_DIRECT benchmarks.  We write non-zero data
              * in 1 MiB chunks so every block is actually allocated on disk. */
-            if (config->size > 0) {
+            if (per_file_size > 0) {
                 const size_t CHUNK = 1024 * 1024;
                 char *fill = malloc(CHUNK);
                 if (!fill) {
@@ -261,7 +271,7 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
                 /* Fill with a non-zero pattern (0xA5) */
                 memset(fill, 0xA5, CHUNK);
 
-                uint64_t remaining = config->size;
+                uint64_t remaining = per_file_size;
                 while (remaining > 0) {
                     size_t to_write = remaining < CHUNK ? (size_t)remaining : CHUNK;
                     ssize_t w = write(create_fd, fill, to_write);
@@ -398,6 +408,43 @@ static void fsync_callback(auraio_request_t *req, ssize_t result, void *user_dat
 }
 
 /* ============================================================================
+ * Multi-file selection (hot path)
+ * ============================================================================ */
+
+/**
+ * Select the next file index for I/O based on file_service_type.
+ * Returns an index into the fds[] and seq_offsets[] arrays.
+ *
+ * Hot path: nrfiles<=1 short-circuits immediately. Each multi-file
+ * branch is a simple integer operation — no locks, no allocations.
+ */
+static inline int select_file(thread_ctx_t *tctx, uint64_t *rng) {
+    if (tctx->nrfiles <= 1) {
+        return 0;
+    }
+
+    switch (tctx->file_service_type) {
+    case FST_ROUNDROBIN: {
+        int idx = tctx->current_file_idx;
+        tctx->current_file_idx = (idx + 1) % tctx->nrfiles;
+        return idx;
+    }
+    case FST_SEQUENTIAL: {
+        int idx = tctx->current_file_idx;
+        tctx->file_ios_done++;
+        if (tctx->file_ios_done >= tctx->file_ios_limit) {
+            tctx->file_ios_done = 0;
+            tctx->current_file_idx = (idx + 1) % tctx->nrfiles;
+        }
+        return idx;
+    }
+    case FST_RANDOM:
+        return (int)(xorshift64(rng) % (uint64_t)tctx->nrfiles);
+    }
+    return 0;
+}
+
+/* ============================================================================
  * Worker thread
  * ============================================================================ */
 
@@ -449,13 +496,10 @@ static void *worker_thread(void *arg) {
 
     int iodepth = config->iodepth;
     uint64_t bs = config->bs;
-    uint64_t file_size = tctx->file_size;
+    uint64_t per_file_size = tctx->per_file_size;
     int is_random = pattern_is_random(config->rw);
     int is_mixed = (config->rw == RW_RANDRW || config->rw == RW_READWRITE);
     int is_write_only = (config->rw == RW_WRITE || config->rw == RW_RANDWRITE);
-
-    /* Sequential I/O: each thread starts at a different file region */
-    uint64_t seq_offset = tctx->seq_offset;
 
     /* Size-based completion: track total bytes submitted per thread */
     uint64_t total_bytes = 0;
@@ -464,12 +508,8 @@ static void *worker_thread(void *arg) {
     /* Fsync tracking */
     int writes_since_fsync = 0;
 
-    /* Select fd for this thread */
-    int fd_idx = tctx->thread_id < tctx->fd_count ? tctx->thread_id : 0;
-    int fd = tctx->fds[fd_idx];
-
-    /* Maximum valid offset for random I/O */
-    uint64_t max_offset = (file_size > bs) ? file_size - bs : 0;
+    /* Maximum valid offset for random I/O (per-file) */
+    uint64_t max_offset = (per_file_size > bs) ? per_file_size - bs : 0;
 
     /* Main I/O loop */
     while (atomic_load(tctx->running)) {
@@ -492,7 +532,11 @@ static void *worker_thread(void *arg) {
 
             void *buf = ctx->buffer;
 
-            /* Generate offset */
+            /* Select file for this I/O */
+            int file_idx = select_file(tctx, &rng);
+            int fd = tctx->fds[file_idx];
+
+            /* Generate offset (per-file) */
             uint64_t offset;
             if (is_random) {
                 if (max_offset > 0) {
@@ -502,10 +546,10 @@ static void *worker_thread(void *arg) {
                     offset = 0;
                 }
             } else {
-                offset = seq_offset;
-                seq_offset += bs;
-                if (seq_offset + bs > file_size) {
-                    seq_offset = 0;
+                offset = tctx->seq_offsets[file_idx];
+                tctx->seq_offsets[file_idx] += bs;
+                if (tctx->seq_offsets[file_idx] + bs > per_file_size) {
+                    tctx->seq_offsets[file_idx] = 0;
                 }
             }
 
@@ -626,15 +670,23 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
         return -1;
     }
 
-    /* Determine file size for offset generation */
-    uint64_t file_size = config->size;
-    if (file_size == 0 && fset.fd_count > 0 && fset.fds[0] >= 0) {
+    /* Determine per-file size for offset generation */
+    uint64_t per_file_size;
+    if (config->filesize > 0) {
+        per_file_size = config->filesize;
+    } else if (config->size > 0 && fset.fd_count > 0) {
+        per_file_size = config->size / (uint64_t)fset.fd_count;
+    } else if (fset.fd_count > 0 && fset.fds[0] >= 0) {
         struct stat st;
         if (fstat(fset.fds[0], &st) == 0 && st.st_size > 0) {
-            file_size = (uint64_t)st.st_size;
+            per_file_size = (uint64_t)st.st_size;
+        } else {
+            per_file_size = 0;
         }
+    } else {
+        per_file_size = 0;
     }
-    if (file_size == 0) {
+    if (per_file_size == 0) {
         fprintf(stderr, "BFFIO: cannot determine file size\n");
         file_set_close(&fset);
         return -1;
@@ -667,11 +719,31 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
         tctx[i].running = &running;
         tctx[i].ramping = &ramping;
         tctx[i].workers_done = &workers_done;
-        tctx[i].file_size = file_size;
+        tctx[i].file_size = per_file_size;
+        tctx[i].nrfiles = fset.fd_count;
+        tctx[i].per_file_size = per_file_size;
+        tctx[i].file_service_type = config->file_service_type;
 
-        /* Spread sequential offsets across the file */
-        tctx[i].seq_offset = (uint64_t)i * (file_size / (uint64_t)num_threads);
-        tctx[i].seq_offset = align_down(tctx[i].seq_offset, config->bs);
+        /* Allocate per-file sequential offsets */
+        tctx[i].seq_offsets = calloc((size_t)fset.fd_count, sizeof(uint64_t));
+        if (!tctx[i].seq_offsets) {
+            for (int j = 0; j < i; j++) free(tctx[j].seq_offsets);
+            free(tctx);
+            file_set_close(&fset);
+            return -1;
+        }
+
+        /* Stagger sequential offsets within each file by thread */
+        for (int f = 0; f < fset.fd_count; f++) {
+            tctx[i].seq_offsets[f] = (uint64_t)i * (per_file_size / (uint64_t)num_threads);
+            tctx[i].seq_offsets[f] = align_down(tctx[i].seq_offsets[f], config->bs);
+        }
+        tctx[i].seq_offset = tctx[i].seq_offsets[0];
+
+        /* Spread threads across files for RR/sequential */
+        tctx[i].current_file_idx = i % fset.fd_count;
+        tctx[i].file_ios_done = 0;
+        tctx[i].file_ios_limit = (per_file_size > config->bs) ? per_file_size / config->bs : 1;
     }
 
     /* Always spawn pthreads so the main thread can run the timer loop */
@@ -795,7 +867,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
     /* Final drain to ensure all completions are processed */
     auraio_drain(engine, 5000);
 
-    /* Free pre-allocated buffers, then destroy pools */
+    /* Free pre-allocated buffers, per-file offsets, then destroy pools */
     for (int i = 0; i < num_threads; i++) {
         for (int s = 0; s < tctx[i].pool.capacity; s++) {
             if (tctx[i].pool.slots[s].buffer) {
@@ -804,6 +876,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
             }
         }
         io_ctx_pool_destroy(&tctx[i].pool);
+        free(tctx[i].seq_offsets);
     }
 
     /* Compute actual measurement runtime */

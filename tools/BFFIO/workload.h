@@ -56,8 +56,17 @@ typedef struct {
     io_ctx_pool_t pool;        /* pre-allocated io_ctx pool */
 
     /* Offset tracking */
-    uint64_t seq_offset; /* for sequential patterns */
-    uint64_t file_size;  /* actual file size for offset generation */
+    uint64_t seq_offset; /* for sequential patterns (single-file compat) */
+    uint64_t file_size;  /* per-file size for offset generation */
+
+    /* Multi-file support */
+    int nrfiles;             /* number of files available */
+    uint64_t per_file_size;  /* size of each individual file */
+    uint64_t *seq_offsets;   /* per-file sequential offsets [nrfiles] */
+    int current_file_idx;    /* current file for RR/sequential */
+    uint64_t file_ios_done;  /* I/Os on current file (sequential mode) */
+    uint64_t file_ios_limit; /* I/Os per file before switching */
+    file_service_type_t file_service_type;
 
     /* Adaptive latency sampling: budget-based recalibration + PRNG selection.
      * Caps timestamp overhead at ~100K samples/sec regardless of IOPS. */

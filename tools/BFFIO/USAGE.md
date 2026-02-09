@@ -26,6 +26,9 @@ BFFIO --help
 | `--ramp_time=SECONDS` | `0` | Warmup period (stats discarded) |
 | `--numjobs=N` | `1` | Number of worker threads |
 | `--iodepth=N` | `256` | Max queue depth cap (AuraIO auto-tunes below this) |
+| `--nrfiles=N` | `1` | Number of files per job (directory mode only) |
+| `--filesize=SIZE` | `size/nrfiles` | Per-file size. Suffixes: K, M, G |
+| `--file_service_type=T` | `roundrobin` | File selection: `roundrobin`, `sequential`, `random` |
 | `--rwmixread=N` | `50` | Read percentage for mixed workloads |
 | `--group_reporting` | off | Aggregate stats across threads |
 | `--fsync=N` | `0` | fsync every N writes |
@@ -122,6 +125,30 @@ BFFIO workload.fio
 
 Runs all jobs defined in `workload.fio`. See [Job File Format](#job-file-format) below.
 
+### Multi-file random read
+
+```
+BFFIO --rw=randread --bs=4k --size=1G --directory=/mnt/data --nrfiles=4 --direct=1 --runtime=30 --time_based
+```
+
+Creates 4 files of 256M each (1G / 4) and distributes reads across them in round-robin order. Useful for testing I/O across multiple files or filesystem metadata pressure.
+
+### Multi-file with explicit per-file size
+
+```
+BFFIO --rw=randwrite --bs=4k --filesize=256M --nrfiles=8 --directory=/mnt/data --direct=1 --runtime=30 --time_based
+```
+
+Creates 8 files of 256M each (2G total). When `--filesize` is set, `--size` is computed automatically as `filesize * nrfiles`.
+
+### Multi-file sequential with file exhaustion
+
+```
+BFFIO --rw=read --bs=128k --size=512M --directory=/mnt/data --nrfiles=4 --file_service_type=sequential --direct=1 --runtime=30 --time_based
+```
+
+Reads sequentially through one 128M file completely before moving to the next. `file_service_type=sequential` exhausts each file before advancing.
+
 ### JSON output for scripting
 
 ```
@@ -202,7 +229,7 @@ These FIO options work identically or with equivalent behavior:
 | Category | Options |
 |---|---|
 | Workload | `rw` (all 6 patterns), `bs`, `size`, `rwmixread` |
-| Files | `filename`, `directory` |
+| Files | `filename`, `directory`, `nrfiles`, `filesize`, `file_service_type` |
 | I/O behavior | `direct`, `iodepth`, `fsync` |
 | Timing | `runtime`, `time_based`, `ramp_time` |
 | Threading | `numjobs`, `group_reporting` |
@@ -224,7 +251,7 @@ FIO io_uring options that BFFIO does not implement:
 | Output logs | `write_bw_log`, `write_lat_log`, `write_iops_log`, `log_avg_msec` | Not implemented |
 | Output formats | `json+`, `terse`, `minimal` | Only `normal` and `json` |
 | Offset control | `offset`, `offset_increment`, `number_ios` | Not implemented |
-| File layout | `nrfiles`, `filesize`, `file_service_type` | Single file per job |
+| File layout | `filesize` ranges (`filesize_low`/`filesize_high`) | Fixed per-file size only |
 | Zones | `zonesize`, `zonerange`, `zoneskip` | Not implemented |
 | CPU affinity | `cpus_allowed`, `cpus_allowed_policy`, `numa_cpu_nodes` | Not implemented |
 | Miscellaneous | `thinktime`, `ioscheduler`, `thread`, `loops`, `stonewall` | Not implemented |
