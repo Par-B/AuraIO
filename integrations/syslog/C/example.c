@@ -17,12 +17,13 @@
  *   # or: grep auraio /var/log/syslog
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200112L
 #include <auraio.h>
 #include "auraio_syslog.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,13 +33,13 @@
 #define FILE_SIZE (64 * 1024)
 #define BUF_SIZE 4096
 
-static int io_done = 0;
+static atomic_int io_done = 0;
 
 static void on_complete(auraio_request_t *req, ssize_t result, void *ud) {
     (void)req;
     (void)ud;
     if (result < 0) auraio_log_emit(AURAIO_LOG_ERR, "I/O error: %zd", result);
-    __sync_add_and_fetch(&io_done, 1);
+    io_done++;
 }
 
 int main(void) {
@@ -125,8 +126,8 @@ int main(void) {
 
     auraio_syslog_options_t custom = {
         .ident = "my-daemon",
-        .facility = 0, /* 0 = use default (LOG_USER) */
-        .log_options = 0, /* 0 = use default (LOG_PID | LOG_NDELAY) */
+        .facility = -1, /* -1 = use default (LOG_USER) */
+        .log_options = -1, /* -1 = use default (LOG_PID | LOG_NDELAY) */
     };
     auraio_syslog_install(&custom);
     auraio_log_emit(AURAIO_LOG_NOTICE, "now logging under ident \"my-daemon\"");

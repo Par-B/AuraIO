@@ -26,8 +26,8 @@ void auraio_syslog_install(const auraio_syslog_options_t *options) {
 
     if (options) {
         if (options->ident) ident = options->ident;
-        if (options->facility) facility = options->facility;
-        if (options->log_options) log_options = options->log_options;
+        if (options->facility >= 0) facility = options->facility;
+        if (options->log_options >= 0) log_options = options->log_options;
     }
 
     openlog(ident, log_options, facility);

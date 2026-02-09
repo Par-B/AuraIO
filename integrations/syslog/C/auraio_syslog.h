@@ -40,24 +40,24 @@ extern "C" {
  * Syslog configuration options.
  *
  * Pass NULL to auraio_syslog_install() for sensible defaults.
- * A zero-valued field means "use default".
+ * A value of -1 means "use default" for numeric fields.
  */
 typedef struct {
     const char *ident; /**< openlog ident (default: "auraio").
                             Must remain valid until auraio_syslog_remove()
                             — POSIX openlog() retains the pointer. */
     int facility;      /**< Syslog facility (default: LOG_USER).
-                            0 means "use default". */
+                            -1 means "use default". */
     int log_options;   /**< openlog() option flags
                             (default: LOG_PID | LOG_NDELAY).
-                            0 means "use default". */
+                            -1 means "use default". */
 } auraio_syslog_options_t;
 
 /**
  * Install a syslog-forwarding log handler.
  *
  * Calls openlog() then registers a log handler that calls syslog().
- * Thread-safe: syslog() is reentrant per POSIX.
+ * Thread-safe: syslog() is thread-safe per POSIX.
  *
  * @param options  Configuration (NULL for defaults)
  */

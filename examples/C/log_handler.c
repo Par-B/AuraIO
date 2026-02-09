@@ -11,7 +11,7 @@
  * Run:   ./examples/C/log_handler
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200112L
 #include <auraio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #define TEST_FILE "/tmp/auraio_log_test.dat"
@@ -81,13 +82,13 @@ static void my_log_handler(int level, const char *msg, void *userdata) {
 }
 
 /* Simple I/O completion tracking */
-static int io_completed = 0;
+static atomic_int io_completed = 0;
 
 static void on_complete(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     if (result < 0) fprintf(stderr, "  I/O error: %zd\n", result);
-    __sync_add_and_fetch(&io_completed, 1);
+    io_completed++;
 }
 
 int main(void) {
@@ -190,13 +191,11 @@ int main(void) {
 
     auraio_log_emit(AURAIO_LOG_NOTICE, "shutting down");
 
-    /* Clear handler BEFORE destroying engine — the destroy path may
-     * emit warnings (e.g. timeout with pending ops) that we want to
-     * handle gracefully. In this example we keep it installed to show
-     * those diagnostics. */
+    /* Destroy engine while handler is still installed so we capture any
+     * shutdown diagnostics (e.g. timeout with pending ops). */
     auraio_destroy(engine);
 
-    /* Now remove the handler */
+    /* Handler no longer needed after engine is gone. */
     auraio_set_log_handler(NULL, NULL);
 
     printf("\n--- Summary ---\n");

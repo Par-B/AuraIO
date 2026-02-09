@@ -24,9 +24,10 @@ static void log_dispatch(int level, const char *fmt, va_list ap) {
         return;
     }
 
-    /* seq_cst on both handler and userdata guarantees a consistent pair
-     * across independent atomics (acquire/release alone doesn't provide
-     * cross-variable ordering on weakly-ordered architectures). */
+    /* Note: two independent atomics cannot provide pairwise atomicity.
+     * A concurrent auraio_set_log_handler() call could change the pair
+     * between our two loads.  In practice this is benign: the handler is
+     * set once at startup and cleared once at shutdown. */
     void *ud = atomic_load_explicit(&log_userdata, memory_order_seq_cst);
 
     char buf[256];
