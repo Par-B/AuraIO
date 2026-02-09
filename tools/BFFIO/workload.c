@@ -159,8 +159,7 @@ static int mkdirp(const char *path, mode_t mode) {
  * Open a file with the given flags, with O_DIRECT fallback.
  * Returns fd >= 0 on success, -1 on error.
  */
-static int open_with_direct_fallback(const char *path, int base_flags,
-                                     int use_direct) {
+static int open_with_direct_fallback(const char *path, int base_flags, int use_direct) {
     int flags = base_flags;
     if (use_direct) {
         flags |= O_DIRECT;
@@ -171,8 +170,10 @@ static int open_with_direct_fallback(const char *path, int base_flags,
         /* O_DIRECT fallback */
         fd = open(path, base_flags);
         if (fd >= 0) {
-            fprintf(stderr, "BFFIO: O_DIRECT not supported on '%s', "
-                    "falling back to buffered I/O\n", path);
+            fprintf(stderr,
+                    "BFFIO: O_DIRECT not supported on '%s', "
+                    "falling back to buffered I/O\n",
+                    path);
         }
     }
     return fd;
@@ -207,11 +208,9 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
 
     if (config->filename[0] != '\0') {
         /* Explicit file/device: open directly, shared by all threads */
-        int fd = open_with_direct_fallback(config->filename, base_flags,
-                                           config->direct);
+        int fd = open_with_direct_fallback(config->filename, base_flags, config->direct);
         if (fd < 0) {
-            fprintf(stderr, "BFFIO: failed to open '%s': %s\n",
-                    config->filename, strerror(errno));
+            fprintf(stderr, "BFFIO: failed to open '%s': %s\n", config->filename, strerror(errno));
             free(fset->fds);
             free(fset->created_paths);
             memset(fset, 0, sizeof(*fset));
@@ -228,8 +227,8 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
     if (config->directory[0] != '\0') {
         /* Create directory and files */
         if (mkdirp(config->directory, 0755) != 0) {
-            fprintf(stderr, "BFFIO: failed to create directory '%s': %s\n",
-                    config->directory, strerror(errno));
+            fprintf(stderr, "BFFIO: failed to create directory '%s': %s\n", config->directory,
+                    strerror(errno));
             free(fset->fds);
             free(fset->created_paths);
             memset(fset, 0, sizeof(*fset));
@@ -238,14 +237,12 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
 
         for (int i = 0; i < numfiles; i++) {
             char path[PATH_MAX];
-            snprintf(path, sizeof(path), "%s/BFFIO.%d.tmp",
-                     config->directory, i);
+            snprintf(path, sizeof(path), "%s/BFFIO.%d.tmp", config->directory, i);
 
             /* Create the file */
             int create_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (create_fd < 0) {
-                fprintf(stderr, "BFFIO: failed to create '%s': %s\n",
-                        path, strerror(errno));
+                fprintf(stderr, "BFFIO: failed to create '%s': %s\n", path, strerror(errno));
                 goto cleanup_error;
             }
 
@@ -265,8 +262,7 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
 
                 uint64_t remaining = config->size;
                 while (remaining > 0) {
-                    size_t to_write = remaining < CHUNK
-                                     ? (size_t)remaining : CHUNK;
+                    size_t to_write = remaining < CHUNK ? (size_t)remaining : CHUNK;
                     ssize_t w = write(create_fd, fill, to_write);
                     if (w < 0) {
                         free(fill);
@@ -284,11 +280,9 @@ static int file_set_open(file_set_t *fset, const job_config_t *config) {
             fset->created_count++;
 
             /* Re-open with desired flags */
-            int fd = open_with_direct_fallback(path, base_flags,
-                                               config->direct);
+            int fd = open_with_direct_fallback(path, base_flags, config->direct);
             if (fd < 0) {
-                fprintf(stderr, "BFFIO: failed to open '%s': %s\n",
-                        path, strerror(errno));
+                fprintf(stderr, "BFFIO: failed to open '%s': %s\n", path, strerror(errno));
                 goto cleanup_error;
             }
 
@@ -348,8 +342,7 @@ static void file_set_close(file_set_t *fset) {
  * points to the correct per-thread pool.
  * ============================================================================ */
 
-static void io_callback(auraio_request_t *req, ssize_t result,
-                         void *user_data) {
+static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_ctx_t *ctx = user_data;
 
@@ -364,10 +357,7 @@ static void io_callback(auraio_request_t *req, ssize_t result,
         atomic_fetch_add(&ctx->stats->errors, 1);
     }
 
-    /* Free the I/O buffer */
-    if (ctx->buffer) {
-        auraio_buffer_free(ctx->engine, ctx->buffer, ctx->io_size);
-    }
+    /* Buffer is pre-allocated per slot and reused — not freed here. */
 
     /* Decrement inflight counter */
     atomic_fetch_sub(&ctx->stats->inflight, 1);
@@ -380,8 +370,7 @@ static void io_callback(auraio_request_t *req, ssize_t result,
  * Fsync completion callback
  * ============================================================================ */
 
-static void fsync_callback(auraio_request_t *req, ssize_t result,
-                            void *user_data) {
+static void fsync_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_ctx_t *ctx = user_data;
 
@@ -413,9 +402,23 @@ static void *worker_thread(void *arg) {
 
     /* Initialize per-thread io_ctx pool */
     if (io_ctx_pool_init(&tctx->pool, config->iodepth) != 0) {
-        fprintf(stderr, "BFFIO: thread %d: failed to init io_ctx pool\n",
-                tctx->thread_id);
+        fprintf(stderr, "BFFIO: thread %d: failed to init io_ctx pool\n", tctx->thread_id);
         return NULL;
+    }
+
+    /* Pre-allocate aligned buffers for each pool slot (zero-malloc hot path) */
+    for (int s = 0; s < config->iodepth; s++) {
+        tctx->pool.slots[s].buffer = auraio_buffer_alloc(engine, (size_t)config->bs);
+        if (!tctx->pool.slots[s].buffer) {
+            fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", tctx->thread_id,
+                    s);
+            for (int f = 0; f < s; f++) {
+                auraio_buffer_free(engine, tctx->pool.slots[f].buffer, (size_t)config->bs);
+                tctx->pool.slots[f].buffer = NULL;
+            }
+            io_ctx_pool_destroy(&tctx->pool);
+            return NULL;
+        }
     }
 
     /* Seed PRNG: unique per thread */
@@ -439,8 +442,7 @@ static void *worker_thread(void *arg) {
 
     /* Size-based completion: track total bytes submitted per thread */
     uint64_t total_bytes = 0;
-    uint64_t per_thread_size = config->size /
-                               (uint64_t)(config->numjobs > 0 ? config->numjobs : 1);
+    uint64_t per_thread_size = config->size / (uint64_t)(config->numjobs > 0 ? config->numjobs : 1);
 
     /* Fsync tracking */
     int writes_since_fsync = 0;
@@ -464,19 +466,14 @@ static void *worker_thread(void *arg) {
         /* Submit I/O up to iodepth */
         while (atomic_load(&stats->inflight) < iodepth) {
             if (!atomic_load(tctx->running)) break;
-            if (!config->time_based && per_thread_size > 0 &&
-                total_bytes >= per_thread_size) {
+            if (!config->time_based && per_thread_size > 0 && total_bytes >= per_thread_size) {
                 break;
             }
 
             io_ctx_t *ctx = io_ctx_pool_get(&tctx->pool);
             if (!ctx) break;
 
-            void *buf = auraio_buffer_alloc(engine, (size_t)bs);
-            if (!buf) {
-                io_ctx_pool_put(&tctx->pool, ctx);
-                break;
-            }
+            void *buf = ctx->buffer;
 
             /* Generate offset */
             uint64_t offset;
@@ -525,16 +522,15 @@ static void *worker_thread(void *arg) {
 
             auraio_request_t *req;
             if (do_write) {
-                req = auraio_write(engine, fd, auraio_buf(buf), (size_t)bs,
-                                   (off_t)offset, io_callback, ctx);
+                req = auraio_write(engine, fd, auraio_buf(buf), (size_t)bs, (off_t)offset,
+                                   io_callback, ctx);
             } else {
-                req = auraio_read(engine, fd, auraio_buf(buf), (size_t)bs,
-                                  (off_t)offset, io_callback, ctx);
+                req = auraio_read(engine, fd, auraio_buf(buf), (size_t)bs, (off_t)offset,
+                                  io_callback, ctx);
             }
 
             if (!req) {
                 atomic_fetch_sub(&stats->inflight, 1);
-                auraio_buffer_free(engine, buf, (size_t)bs);
                 io_ctx_pool_put(&tctx->pool, ctx);
                 break;
             }
@@ -571,8 +567,8 @@ static void *worker_thread(void *arg) {
             }
         }
 
-        /* Process completions (wait up to 1ms) */
-        auraio_wait(engine, 1);
+        /* Process completions without blocking */
+        auraio_poll(engine);
     }
 
     /* Drain remaining inflight I/O for this thread */
@@ -591,8 +587,8 @@ static void *worker_thread(void *arg) {
  * workload_run -- top-level entry point
  * ============================================================================ */
 
-int workload_run(const job_config_t *config, auraio_engine_t *engine,
-                 thread_stats_t *stats, uint64_t *runtime_ms) {
+int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_stats_t *stats,
+                 uint64_t *runtime_ms) {
     int num_threads = config->numjobs > 0 ? config->numjobs : 1;
 
     /* Open/create files */
@@ -659,8 +655,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine,
 
     for (int i = 0; i < num_threads; i++) {
         if (pthread_create(&threads[i], NULL, worker_thread, &tctx[i]) != 0) {
-            fprintf(stderr, "BFFIO: failed to create thread %d: %s\n",
-                    i, strerror(errno));
+            fprintf(stderr, "BFFIO: failed to create thread %d: %s\n", i, strerror(errno));
             atomic_store(&running, 0);
             for (int j = 0; j < i; j++) {
                 pthread_join(threads[j], NULL);
@@ -674,8 +669,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine,
 
     /* Main thread: timer ticks, ramp management, BW/IOPS sampling */
     uint64_t start_wall = now_ns();
-    uint64_t ramp_end_ns = start_wall +
-                           (uint64_t)config->ramp_time_sec * 1000000000ULL;
+    uint64_t ramp_end_ns = start_wall + (uint64_t)config->ramp_time_sec * 1000000000ULL;
     uint64_t measure_start_ns = 0;
     int total_runtime_sec = config->runtime_sec > 0 ? config->runtime_sec : 0;
 
@@ -714,14 +708,12 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine,
         /* Target-p99: detect when all active rings have converged.
          * Reset stats once so we only measure steady-state throughput
          * at the AIMD-found depth, not the probing ramp-up. */
-        if (config->target_p99_ms > 0.0 && !converged_reset &&
-            !atomic_load(&ramping)) {
+        if (config->target_p99_ms > 0.0 && !converged_reset && !atomic_load(&ramping)) {
             int all_stable = 1;
             int ring_count = auraio_get_ring_count(engine);
             for (int r = 0; r < ring_count; r++) {
                 auraio_ring_stats_t rs;
-                if (auraio_get_ring_stats(engine, r, &rs) == 0 &&
-                    rs.ops_completed > 0) {
+                if (auraio_get_ring_stats(engine, r, &rs) == 0 && rs.ops_completed > 0) {
                     if (rs.aimd_phase != AURAIO_PHASE_STEADY &&
                         rs.aimd_phase != AURAIO_PHASE_CONVERGED) {
                         all_stable = 0;
@@ -749,8 +741,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine,
         }
 
         /* Check runtime expiry (measurement time, excluding ramp) */
-        if (config->time_based && total_runtime_sec > 0 &&
-            !atomic_load(&ramping)) {
+        if (config->time_based && total_runtime_sec > 0 && !atomic_load(&ramping)) {
             uint64_t elapsed_measure = now - measure_start_ns;
             if (elapsed_measure >= (uint64_t)total_runtime_sec * 1000000000ULL) {
                 atomic_store(&running, 0);
@@ -775,8 +766,14 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine,
     /* Final drain to ensure all completions are processed */
     auraio_drain(engine, 5000);
 
-    /* Now safe to destroy pools — all completions have been processed */
+    /* Free pre-allocated buffers, then destroy pools */
     for (int i = 0; i < num_threads; i++) {
+        for (int s = 0; s < tctx[i].pool.capacity; s++) {
+            if (tctx[i].pool.slots[s].buffer) {
+                auraio_buffer_free(engine, tctx[i].pool.slots[s].buffer, (size_t)config->bs);
+                tctx[i].pool.slots[s].buffer = NULL;
+            }
+        }
         io_ctx_pool_destroy(&tctx[i].pool);
     }
 

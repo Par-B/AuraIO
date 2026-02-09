@@ -73,6 +73,57 @@ To fully leverage this architecture:
 1.  **Pin Your Threads**: Use `pthread_setaffinity_np` in your worker threads. AuraIO routes I/O to per-core rings via `sched_getcpu()`. Pinning ensures stable core affinity, keeping ring data and CQE memory hot in L1/L2 cache.
 2.  **Use `O_DIRECT`**: This bypasses the kernel page cache, allowing AuraIO's adaptive controller to see the *true* device latency and tune accurately.
 3.  **Pre-register Memory**: For long-running applications, register your buffer pool at startup to shave off microseconds from every operation.
+4.  **Pre-allocate Buffers**: Call `auraio_buffer_alloc()` once per slot at startup and reuse the same buffers across I/O operations. Calling alloc/free on every I/O adds significant overhead — the buffer pool's thread-local cache is fast, but skipping it entirely is faster. For write workloads, overwrite the buffer content in place before each submission.
+
+    ```c
+    // At startup: pre-allocate one buffer per in-flight slot
+    void *bufs[DEPTH];
+    for (int i = 0; i < DEPTH; i++)
+        bufs[i] = auraio_buffer_alloc(engine, BUF_SIZE);
+
+    // Hot loop: reuse buffers, no alloc/free
+    void *buf = bufs[slot];
+    auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, offset, cb, data);
+
+    // At shutdown: free once
+    for (int i = 0; i < DEPTH; i++)
+        auraio_buffer_free(engine, bufs[i], BUF_SIZE);
+    ```
+
+5.  **Use `auraio_poll()` in Hot Loops**: Prefer the non-blocking `auraio_poll()` over `auraio_wait(engine, timeout_ms)` when your thread is actively submitting I/O. `auraio_wait()` with even a 1ms timeout can stall the pipeline on fast media (tmpfs, Optane, NVMe) where completions arrive in microseconds. Use `auraio_wait()` only when you need to block (drain loops, idle event loops).
+
+    ```c
+    // Hot loop: submit then poll without blocking
+    while (running) {
+        submit_batch(engine, ...);
+        auraio_poll(engine);  // non-blocking, processes whatever is ready
+    }
+
+    // Drain loop: blocking is fine here
+    while (inflight > 0)
+        auraio_wait(engine, 100);
+    ```
+
+6.  **Set `initial_in_flight` to Match Your Workload**: The AIMD controller defaults to starting at `queue_depth / 4` and ramping up over ~1 second. This is the right default for latency-sensitive production workloads, but it means the first second of I/O runs at reduced concurrency. If your workload has a short ramp time, needs to reach peak throughput immediately, or is a benchmark without latency constraints, set `initial_in_flight` to your target depth at engine creation.
+
+    ```c
+    auraio_options_t opts;
+    auraio_options_init(&opts);
+    opts.queue_depth = 512;
+
+    // Benchmark / throughput-only: start at full depth
+    opts.initial_in_flight = 512;
+
+    // Latency-sensitive with short ramp: start closer to expected steady-state
+    // (e.g., if AIMD typically converges to ~64, start there instead of 128)
+    opts.initial_in_flight = 64;
+
+    // Latency-targeting mode: start low, let AIMD probe up
+    opts.max_p99_latency_ms = 2.0;
+    opts.initial_in_flight = 4;
+    ```
+
+    **Rule of thumb**: if you know your target concurrency, set `initial_in_flight` to that value. If you don't, leave it at 0 (auto) and give the AIMD controller enough ramp time (~2-5 seconds) to converge.
 
 ## 6. High-Performance Deployment (64+ Cores, NVMe Arrays, High-Speed Networks)
 

@@ -173,6 +173,9 @@ int main(int argc, char *argv[]) {
         if (job->target_p99_ms > 0.0) {
             opts.max_p99_latency_ms = job->target_p99_ms;
             opts.initial_in_flight = 4; /* Start low, let AIMD probe up */
+        } else {
+            /* Benchmark mode: start at full depth, skip AIMD ramp-up */
+            opts.initial_in_flight = engine_depth;
         }
 
         auraio_engine_t *engine = auraio_create_with_options(&opts);
