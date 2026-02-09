@@ -33,13 +33,13 @@
  * Here we show a minimal but practical setup with:
  *   - Configurable output stream (stderr, a file, etc.)
  *   - Application name prefix
- *   - Minimum severity filter
+ *   - Maximum severity filter
  * --------------------------------------------------------------------------- */
 
 typedef struct {
     FILE *output; /* Where to write (stderr, fopen'd file, etc.) */
     const char *prefix; /* Application name prepended to each line */
-    int min_level; /* Maximum level to emit (lower = more severe) */
+    int max_level; /* Highest level to emit (lower number = more severe) */
 } log_context_t;
 
 static const char *level_name(int level) {
@@ -69,7 +69,7 @@ static void my_log_handler(int level, const char *msg, void *userdata) {
     log_context_t *ctx = userdata;
 
     /* Filter by severity (lower number = more severe) */
-    if (level > ctx->min_level) return;
+    if (level > ctx->max_level) return;
 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -87,7 +87,7 @@ static atomic_int io_completed = 0;
 static void on_complete(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
-    if (result < 0) fprintf(stderr, "  I/O error: %zd\n", result);
+    if (result < 0) auraio_log_emit(AURAIO_LOG_ERR, "I/O error: %zd", result);
     io_completed++;
 }
 
@@ -99,7 +99,7 @@ int main(void) {
     log_context_t log_ctx = {
         .output = stderr,
         .prefix = "myapp",
-        .min_level = AURAIO_LOG_DEBUG, /* Show all levels */
+        .max_level = AURAIO_LOG_DEBUG, /* Show all levels */
     };
 
     /* Install handler BEFORE creating the engine so we capture any

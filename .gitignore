@@ -49,6 +49,7 @@ examples/cpp/custom_config
 examples/cpp/vectored_io
 examples/cpp/registered_buffers
 examples/cpp/cancel_request
+examples/cpp/log_handler
 
 # BFFIO benchmark tool
 tools/BFFIO/BFFIO

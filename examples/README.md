@@ -142,6 +142,15 @@ cd examples/rust && cargo build --examples
 - Chunk-based reading/writing loop
 - **Usage**: `./C/file_copy <source> <destination>`
 
+### Diagnostics
+
+**[log_handler.c](C/log_handler.c)** - Custom log handler
+- Installs a custom log callback with `auraio_set_log_handler()`
+- Formats messages with local-time timestamps and severity tags
+- Uses `auraio_log_emit()` to emit application-level messages through the same pipeline
+- Shows `log_context_t` userdata pattern for configurable output, prefix, and severity filter
+- **When to use**: Integrating AuraIO diagnostics into your logging framework
+
 ### Write Operations
 
 **[write_modes.c](C/write_modes.c)** - Write performance comparison
@@ -219,6 +228,14 @@ cd examples/rust && cargo build --examples
 - Uses `auraio::buf()` wrapper for non-managed buffers
 - High-resolution clock for timing
 
+**[log_handler.cpp](cpp/log_handler.cpp)** - Custom log handler (C++)
+- Uses `auraio::set_log_handler()` with a lambda callback
+- `auraio::LogLevel` enum and `auraio::log_level_name()` for type-safe severity
+- `auraio::log_emit()` for application-level messages through the same pipeline
+- `std::chrono` timestamps with `std::put_time` formatting
+- RAII cleanup — engine destructor fires while handler is still installed
+- **When to use**: Integrating AuraIO diagnostics into your C++ logging framework
+
 **[coroutine_copy.cpp](cpp/coroutine_copy.cpp)** - C++20 coroutines
 - File copy using `co_await` syntax
 - `co_await engine.async_read()` and `co_await engine.async_write()`
@@ -290,6 +307,14 @@ cd examples/rust && cargo build --examples
 - Chunk-based reading/writing loop
 - Progress indicator updates
 
+**[log_handler.rs](rust/examples/log_handler.rs)** - Custom log handler (Rust)
+- Uses `auraio::set_log_handler()` with a closure callback
+- `LogLevel` enum with `Display` trait for severity formatting
+- `auraio::log_emit()` for application-level messages through the same pipeline
+- `SystemTime` timestamps for log output
+- Explicit `drop(engine)` before `clear_log_handler()` to capture shutdown diagnostics
+- **When to use**: Integrating AuraIO diagnostics into your Rust logging framework (tracing, log, etc.)
+
 **[async_copy.rs](rust/examples/async_copy.rs)** - Futures-based async copy
 - Uses `engine.async_read()`, `engine.async_write()`, `engine.async_fsync()` (return Futures)
 - Background poller thread
@@ -326,6 +351,7 @@ cd examples/rust && cargo build --examples
 | Cancellation | ✓ (cancel_request) | ✓ (cancel_request) | ✓ (cancel_request) | Full coverage ✅ |
 | Bulk concurrent I/O | ✓ (bulk_reader) | ✓ (bulk_reader) | ✓ (bulk_reader) | All languages covered |
 | Write operations | ✓ (write_modes) | ✓ (write_modes) | ✓ (write_modes) | All languages covered |
+| Log handler | ✓ (log_handler) | ✓ (log_handler) | ✓ (log_handler) | Full coverage |
 | File copy | ✓ (file_copy) | ✓ (coroutine_copy) | ✓ (file_copy, async_copy) | See language-specific notes below |
 | Coroutines/async-await | — | ✓ (coroutine_copy) | ✓ (async_copy) | Language-specific features |
 
@@ -384,6 +410,10 @@ All examples automatically benefit from recent performance optimizations in Aura
 **Building event-driven applications?**
 - See [bulk_reader.c](C/bulk_reader.c) for `auraio_run()` event loop pattern
 - Or integrate with existing event loops using `auraio_get_poll_fd()` + `auraio_poll()`
+
+**Need library diagnostics or custom logging?**
+- See [log_handler.c](C/log_handler.c) for installing a custom log handler
+- Use `auraio_log_emit()` to route your own messages through the same pipeline
 
 **Using modern C++ or Rust?**
 - See [coroutine_copy.cpp](cpp/coroutine_copy.cpp) for C++20 coroutines

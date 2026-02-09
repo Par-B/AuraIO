@@ -76,6 +76,7 @@ mod buffer;
 mod callback;
 mod engine;
 mod error;
+mod log;
 mod options;
 mod request;
 mod stats;
@@ -85,6 +86,7 @@ pub mod async_io;
 
 pub use buffer::{Buffer, BufferRef};
 pub use engine::{version, version_int, Engine};
+pub use log::{clear_log_handler, log_emit, set_log_handler, LogLevel};
 pub use error::{Error, Result};
 pub use options::{Options, RingSelect};
 pub use request::RequestHandle;

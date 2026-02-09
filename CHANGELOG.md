@@ -9,9 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Public `auraio_log_emit()` API and log level constants (`AURAIO_LOG_ERR` through `AURAIO_LOG_DEBUG`)
-- Log handler example (`examples/C/log_handler`) demonstrating custom stderr logging with timestamps
+- C++ log bindings (`core/include/auraio/log.hpp`) - `auraio::set_log_handler()`, `auraio::log_emit()`, `LogLevel` enum
+- Rust log bindings (`bindings/rust/auraio/src/log.rs`) - `set_log_handler()`, `log_emit()`, `LogLevel` enum with 10 unit tests
+- Log handler examples in all three languages:
+  - C example (`examples/C/log_handler.c`) with custom stderr logging, timestamps, and severity filtering
+  - C++ example (`examples/cpp/log_handler.cpp`) with lambda handler and `std::chrono` timestamps
+  - Rust example (`examples/rust/examples/log_handler.rs`) with closure handler and `SystemTime` timestamps
 - Syslog integration (`integrations/syslog/C/`) forwarding AuraIO logs to syslog(3)
 - Unit tests for `auraio_log_emit()` covering all levels, formatting, truncation, and no-handler case
+
+### Fixed
+- C `log_handler.c` example: renamed confusing `min_level` field to `max_level` for clarity
+- C `log_handler.c`: I/O errors now routed through `auraio_log_emit()` instead of raw `fprintf`
+- C++ `log_handler.cpp`: fixed fd leak in exception handlers by adding `close(fd)` to catch blocks
+- C++ `log_handler.cpp`: added `catch (const std::exception &e)` for comprehensive exception handling
+- C++ `log_handler.cpp`: removed unused `#include <cstring>`
+- Rust `log_handler.rs`: I/O errors now routed through `log_emit()` for consistency
 
 ## [0.2.0] - 2025-02-08
 

@@ -49,6 +49,7 @@
 // C++ bindings (order matters for dependencies)
 #include <auraio/fwd.hpp>
 #include <auraio/error.hpp>
+#include <auraio/log.hpp>
 #include <auraio/options.hpp>
 #include <auraio/request.hpp>
 #include <auraio/stats.hpp>

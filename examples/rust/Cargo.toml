@@ -49,3 +49,7 @@ path = "examples/registered_buffers.rs"
 [[example]]
 name = "cancel_request"
 path = "examples/cancel_request.rs"
+
+[[example]]
+name = "log_handler"
+path = "examples/log_handler.rs"
