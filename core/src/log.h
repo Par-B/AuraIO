@@ -4,18 +4,16 @@
  *
  * Provides a user-settable log callback so the library never writes
  * directly to stderr.  Default handler is NULL (silent).
+ *
+ * Log level constants (AURAIO_LOG_ERR, etc.) are defined in the
+ * public header <auraio.h>.
  */
 
 #ifndef AURAIO_LOG_H
 #define AURAIO_LOG_H
 
+#include "../include/auraio.h"
 #include <stdarg.h>
-
-/** Log severity levels (match syslog values). */
-typedef enum {
-    AURAIO_LOG_ERR = 3,
-    AURAIO_LOG_WARN = 4,
-} auraio_log_level_t;
 
 /**
  * Emit a log message through the registered handler (if any).

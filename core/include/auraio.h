@@ -992,10 +992,17 @@ AURAIO_API const char *auraio_version(void);
  * ============================================================================
  */
 
+/** Log severity levels (match syslog priorities). */
+#define AURAIO_LOG_ERR 3    /**< Error (matches syslog LOG_ERR) */
+#define AURAIO_LOG_WARN 4   /**< Warning (matches syslog LOG_WARNING) */
+#define AURAIO_LOG_NOTICE 5 /**< Notice (matches syslog LOG_NOTICE) */
+#define AURAIO_LOG_INFO 6   /**< Informational (matches syslog LOG_INFO) */
+#define AURAIO_LOG_DEBUG 7  /**< Debug (matches syslog LOG_DEBUG) */
+
 /**
  * Log callback type
  *
- * @param level   Severity (AURAIO_LOG_ERR=3, AURAIO_LOG_WARN=4; matches syslog)
+ * @param level   Severity (AURAIO_LOG_ERR .. AURAIO_LOG_DEBUG; matches syslog)
  * @param msg     Formatted message string (NUL-terminated)
  * @param userdata Opaque pointer passed to auraio_set_log_handler()
  */
@@ -1011,6 +1018,19 @@ typedef void (*auraio_log_fn)(int level, const char *msg, void *userdata);
  * @param userdata Opaque pointer forwarded to the callback
  */
 AURAIO_API void auraio_set_log_handler(auraio_log_fn handler, void *userdata);
+
+/**
+ * Emit a log message through the registered handler
+ *
+ * No-op when no handler is registered.  Thread-safe.
+ * Messages are formatted into a 256-byte internal buffer (truncated if longer).
+ *
+ * @param level  Severity (AURAIO_LOG_ERR .. AURAIO_LOG_DEBUG)
+ * @param fmt    printf-style format string
+ * @param ...    Format arguments
+ */
+AURAIO_API void auraio_log_emit(int level, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 
 /**
  * Get library version as integer

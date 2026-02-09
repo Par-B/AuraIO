@@ -161,6 +161,10 @@ integrations: core
 		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/auraio_otel.c integrations/opentelemetry/C/auraio_otel_push.c \
 		-o integrations/opentelemetry/C/otel_example \
 		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
+	$(CC) $(CFLAGS) -Iintegrations/syslog/C \
+		integrations/syslog/C/example.c integrations/syslog/C/auraio_syslog.c \
+		-o integrations/syslog/C/syslog_example \
+		-Lcore/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../core/lib'
 
 # Build BFFIO benchmark tool
 BFFIO: core
@@ -259,6 +263,7 @@ install: core
 	install -m 644 integrations/prometheus/C/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
 	install -m 644 integrations/opentelemetry/C/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
 	install -m 644 integrations/opentelemetry/C/auraio_otel_push.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
+	install -m 644 integrations/syslog/C/auraio_syslog.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall
@@ -282,6 +287,7 @@ clean: rust-clean
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	rm -f integrations/prometheus/C/prometheus_example
 	rm -f integrations/opentelemetry/C/otel_example
+	rm -f integrations/syslog/C/syslog_example
 
 # Debug build
 debug: CFLAGS += -g -O0 -DDEBUG
@@ -591,7 +597,7 @@ help:
 	@echo "  make BFFIO-baseline Run BFFIO vs FIO comparison"
 	@echo ""
 	@echo "Integrations:"
-	@echo "  make integrations   Build metrics integrations (Prometheus + OpenTelemetry)"
+	@echo "  make integrations   Build integrations (Prometheus + OpenTelemetry + Syslog)"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"

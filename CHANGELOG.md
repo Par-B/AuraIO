@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Public `auraio_log_emit()` API and log level constants (`AURAIO_LOG_ERR` through `AURAIO_LOG_DEBUG`)
+- Log handler example (`examples/C/log_handler`) demonstrating custom stderr logging with timestamps
+- Syslog integration (`integrations/syslog/C/`) forwarding AuraIO logs to syslog(3)
+- Unit tests for `auraio_log_emit()` covering all levels, formatting, truncation, and no-handler case
+
 ## [0.2.0] - 2025-02-08
 
 ### Changed

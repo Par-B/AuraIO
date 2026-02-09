@@ -17,7 +17,8 @@ void auraio_set_log_handler(auraio_log_fn handler, void *userdata) {
     atomic_store_explicit(&log_handler, handler, memory_order_seq_cst);
 }
 
-void auraio_log(int level, const char *fmt, ...) {
+/* Shared helper: format + dispatch to handler (if registered). */
+static void log_dispatch(int level, const char *fmt, va_list ap) {
     auraio_log_fn fn = atomic_load_explicit(&log_handler, memory_order_seq_cst);
     if (!fn) {
         return;
@@ -29,10 +30,23 @@ void auraio_log(int level, const char *fmt, ...) {
     void *ud = atomic_load_explicit(&log_userdata, memory_order_seq_cst);
 
     char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
 
     fn(level, buf, ud);
+}
+
+/* Internal entry point (used by library code). */
+void auraio_log(int level, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_dispatch(level, fmt, ap);
+    va_end(ap);
+}
+
+/* Public entry point (AURAIO_API visibility). */
+void auraio_log_emit(int level, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    log_dispatch(level, fmt, ap);
+    va_end(ap);
 }

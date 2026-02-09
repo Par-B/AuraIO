@@ -37,6 +37,7 @@ examples/C/custom_config
 examples/C/vectored_io
 examples/C/registered_buffers
 examples/C/file_copy
+examples/C/log_handler
 
 # Example binaries (C++)
 examples/cpp/quickstart
@@ -58,6 +59,7 @@ tools/bin/
 # Integration binaries
 integrations/prometheus/C/prometheus_example
 integrations/opentelemetry/C/otel_example
+integrations/syslog/C/syslog_example
 
 # Claude Code
 .claude/

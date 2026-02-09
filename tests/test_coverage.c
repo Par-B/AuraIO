@@ -202,6 +202,71 @@ TEST(log_emit_truncates_long_message) {
     auraio_set_log_handler(NULL, NULL);
 }
 
+/* --- auraio_log_emit() public API tests ---------------------------------- */
+
+TEST(log_emit_public_no_handler) {
+    atomic_store(&log_cb_count, 0);
+    auraio_set_log_handler(NULL, NULL);
+
+    /* Public emit should be a no-op when no handler is installed. */
+    auraio_log_emit(AURAIO_LOG_INFO, "nobody listening %d", 99);
+    assert(atomic_load(&log_cb_count) == 0);
+}
+
+TEST(log_emit_public_formatted) {
+    int sentinel = 7777;
+    atomic_store(&log_cb_count, 0);
+    last_log_level = 0;
+    last_log_msg[0] = '\0';
+    last_log_ud = NULL;
+
+    auraio_set_log_handler(test_log_handler, &sentinel);
+    auraio_log_emit(AURAIO_LOG_NOTICE, "hello %s %d", "world", 5);
+
+    assert(atomic_load(&log_cb_count) == 1);
+    assert(last_log_level == AURAIO_LOG_NOTICE);
+    assert(strcmp(last_log_msg, "hello world 5") == 0);
+    assert(last_log_ud == &sentinel);
+
+    auraio_set_log_handler(NULL, NULL);
+}
+
+TEST(log_emit_public_all_levels) {
+    int sentinel = 0;
+    auraio_set_log_handler(test_log_handler, &sentinel);
+
+    /* Verify each public log level constant dispatches correctly. */
+    static const int levels[] = { AURAIO_LOG_ERR, AURAIO_LOG_WARN, AURAIO_LOG_NOTICE,
+                                  AURAIO_LOG_INFO, AURAIO_LOG_DEBUG };
+    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
+        atomic_store(&log_cb_count, 0);
+        last_log_level = -1;
+        auraio_log_emit(levels[i], "level %d", levels[i]);
+        assert(atomic_load(&log_cb_count) == 1);
+        assert(last_log_level == levels[i]);
+    }
+
+    auraio_set_log_handler(NULL, NULL);
+}
+
+TEST(log_emit_public_truncates) {
+    int sentinel = 0;
+    char big[1024];
+    memset(big, 'Y', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+
+    atomic_store(&log_cb_count, 0);
+    last_log_msg[0] = '\0';
+    auraio_set_log_handler(test_log_handler, &sentinel);
+    auraio_log_emit(AURAIO_LOG_DEBUG, "%s", big);
+
+    assert(atomic_load(&log_cb_count) == 1);
+    assert(last_log_level == AURAIO_LOG_DEBUG);
+    assert(strlen(last_log_msg) == 255);
+
+    auraio_set_log_handler(NULL, NULL);
+}
+
 TEST(adaptive_inline_getters_direct) {
     adaptive_controller_t ctrl;
     int rc = adaptive_init(&ctrl, 128, 16);
@@ -2033,6 +2098,10 @@ int main(void) {
     RUN_TEST(log_emit_no_handler);
     RUN_TEST(log_emit_formatted_message);
     RUN_TEST(log_emit_truncates_long_message);
+    RUN_TEST(log_emit_public_no_handler);
+    RUN_TEST(log_emit_public_formatted);
+    RUN_TEST(log_emit_public_all_levels);
+    RUN_TEST(log_emit_public_truncates);
     RUN_TEST(adaptive_inline_getters_direct);
 
     /* Request introspection */
