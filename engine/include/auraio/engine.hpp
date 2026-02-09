@@ -282,7 +282,8 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        auraio_request_t *req = auraio_fsync(handle_, fd, auraio_detail_callback_trampoline, ctx);
+        auraio_request_t *req =
+            auraio_fsync(handle_, fd, AURAIO_FSYNC_DEFAULT, auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -308,12 +309,12 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        auraio_request_t *req = auraio_fsync_ex(handle_, fd, AURAIO_FSYNC_DATASYNC,
-                                                auraio_detail_callback_trampoline, ctx);
+        auraio_request_t *req = auraio_fsync(handle_, fd, AURAIO_FSYNC_DATASYNC,
+                                             auraio_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
-            throw Error(errno, "auraio_fsync_ex");
+            throw Error(errno, "auraio_fsync");
         }
 
         return Request(req);

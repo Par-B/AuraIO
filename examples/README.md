@@ -137,7 +137,7 @@ cd examples/rust && cargo build --examples
 **[file_copy.c](C/file_copy.c)** - Synchronous file copy
 - Read-then-write pattern for file copy
 - Uses blocking async operations with completion polling
-- `auraio_fsync()` for data durability
+- `auraio_fsync()` with `AURAIO_FSYNC_DEFAULT` for data durability
 - Progress indicator every 10MB
 - Chunk-based reading/writing loop
 - **Usage**: `./C/file_copy <source> <destination>`

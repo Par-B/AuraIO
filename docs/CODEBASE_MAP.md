@@ -257,7 +257,7 @@ AuraIO/
 
 **Key Functions**:
 - Lifecycle: `auraio_create()`, `auraio_create_with_options()`, `auraio_destroy()`
-- I/O: `auraio_read()`, `auraio_write()`, `auraio_readv()`, `auraio_writev()`, `auraio_fsync()`, `auraio_fsync_ex()`
+- I/O: `auraio_read()`, `auraio_write()`, `auraio_readv()`, `auraio_writev()`, `auraio_fsync()`
 - Event loop: `auraio_poll()`, `auraio_wait()`, `auraio_run()`, `auraio_stop()`, `auraio_drain()`
 - Buffers: `auraio_buffer_alloc()`, `auraio_buffer_free()`
 - Registered I/O: `auraio_register_buffers()`, `auraio_unregister_buffers()`, `auraio_request_unregister_buffers()`, `auraio_register_files()`, `auraio_unregister_files()`, `auraio_request_unregister_files()`, `auraio_update_file()`

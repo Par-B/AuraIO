@@ -503,7 +503,7 @@ TEST(fsync_basic) {
     assert(engine);
 
     cb_called = 0;
-    auraio_request_t *req = auraio_fsync(engine, test_fd, basic_cb, NULL);
+    auraio_request_t *req = auraio_fsync(engine, test_fd, AURAIO_FSYNC_DEFAULT, basic_cb, NULL);
     assert(req);
     auraio_wait(engine, 1000);
     assert(cb_called == 1);
@@ -519,7 +519,7 @@ TEST(fsync_datasync) {
     assert(engine);
 
     cb_called = 0;
-    auraio_request_t *req = auraio_fsync_ex(engine, test_fd, AURAIO_FSYNC_DATASYNC, basic_cb, NULL);
+    auraio_request_t *req = auraio_fsync(engine, test_fd, AURAIO_FSYNC_DATASYNC, basic_cb, NULL);
     assert(req);
     auraio_wait(engine, 1000);
     assert(cb_called == 1);
@@ -535,7 +535,7 @@ TEST(fsync_null_callback) {
     assert(engine);
 
     /* NULL callback is valid (fire-and-forget) */
-    auraio_request_t *req = auraio_fsync(engine, test_fd, NULL, NULL);
+    auraio_request_t *req = auraio_fsync(engine, test_fd, AURAIO_FSYNC_DEFAULT, NULL, NULL);
     assert(req);
     auraio_drain(engine, 1000);
 
@@ -544,14 +544,14 @@ TEST(fsync_null_callback) {
 }
 
 TEST(fsync_null_args) {
-    assert(auraio_fsync(NULL, 0, NULL, NULL) == NULL);
+    assert(auraio_fsync(NULL, 0, AURAIO_FSYNC_DEFAULT, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     auraio_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     /* Negative fd */
-    assert(auraio_fsync(engine, -1, NULL, NULL) == NULL);
+    assert(auraio_fsync(engine, -1, AURAIO_FSYNC_DEFAULT, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     auraio_destroy(engine);

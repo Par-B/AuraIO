@@ -746,10 +746,10 @@ TEST(registered_buffers_request_deferred_unregister) {
     cb_ctx.first_ring = -1;
     cb_ctx.second_ring = -1;
 
-    auraio_request_t *r1 =
-        auraio_read(engine, pipefd[0], auraio_buf_fixed(0, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
-    auraio_request_t *r2 =
-        auraio_read(engine, pipefd[0], auraio_buf_fixed(1, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
+    auraio_request_t *r1 = auraio_read(engine, pipefd[0], auraio_buf_fixed(0, 0), 1, -1,
+                                       fixed_unreg_callback, &cb_ctx);
+    auraio_request_t *r2 = auraio_read(engine, pipefd[0], auraio_buf_fixed(1, 0), 1, -1,
+                                       fixed_unreg_callback, &cb_ctx);
     assert(r1 != NULL);
     assert(r2 != NULL);
 
@@ -1021,9 +1021,8 @@ TEST(registered_files_callback_request_unregister) {
     callback_called = 0;
     callback_result = 0;
 
-    auraio_request_t *req =
-        auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, request_unregister_files_in_callback,
-                    &cb_ctx);
+    auraio_request_t *req = auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0,
+                                        request_unregister_files_in_callback, &cb_ctx);
     assert(req != NULL);
 
     ret = auraio_wait(engine, 1000);
@@ -1149,26 +1148,18 @@ TEST(auraio_fsync_both_modes) {
 
     callback_called = 0;
 
-    /* Test regular fsync */
-    auraio_request_t *req = auraio_fsync(engine, test_fd, test_callback, NULL);
+    /* Test fsync with DEFAULT flag */
+    auraio_request_t *req =
+        auraio_fsync(engine, test_fd, AURAIO_FSYNC_DEFAULT, test_callback, NULL);
     assert(req != NULL);
 
     auraio_wait(engine, 1000);
     assert(callback_called == 1);
     assert(callback_result == 0);
 
-    /* Test fsync_ex with DATASYNC flag */
+    /* Test fsync with DATASYNC flag */
     callback_called = 0;
-    req = auraio_fsync_ex(engine, test_fd, AURAIO_FSYNC_DATASYNC, test_callback, NULL);
-    assert(req != NULL);
-
-    auraio_wait(engine, 1000);
-    assert(callback_called == 1);
-    assert(callback_result == 0);
-
-    /* Test fsync_ex with DEFAULT flag (same as regular fsync) */
-    callback_called = 0;
-    req = auraio_fsync_ex(engine, test_fd, AURAIO_FSYNC_DEFAULT, test_callback, NULL);
+    req = auraio_fsync(engine, test_fd, AURAIO_FSYNC_DATASYNC, test_callback, NULL);
     assert(req != NULL);
 
     auraio_wait(engine, 1000);
@@ -1285,7 +1276,7 @@ TEST(error_null_engine) {
 
     /* auraio_fsync with NULL engine */
     errno = 0;
-    req = auraio_fsync(NULL, 0, NULL, NULL);
+    req = auraio_fsync(NULL, 0, AURAIO_FSYNC_DEFAULT, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -1324,7 +1315,7 @@ TEST(error_invalid_fd) {
 
     /* auraio_fsync with invalid fd */
     errno = 0;
-    req = auraio_fsync(engine, -1, NULL, NULL);
+    req = auraio_fsync(engine, -1, AURAIO_FSYNC_DEFAULT, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 

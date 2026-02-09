@@ -969,13 +969,8 @@ auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf
     }
 }
 
-auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd, auraio_callback_t callback,
-                               void *user_data) {
-    return auraio_fsync_ex(engine, fd, AURAIO_FSYNC_DEFAULT, callback, user_data);
-}
-
-auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd, auraio_fsync_flags_t flags,
-                                  auraio_callback_t callback, void *user_data) {
+auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd, auraio_fsync_flags_t flags,
+                               auraio_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;

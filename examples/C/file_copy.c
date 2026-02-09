@@ -175,7 +175,8 @@ int main(int argc, char *argv[]) {
     if (total_copied == (size_t)file_size) {
         printf("\nFlushing to disk...\n");
         io_state_t fsync_state = { .done = 0, .result = 0 };
-        auraio_request_t *req = auraio_fsync(engine, dst_fd, on_io_complete, &fsync_state);
+        auraio_request_t *req =
+            auraio_fsync(engine, dst_fd, AURAIO_FSYNC_DEFAULT, on_io_complete, &fsync_state);
         if (!req) {
             fprintf(stderr, "fsync submission failed: %s\n", strerror(errno));
         } else {

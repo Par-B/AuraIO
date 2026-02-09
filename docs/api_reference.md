@@ -403,37 +403,17 @@ Submit an async gather write from multiple buffers. Same parameters as `auraio_r
 
 ```c
 auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
+                               auraio_fsync_flags_t flags,
                                auraio_callback_t callback, void *user_data);
 ```
 
-Submit an async fsync (flushes all previous writes to storage).
+Submit an async fsync. Pass `AURAIO_FSYNC_DEFAULT` for a full fsync (metadata + data) or `AURAIO_FSYNC_DATASYNC` for fdatasync behavior (data only, skip metadata if possible).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `auraio_engine_t *` | Engine handle |
 | `fd` | `int` | Open file descriptor |
-| `callback` | `auraio_callback_t` | Completion callback (may be `NULL`) |
-| `user_data` | `void *` | Passed to callback |
-
-**Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOMEM`
-
----
-
-##### `auraio_fsync_ex`
-
-```c
-auraio_request_t *auraio_fsync_ex(auraio_engine_t *engine, int fd,
-                                  auraio_fsync_flags_t flags,
-                                  auraio_callback_t callback, void *user_data);
-```
-
-Submit an async fsync with flags. Use `AURAIO_FSYNC_DATASYNC` for fdatasync behavior.
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
-| `fd` | `int` | Open file descriptor |
-| `flags` | `auraio_fsync_flags_t` | `AURAIO_FSYNC_DEFAULT` or `AURAIO_FSYNC_DATASYNC` |
+| `flags` | `auraio_fsync_flags_t` | `AURAIO_FSYNC_DEFAULT` (0) or `AURAIO_FSYNC_DATASYNC` (1) |
 | `callback` | `auraio_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 

@@ -585,8 +585,8 @@ static void *worker_thread(void *arg) {
 
                         atomic_fetch_add(&stats->inflight, 1);
 
-                        auraio_request_t *fsync_req =
-                            auraio_fsync(engine, fd, fsync_callback, fsync_ctx);
+                        auraio_request_t *fsync_req = auraio_fsync(engine, fd, AURAIO_FSYNC_DEFAULT,
+                                                                   fsync_callback, fsync_ctx);
                         if (!fsync_req) {
                             atomic_fetch_sub(&stats->inflight, 1);
                             io_ctx_pool_put(&tctx->pool, fsync_ctx);

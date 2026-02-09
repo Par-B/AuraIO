@@ -861,7 +861,8 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 fsyncs++;
 
-                if (auraio_fsync(engine, write_fds[fd_idx], mixed_callback, ctx) == NULL) {
+                if (auraio_fsync(engine, write_fds[fd_idx], AURAIO_FSYNC_DEFAULT, mixed_callback,
+                                 ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     free(ctx);
                     fsyncs--;

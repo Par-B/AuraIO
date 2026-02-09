@@ -377,6 +377,7 @@ impl Engine {
             auraio_sys::auraio_fsync(
                 self.inner.raw(),
                 fd,
+                auraio_sys::auraio_fsync_flags_t_AURAIO_FSYNC_DEFAULT,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -404,7 +405,7 @@ impl Engine {
         let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
 
         let req = unsafe {
-            auraio_sys::auraio_fsync_ex(
+            auraio_sys::auraio_fsync(
                 self.inner.raw(),
                 fd,
                 auraio_sys::auraio_fsync_flags_t_AURAIO_FSYNC_DATASYNC,

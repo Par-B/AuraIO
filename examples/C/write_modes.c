@@ -147,7 +147,8 @@ int run_write_test(const char *filename, int use_direct) {
     /* Fsync to ensure data is on disk (use async auraio_fsync) */
     printf("Fsyncing...\n");
     write_state_t fsync_state = { .completed = 0, .total = 1, .start_ns = 0, .end_ns = 0 };
-    auraio_request_t *fsync_req = auraio_fsync(engine, fd, on_write_done, &fsync_state);
+    auraio_request_t *fsync_req =
+        auraio_fsync(engine, fd, AURAIO_FSYNC_DEFAULT, on_write_done, &fsync_state);
     if (fsync_req) {
         while (fsync_state.completed < fsync_state.total) {
             auraio_wait(engine, 100);
