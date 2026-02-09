@@ -36,6 +36,7 @@ examples/C/cancel_request
 examples/C/custom_config
 examples/C/vectored_io
 examples/C/registered_buffers
+examples/C/file_copy
 
 # Example binaries (C++)
 examples/cpp/quickstart
@@ -46,6 +47,7 @@ examples/cpp/coroutine_copy
 examples/cpp/custom_config
 examples/cpp/vectored_io
 examples/cpp/registered_buffers
+examples/cpp/cancel_request
 
 # BFFIO benchmark tool
 tools/BFFIO/BFFIO

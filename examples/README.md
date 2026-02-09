@@ -134,6 +134,14 @@ cd examples/rust && cargo build --examples
 - Callback receives `-ECANCELED` on successful cancellation
 - **Note**: Cancellation may not succeed if operation already completed
 
+**[file_copy.c](C/file_copy.c)** - Synchronous file copy
+- Read-then-write pattern for file copy
+- Uses blocking async operations with completion polling
+- `auraio_fsync()` for data durability
+- Progress indicator every 10MB
+- Chunk-based reading/writing loop
+- **Usage**: `./C/file_copy <source> <destination>`
+
 ### Write Operations
 
 **[write_modes.c](C/write_modes.c)** - Write performance comparison
@@ -191,6 +199,13 @@ cd examples/rust && cargo build --examples
   - ✓ High-frequency small I/O (< 16KB)
   - ✓ Zero-copy is critical
   - ✗ One-off operations or dynamic buffer count
+
+**[cancel_request.cpp](cpp/cancel_request.cpp)** - Operation cancellation (C++)
+- Demonstrates `engine.cancel()` API with RAII patterns
+- Uses `std::atomic<bool>` for completion tracking
+- Lambda callback with reference capture
+- Best-effort cancellation semantics
+- **Note**: Cancellation may not succeed if operation already completed
 
 **[bulk_reader.cpp](cpp/bulk_reader.cpp)** - Concurrent bulk read
 - Uses `std::atomic<>` for thread-safe counters
@@ -261,6 +276,14 @@ cd examples/rust && cargo build --examples
   - ✓ Zero-copy is critical
   - ✗ One-off operations or dynamic buffer count
 
+**[cancel_request.rs](rust/examples/cancel_request.rs)** - Operation cancellation (Rust)
+- Demonstrates `engine.cancel()` API with Arc for shared ownership
+- Uses `Arc<AtomicBool>` and `Arc<AtomicIsize>` for completion tracking
+- Closure with move semantics for callback
+- Result<T> error handling
+- Best-effort cancellation semantics
+- **Note**: Cancellation may not succeed if operation already completed
+
 **[file_copy.rs](rust/examples/file_copy.rs)** - Sequential file copy
 - Read-then-write pattern for file copy
 - `engine.fsync()` operation
@@ -289,24 +312,43 @@ cd examples/rust && cargo build --examples
 
 ## Feature Example Matrix
 
-**Note**: All core library features are available in C, C++, and Rust through their respective bindings. The matrix below shows which features have **example code** in each language, not feature availability. Features marked "—" are available but lack example code.
+**Note**: All core library features are available in C, C++, and Rust through their respective bindings. The matrix below shows which features have **example code** in each language, not feature availability.
 
 | Feature | C Examples | C++ Examples | Rust Examples | Notes |
 |---------|-----------|--------------|---------------|-------|
 | Basic async I/O | ✓ (quickstart, simple_read) | ✓ (quickstart, simple_read) | ✓ (quickstart, simple_read) | Core functionality |
 | Statistics API | ✓ (simple_read) | ✓ (simple_read) | ✓ (simple_read) | Available in all |
-| Histogram monitoring | ✓ (simple_read) | — | — | **TODO**: Add C++/Rust examples |
-| Buffer pool stats | ✓ (simple_read) | — | — | **TODO**: Add C++/Rust examples |
+| Histogram monitoring | ✓ (simple_read) | ✓ (simple_read) | ✓ (simple_read) | Full coverage ✅ |
+| Buffer pool stats | ✓ (simple_read) | ✓ (simple_read) | ✓ (simple_read) | Full coverage ✅ |
 | Custom configuration | ✓ (custom_config) | ✓ (custom_config) | ✓ (custom_config) | All languages covered |
 | Vectored I/O | ✓ (vectored_io) | ✓ (vectored_io) | ✓ (vectored_io) | All languages covered |
 | Registered buffers | ✓ (registered_buffers) | ✓ (registered_buffers) | ✓ (registered_buffers) | All languages covered |
-| Cancellation | ✓ (cancel_request) | — | — | Available, needs examples |
+| Cancellation | ✓ (cancel_request) | ✓ (cancel_request) | ✓ (cancel_request) | Full coverage ✅ |
 | Bulk concurrent I/O | ✓ (bulk_reader) | ✓ (bulk_reader) | ✓ (bulk_reader) | All languages covered |
 | Write operations | ✓ (write_modes) | ✓ (write_modes) | ✓ (write_modes) | All languages covered |
-| File copy | — | — | ✓ (file_copy) | Rust-specific pattern |
+| File copy | ✓ (file_copy) | ✓ (coroutine_copy) | ✓ (file_copy, async_copy) | See language-specific notes below |
 | Coroutines/async-await | — | ✓ (coroutine_copy) | ✓ (async_copy) | Language-specific features |
 
-**Well covered**: All three new features (custom configuration, vectored I/O, registered buffers) now have examples in C, C++, and Rust!
+**Complete parity achieved**: All portable features now have examples in C, C++, and Rust!
+
+### Language-Specific File Copy Adaptations
+
+The **file copy** examples demonstrate each language's idiomatic approach to async I/O:
+
+- **C** ([file_copy.c](C/file_copy.c)): Synchronous blocking approach with completion polling
+  - Uses `auraio_wait()` to block until each operation completes
+  - Sequential read-then-write pattern
+  - Best fit for C which lacks native async primitives
+
+- **C++** ([coroutine_copy.cpp](cpp/coroutine_copy.cpp)): C++20 coroutines with `co_await`
+  - Uses `co_await engine.async_read()` and `co_await engine.async_write()`
+  - Leverages C++20 coroutine support
+  - Shows modern async C++ patterns
+
+- **Rust** ([file_copy.rs](rust/examples/file_copy.rs), [async_copy.rs](rust/examples/async_copy.rs)): Futures and async/await
+  - `file_copy.rs`: Callback-based approach similar to C
+  - `async_copy.rs`: Rust futures with custom executor
+  - Demonstrates both patterns available in Rust
 
 ---
 

@@ -15,7 +15,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include "auraio.h"
+#include <auraio.h>
 
 #define READ_SIZE (1024 * 1024) /* 1MB */
 
@@ -163,10 +163,14 @@ int main(int argc, char **argv) {
                 if (p999 == -1 && cumulative >= p999_threshold) p999 = i;
             }
 
-            printf("  P50 latency:   %.2f ms\n", (p50 * hist.bucket_width_us) / 1000.0);
-            printf("  P90 latency:   %.2f ms\n", (p90 * hist.bucket_width_us) / 1000.0);
-            printf("  P99 latency:   %.2f ms\n", (p99 * hist.bucket_width_us) / 1000.0);
-            printf("  P99.9 latency: %.2f ms\n", (p999 * hist.bucket_width_us) / 1000.0);
+            if (p50 >= 0)
+                printf("  P50 latency:   %.2f ms\n", (p50 * hist.bucket_width_us) / 1000.0);
+            if (p90 >= 0)
+                printf("  P90 latency:   %.2f ms\n", (p90 * hist.bucket_width_us) / 1000.0);
+            if (p99 >= 0)
+                printf("  P99 latency:   %.2f ms\n", (p99 * hist.bucket_width_us) / 1000.0);
+            if (p999 >= 0)
+                printf("  P99.9 latency: %.2f ms\n", (p999 * hist.bucket_width_us) / 1000.0);
             if (hist.overflow > 0) {
                 printf("  Overflow:      %u samples (> %d μs)\n", hist.overflow,
                        hist.max_tracked_us);

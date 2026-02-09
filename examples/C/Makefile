@@ -34,7 +34,7 @@ endif
 
 # All C examples
 EXAMPLES = quickstart simple_read bulk_reader write_modes cancel_request \
-           custom_config vectored_io registered_buffers
+           custom_config vectored_io registered_buffers file_copy
 
 all: $(EXAMPLES)
 

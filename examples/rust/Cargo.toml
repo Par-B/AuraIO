@@ -45,3 +45,7 @@ path = "examples/vectored_io.rs"
 [[example]]
 name = "registered_buffers"
 path = "examples/registered_buffers.rs"
+
+[[example]]
+name = "cancel_request"
+path = "examples/cancel_request.rs"

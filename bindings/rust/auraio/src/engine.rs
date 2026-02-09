@@ -659,6 +659,56 @@ impl Engine {
         unsafe { auraio_sys::auraio_get_stats(self.inner.raw(), &mut inner) };
         Stats::new(inner)
     }
+
+    /// Get number of rings in the engine
+    pub fn ring_count(&self) -> i32 {
+        unsafe { auraio_sys::auraio_get_ring_count(self.inner.raw()) }
+    }
+
+    /// Get statistics for a specific ring
+    ///
+    /// # Arguments
+    ///
+    /// * `ring_idx` - Ring index (0 to ring_count()-1)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(RingStats)` on success, `Err` if ring_idx is invalid
+    pub fn ring_stats(&self, ring_idx: i32) -> Result<crate::stats::RingStats> {
+        let mut inner: auraio_sys::auraio_ring_stats_t = unsafe { std::mem::zeroed() };
+        let ret = unsafe { auraio_sys::auraio_get_ring_stats(self.inner.raw(), ring_idx, &mut inner) };
+        if ret == 0 {
+            Ok(crate::stats::RingStats::new(inner))
+        } else {
+            Err(Error::InvalidArgument("Invalid ring index"))
+        }
+    }
+
+    /// Get latency histogram for a specific ring
+    ///
+    /// # Arguments
+    ///
+    /// * `ring_idx` - Ring index (0 to ring_count()-1)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Histogram)` on success, `Err` if ring_idx is invalid
+    pub fn histogram(&self, ring_idx: i32) -> Result<crate::stats::Histogram> {
+        let mut inner: auraio_sys::auraio_histogram_t = unsafe { std::mem::zeroed() };
+        let ret = unsafe { auraio_sys::auraio_get_histogram(self.inner.raw(), ring_idx, &mut inner) };
+        if ret == 0 {
+            Ok(crate::stats::Histogram::new(inner))
+        } else {
+            Err(Error::InvalidArgument("Invalid ring index"))
+        }
+    }
+
+    /// Get buffer pool statistics
+    pub fn buffer_stats(&self) -> crate::stats::BufferStats {
+        let mut inner: auraio_sys::auraio_buffer_stats_t = unsafe { std::mem::zeroed() };
+        unsafe { auraio_sys::auraio_get_buffer_stats(self.inner.raw(), &mut inner) };
+        crate::stats::BufferStats::new(inner)
+    }
 }
 
 /// Get the library version string

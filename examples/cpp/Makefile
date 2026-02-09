@@ -34,7 +34,7 @@ endif
 
 # All C++ examples
 EXAMPLES = quickstart simple_read bulk_reader write_modes coroutine_copy \
-           custom_config vectored_io registered_buffers
+           custom_config vectored_io registered_buffers cancel_request
 
 all: $(EXAMPLES)
 

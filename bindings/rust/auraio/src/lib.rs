@@ -88,7 +88,7 @@ pub use engine::{version, version_int, Engine};
 pub use error::{Error, Result};
 pub use options::{Options, RingSelect};
 pub use request::RequestHandle;
-pub use stats::Stats;
+pub use stats::{BufferStats, Histogram, RingStats, Stats};
 
 #[cfg(feature = "async")]
 pub use async_io::{AsyncEngine, IoFuture};
