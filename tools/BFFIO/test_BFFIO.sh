@@ -13,7 +13,7 @@ set -euo pipefail
 # --------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BFFIO="$SCRIPT_DIR/BFFIO"
+BFFIO="${BIN:-$SCRIPT_DIR/../bin/BFFIO}"
 TEST_DIR="/tmp/BFFIO_test_$$"
 PASS=0
 FAIL=0

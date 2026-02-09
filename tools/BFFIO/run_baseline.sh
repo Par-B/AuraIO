@@ -23,7 +23,7 @@ ITERATIONS=1
 KEEP=0
 TEST_DIR="/tmp/BFFIO_baseline_$$"
 RESULTS_DIR="$SCRIPT_DIR/baseline_results"
-BFFIO="$SCRIPT_DIR/BFFIO"
+BFFIO="${BIN:-$SCRIPT_DIR/../bin/BFFIO}"
 
 # ─── Argument parsing ──────────────────────────────────────────────────────
 

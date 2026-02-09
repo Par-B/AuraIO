@@ -13,12 +13,13 @@ LDFLAGS = -lpthread -luring -lm
 
 SRC = main.c job_parser.c workload.c stats.c output.c
 OBJ = $(SRC:.c=.o)
-BIN = BFFIO
+BIN = ../bin/BFFIO
 PARENT_LIB = ../../engine/lib/libauraio.a
 
 all: $(BIN)
 
 $(BIN): $(OBJ) $(PARENT_LIB)
+	@mkdir -p ../bin
 	$(CC) $(OBJ) $(PARENT_LIB) -o $@ $(LDFLAGS)
 
 %.o: %.c
@@ -28,13 +29,13 @@ $(PARENT_LIB):
 	$(MAKE) -C ../..
 
 test: $(BIN)
-	./test_BFFIO.sh
+	BIN=$(BIN) ./test_BFFIO.sh
 
 baseline: $(BIN)
-	./run_baseline.sh --standard
+	BIN=$(BIN) ./run_baseline.sh --standard
 
 baseline-quick: $(BIN)
-	./run_baseline.sh --quick
+	BIN=$(BIN) ./run_baseline.sh --quick
 
 clean:
 	rm -f $(OBJ) $(BIN)
