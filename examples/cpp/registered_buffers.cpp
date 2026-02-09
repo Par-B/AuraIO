@@ -111,6 +111,8 @@ int main() {
             throw auraio::Error(errno, "open test file");
         }
 
+        double unreg_time = 0;
+
         // ===================================================================
         // Part 1: Unregistered Buffers (Baseline)
         // ===================================================================
@@ -127,7 +129,7 @@ int main() {
                 unreg_buffers.push_back(engine_unreg.allocate_buffer(BUF_SIZE));
             }
 
-            double unreg_time = run_benchmark(engine_unreg, fd, false, unreg_buffers);
+            unreg_time = run_benchmark(engine_unreg, fd, false, unreg_buffers);
 
             auto unreg_stats = engine_unreg.get_stats();
 
@@ -186,11 +188,13 @@ int main() {
             std::cout << "\n======================================\n";
             std::cout << "Performance Comparison:\n";
             std::cout << std::fixed << std::setprecision(2);
-            std::cout << "  Unregistered: " << run_benchmark(engine_reg, fd, false, reg_buffers)
-                      << " ms\n";
+            std::cout << "  Unregistered: " << unreg_time << " ms\n";
             std::cout << "  Registered:   " << reg_time << " ms\n";
-            std::cout << "  Speedup:      "
-                      << run_benchmark(engine_reg, fd, false, reg_buffers) / reg_time << "x\n";
+            if (reg_time > 0) {
+                std::cout << "  Speedup:      " << unreg_time / reg_time << "x\n";
+                std::cout << "  Improvement:  " << ((unreg_time - reg_time) / unreg_time) * 100.0
+                          << "%\n";
+            }
 
             // ===================================================================
             // Part 4: Deferred Buffer Unregister (Callback-Safe Pattern)

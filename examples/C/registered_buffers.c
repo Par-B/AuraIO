@@ -38,7 +38,7 @@ void completion_callback(auraio_request_t *req, ssize_t result, void *user_data)
     __sync_add_and_fetch(&completed, 1);
 }
 
-double run_benchmark(auraio_engine_t *engine, int fd, int use_registered) {
+double run_benchmark(auraio_engine_t *engine, int fd, int use_registered, void *unreg_bufs[]) {
     struct timespec start, end;
 
     completed = 0;
@@ -60,14 +60,9 @@ double run_benchmark(auraio_engine_t *engine, int fd, int use_registered) {
                 req = auraio_read(engine, fd, auraio_buf_fixed(buf_idx, 0), BUF_SIZE, offset,
                                   completion_callback, NULL);
             } else {
-                /* Use unregistered buffer (need to allocate) */
-                void *buf = auraio_buffer_alloc(engine, BUF_SIZE);
-                if (!buf) {
-                    perror("auraio_buffer_alloc");
-                    break;
-                }
-                req = auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, offset,
-                                  completion_callback, buf);
+                /* Use pre-allocated unregistered buffer */
+                req = auraio_read(engine, fd, auraio_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset,
+                                  completion_callback, NULL);
             }
 
             if (!req) {
@@ -135,7 +130,23 @@ int main(void) {
         return 1;
     }
 
-    double unreg_time = run_benchmark(engine_unreg, fd, 0);
+    /* Pre-allocate buffers for unregistered benchmark */
+    void *unreg_bufs[NUM_BUFFERS];
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        unreg_bufs[i] = auraio_buffer_alloc(engine_unreg, BUF_SIZE);
+        if (!unreg_bufs[i]) {
+            perror("auraio_buffer_alloc");
+            for (int j = 0; j < i; j++) {
+                auraio_buffer_free(engine_unreg, unreg_bufs[j], BUF_SIZE);
+            }
+            auraio_destroy(engine_unreg);
+            close(fd);
+            unlink(TEST_FILE);
+            return 1;
+        }
+    }
+
+    double unreg_time = run_benchmark(engine_unreg, fd, 0, unreg_bufs);
 
     auraio_stats_t unreg_stats;
     auraio_get_stats(engine_unreg, &unreg_stats);
@@ -144,6 +155,9 @@ int main(void) {
     printf("  Throughput: %.2f MB/s\n", unreg_stats.current_throughput_bps / (1024.0 * 1024.0));
     printf("  P99 Latency: %.3f ms\n", unreg_stats.p99_latency_ms);
 
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        auraio_buffer_free(engine_unreg, unreg_bufs[i], BUF_SIZE);
+    }
     auraio_destroy(engine_unreg);
 
     /* ===================================================================
@@ -195,7 +209,7 @@ int main(void) {
     printf("Buffers registered successfully.\n");
     printf("Running %d operations with zero-copy I/O...\n", NUM_OPS);
 
-    double reg_time = run_benchmark(engine_reg, fd, 1);
+    double reg_time = run_benchmark(engine_reg, fd, 1, NULL);
 
     auraio_stats_t reg_stats;
     auraio_get_stats(engine_reg, &reg_stats);

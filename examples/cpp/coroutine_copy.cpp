@@ -23,7 +23,7 @@
 
 using Clock = std::chrono::high_resolution_clock;
 
-constexpr size_t CHUNK_SIZE = 256 * 1024;  // 256KB chunks
+constexpr size_t CHUNK_SIZE = 256 * 1024; // 256KB chunks
 
 /**
  * Async file copy using coroutines.
@@ -32,7 +32,7 @@ constexpr size_t CHUNK_SIZE = 256 * 1024;  // 256KB chunks
  * Each co_await suspends the coroutine until the I/O completes,
  * allowing other work to proceed.
  */
-auraio::Task<size_t> async_copy(auraio::Engine& engine, int src_fd, int dst_fd, size_t file_size) {
+auraio::Task<size_t> async_copy(auraio::Engine &engine, int src_fd, int dst_fd, size_t file_size) {
     auto buffer = engine.allocate_buffer(CHUNK_SIZE);
     size_t total_copied = 0;
     off_t offset = 0;
@@ -47,7 +47,7 @@ auraio::Task<size_t> async_copy(auraio::Engine& engine, int src_fd, int dst_fd, 
             if (bytes_read < 0) {
                 throw auraio::Error(static_cast<int>(-bytes_read), "read failed");
             }
-            break;  // EOF
+            break; // EOF
         }
 
         // Async write - suspends coroutine until complete
@@ -61,8 +61,8 @@ auraio::Task<size_t> async_copy(auraio::Engine& engine, int src_fd, int dst_fd, 
 
         // Progress indicator
         double progress = 100.0 * total_copied / file_size;
-        std::cout << "\rProgress: " << std::fixed << std::setprecision(1)
-                  << progress << "%" << std::flush;
+        std::cout << "\rProgress: " << std::fixed << std::setprecision(1) << progress << "%"
+                  << std::flush;
     }
 
     // Async fsync - ensure data is on disk
@@ -83,15 +83,18 @@ size_t get_file_size(int fd) {
     return static_cast<size_t>(st.st_size);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <source> <destination>\n";
         std::cerr << "\nCopies a file using C++20 coroutines with async I/O.\n";
         return 1;
     }
 
-    const char* src_path = argv[1];
-    const char* dst_path = argv[2];
+    const char *src_path = argv[1];
+    const char *dst_path = argv[2];
+
+    int src_fd = -1;
+    int dst_fd = -1;
 
     try {
         std::cout << "AuraIO Coroutine File Copy\n";
@@ -100,21 +103,19 @@ int main(int argc, char** argv) {
         std::cout << "Destination: " << dst_path << "\n";
 
         // Open source file
-        int src_fd = open(src_path, O_RDONLY);
+        src_fd = open(src_path, O_RDONLY);
         if (src_fd < 0) {
             throw auraio::Error(errno, src_path);
         }
 
         // Get source file size
         size_t file_size = get_file_size(src_fd);
-        std::cout << "File size:   " << file_size << " bytes ("
-                  << std::fixed << std::setprecision(2)
-                  << file_size / (1024.0 * 1024.0) << " MB)\n";
+        std::cout << "File size:   " << file_size << " bytes (" << std::fixed
+                  << std::setprecision(2) << file_size / (1024.0 * 1024.0) << " MB)\n";
 
         // Create destination file
-        int dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (dst_fd < 0) {
-            close(src_fd);
             throw auraio::Error(errno, dst_path);
         }
 
@@ -132,7 +133,7 @@ int main(int argc, char** argv) {
 
         // Wait for completion - I/O callbacks will resume the coroutine
         while (!task.done()) {
-            engine.wait(100);  // Process completions
+            engine.wait(100); // Process completions
         }
 
         // Get the result (may throw if there was an error)
@@ -144,8 +145,8 @@ int main(int argc, char** argv) {
         // Results
         std::cout << "\n=== Results ===\n";
         std::cout << "Bytes copied: " << bytes_copied << "\n";
-        std::cout << "Elapsed time: " << std::fixed << std::setprecision(3)
-                  << elapsed << " seconds\n";
+        std::cout << "Elapsed time: " << std::fixed << std::setprecision(3) << elapsed
+                  << " seconds\n";
         std::cout << "Throughput:   " << std::setprecision(2)
                   << (bytes_copied / (1024.0 * 1024.0)) / elapsed << " MB/s\n";
 
@@ -163,11 +164,15 @@ int main(int argc, char** argv) {
         std::cout << "\nDone! File copied successfully.\n";
         return 0;
 
-    } catch (const auraio::Error& e) {
+    } catch (const auraio::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
+        if (src_fd >= 0) close(src_fd);
+        if (dst_fd >= 0) close(dst_fd);
         return 1;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "Error: " << e.what() << "\n";
+        if (src_fd >= 0) close(src_fd);
+        if (dst_fd >= 0) close(dst_fd);
         return 1;
     }
 }

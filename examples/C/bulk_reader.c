@@ -19,11 +19,11 @@
 #include <sys/time.h>
 #include <limits.h>
 
-#include "auraio.h"
+#include <auraio.h>
 
-#define MAX_FILES       10000
-#define READ_SIZE       (256 * 1024)  /* 256KB per file */
-#define STATS_INTERVAL  1000          /* Print stats every N completions */
+#define MAX_FILES 10000
+#define READ_SIZE (256 * 1024) /* 256KB per file */
+#define STATS_INTERVAL 1000 /* Print stats every N completions */
 
 /* Context for tracking bulk read progress */
 typedef struct {
@@ -72,12 +72,12 @@ void on_file_read(auraio_request_t *req, ssize_t result, void *user_data) {
     if (ctx->files_completed % STATS_INTERVAL == 0) {
         struct timeval now;
         gettimeofday(&now, NULL);
-        double elapsed = (now.tv_sec - ctx->start_time.tv_sec) +
-                         (now.tv_usec - ctx->start_time.tv_usec) / 1e6;
+        double elapsed =
+            (now.tv_sec - ctx->start_time.tv_sec) + (now.tv_usec - ctx->start_time.tv_usec) / 1e6;
         double mb_per_sec = (ctx->bytes_read / (1024.0 * 1024.0)) / elapsed;
 
-        printf("\rProgress: %d files, %.2f MB, %.2f MB/s",
-               ctx->files_completed, ctx->bytes_read / (1024.0 * 1024.0), mb_per_sec);
+        printf("\rProgress: %d files, %.2f MB, %.2f MB/s", ctx->files_completed,
+               ctx->bytes_read / (1024.0 * 1024.0), mb_per_sec);
         fflush(stdout);
     }
 
@@ -118,11 +118,7 @@ int main(int argc, char **argv) {
 
     /* Initialize context */
     bulk_ctx_t ctx = {
-        .engine = engine,
-        .files_pending = 0,
-        .files_completed = 0,
-        .bytes_read = 0,
-        .errors = 0
+        .engine = engine, .files_pending = 0, .files_completed = 0, .bytes_read = 0, .errors = 0
     };
     gettimeofday(&ctx.start_time, NULL);
 
@@ -161,7 +157,7 @@ int main(int argc, char **argv) {
             /* Try without O_DIRECT */
             fd = open(path, O_RDONLY);
             if (fd < 0) {
-                continue;  /* Skip files we can't open */
+                continue; /* Skip files we can't open */
             }
         }
 
@@ -221,8 +217,7 @@ int main(int argc, char **argv) {
     printf("Total bytes:      %.2f MB\n", ctx.bytes_read / (1024.0 * 1024.0));
     printf("Errors:           %lld\n", ctx.errors);
     printf("Elapsed time:     %.2f seconds\n", total_elapsed);
-    printf("Average speed:    %.2f MB/s\n",
-           (ctx.bytes_read / (1024.0 * 1024.0)) / total_elapsed);
+    printf("Average speed:    %.2f MB/s\n", (ctx.bytes_read / (1024.0 * 1024.0)) / total_elapsed);
 
     /* Engine tuning results */
     auraio_stats_t stats;

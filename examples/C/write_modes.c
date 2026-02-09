@@ -19,10 +19,10 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#include "auraio.h"
+#include <auraio.h>
 
-#define WRITE_SIZE  (64 * 1024)   /* 64KB per write */
-#define NUM_WRITES  16            /* Number of writes per test */
+#define WRITE_SIZE (64 * 1024) /* 64KB per write */
+#define NUM_WRITES 16 /* Number of writes per test */
 
 /* Completion tracking */
 typedef struct {
@@ -46,7 +46,7 @@ void on_write_done(auraio_request_t *req, ssize_t result, void *user_data) {
     write_state_t *state = user_data;
 
     if (result < 0) {
-        fprintf(stderr, "Write failed: %s\n", strerror(-result));
+        fprintf(stderr, "Write failed: %s\n", strerror((int)(-result)));
     }
 
     state->completed++;
@@ -109,22 +109,20 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Track completion */
     write_state_t state = {
-        .completed = 0,
-        .total = NUM_WRITES,
-        .start_ns = get_time_ns(),
-        .end_ns = 0
+        .completed = 0, .total = NUM_WRITES, .start_ns = get_time_ns(), .end_ns = 0
     };
 
     /* Submit all writes */
     printf("Submitting %d async writes of %d bytes each...\n", NUM_WRITES, WRITE_SIZE);
     for (int i = 0; i < NUM_WRITES; i++) {
         off_t offset = i * WRITE_SIZE;
-        auraio_request_t *req = auraio_write(engine, fd, auraio_buf(buf), WRITE_SIZE, offset, on_write_done, &state);
+        auraio_request_t *req =
+            auraio_write(engine, fd, auraio_buf(buf), WRITE_SIZE, offset, on_write_done, &state);
         if (!req) {
             fprintf(stderr, "Failed to submit write %d: %s\n", i, strerror(errno));
             break;
         }
-        (void)req;  /* Request handle can be used for cancellation if needed */
+        (void)req; /* Request handle can be used for cancellation if needed */
     }
 
     /* Wait for all completions */
@@ -146,9 +144,18 @@ int run_write_test(const char *filename, int use_direct) {
     printf("P99 latency: %.2f ms\n", stats.p99_latency_ms);
     printf("Optimal in-flight: %d\n", stats.optimal_in_flight);
 
-    /* Fsync to ensure data is on disk */
+    /* Fsync to ensure data is on disk (use async auraio_fsync) */
     printf("Fsyncing...\n");
-    fsync(fd);
+    write_state_t fsync_state = { .completed = 0, .total = 1, .start_ns = 0, .end_ns = 0 };
+    auraio_request_t *fsync_req = auraio_fsync(engine, fd, on_write_done, &fsync_state);
+    if (fsync_req) {
+        while (fsync_state.completed < fsync_state.total) {
+            auraio_wait(engine, 100);
+        }
+    } else {
+        fprintf(stderr, "Fsync submission failed: %s\n", strerror(errno));
+    }
+    (void)fsync_req;
 
     /* Cleanup */
     if (use_direct) {

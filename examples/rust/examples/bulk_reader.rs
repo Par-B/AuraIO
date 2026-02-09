@@ -104,24 +104,23 @@ fn main() -> Result<()> {
         let files_pending_clone = files_pending.clone();
         let start = start_time;
 
-        // Need to prevent file from being closed before callback
-        // In real code, you'd use proper resource management
-        let buf_ptr = buf.as_ptr() as *mut std::ffi::c_void;
-        std::mem::forget(file);
-        std::mem::forget(buf);
+        // Get raw pointer before moving buf into the closure
+        let buf_ref = unsafe { auraio::BufferRef::from_ptr(buf.as_ptr() as *mut std::ffi::c_void) };
 
-        files_pending.fetch_add(1, Ordering::SeqCst);
-
-        // Submit the read using a simpler callback that doesn't capture pointers
-        // For this example, we just track completion counts
-        let buf_ref = unsafe { auraio::BufferRef::from_ptr(buf_ptr) };
-        unsafe {
+        // Submit the read - file and buf are moved into the closure to keep
+        // them alive until the callback fires, then dropped for cleanup
+        let result = unsafe {
             engine.read(
                 fd,
                 buf_ref,
                 READ_SIZE,
                 0,
                 move |result| {
+                    // file and buf are dropped when this closure completes,
+                    // closing the fd and freeing the buffer automatically
+                    let _file = file;
+                    let _buf = buf;
+
                     match result {
                         Ok(n) => {
                             bytes_read_clone.fetch_add(n as i64, Ordering::SeqCst);
@@ -130,9 +129,6 @@ fn main() -> Result<()> {
                             errors_clone.fetch_add(1, Ordering::SeqCst);
                         }
                     }
-
-                    // Note: In real code, we'd close the fd and free the buffer here
-                    // but this example simplifies resource management
 
                     let completed = files_completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
                     files_pending_clone.fetch_sub(1, Ordering::SeqCst);
@@ -148,7 +144,18 @@ fn main() -> Result<()> {
                                 completed, mb, mb_per_sec);
                     }
                 },
-            ).ok(); // Ignore submission errors for simplicity
+            )
+        };
+
+        match result {
+            Ok(_) => {
+                files_pending.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(_) => {
+                // Submission failed - file and buf were in the closure which
+                // the engine already dropped, so cleanup is automatic
+                errors.fetch_add(1, Ordering::SeqCst);
+            }
         }
     }
 
