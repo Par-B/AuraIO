@@ -1,3 +1,17 @@
+# C files (engine library, tests, examples)
+If:
+  PathMatch: .*\.c$
+CompileFlags:
+  Add:
+    - -std=c11
+    - -Iengine/include
+    - -Iengine/src
+  Compiler: clang
+
+---
+# C++ files (bindings, examples)
+If:
+  PathMatch: .*\.(cpp|cc|cxx|hpp)$
 CompileFlags:
   Add:
     - -std=c++20
@@ -5,6 +19,8 @@ CompileFlags:
     - -Iengine/include
   Compiler: clang++
 
+---
+# Diagnostics (applies to all files)
 Diagnostics:
   UnusedIncludes: None
   MissingIncludes: None
