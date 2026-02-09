@@ -8,6 +8,7 @@ publish = false
 auraio = { path = "../../bindings/rust/auraio", features = ["async"] }
 auraio-sys = { path = "../../bindings/rust/auraio-sys" }
 libc = "0.2"
+rand = "0.8"
 
 [[example]]
 name = "quickstart"
@@ -32,3 +33,15 @@ path = "examples/file_copy.rs"
 [[example]]
 name = "async_copy"
 path = "examples/async_copy.rs"
+
+[[example]]
+name = "custom_config"
+path = "examples/custom_config.rs"
+
+[[example]]
+name = "vectored_io"
+path = "examples/vectored_io.rs"
+
+[[example]]
+name = "registered_buffers"
+path = "examples/registered_buffers.rs"

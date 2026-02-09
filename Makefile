@@ -33,8 +33,8 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 
 # Default target
-# Build everything users typically expect from a full build.
-all: core examples cpp-examples rust rust-examples exporters
+# Build library, bindings, and exporters (examples are opt-in via 'make examples')
+all: core rust exporters
 
 # Core library artifacts only (fast path for local iteration)
 core: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
@@ -174,13 +174,16 @@ BFFIO-test: BFFIO
 BFFIO-baseline: BFFIO
 	$(MAKE) -C tools/BFFIO baseline
 
-# Build examples
-examples: core
-	$(MAKE) -C examples
+# Build all examples (C + C++ + Rust)
+examples: c-examples cpp-examples rust-examples
 
-# Build C++ examples
+# Build C examples only
+c-examples: core
+	$(MAKE) -C examples/C
+
+# Build C++ examples only
 cpp-examples: core
-	$(MAKE) -C examples cpp-examples
+	$(MAKE) -C examples/cpp
 
 # Run C++ tests
 cpp-test: core
@@ -274,7 +277,8 @@ clean: rust-clean
 	rm -f $(LIB_SHARED) lib/$(LIB_SONAME) lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
 	rm -rf lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
-	-$(MAKE) -C examples clean 2>/dev/null || true
+	-$(MAKE) -C examples/C clean 2>/dev/null || true
+	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	rm -f exporters/prometheus/prometheus_example
 	rm -f exporters/otel/otel_example
@@ -527,25 +531,26 @@ help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  make / make all     Build core library + examples + Rust/C++ bindings + exporters"
+	@echo "  make / make all     Build core library + Rust/C++ bindings + exporters"
 	@echo "  make core           Build libraries and pkg-config file only"
 	@echo "  make debug          Build with debug symbols (-g -O0)"
-	@echo "  make test           Build library/examples/bindings/exporters + run all tests"
-	@echo "  make test-memory    Build library/examples/bindings/exporters + run TSan/ASan tests"
+	@echo "  make test           Build library/bindings/exporters + run all tests"
+	@echo "  make test-memory    Build library/bindings/exporters + run TSan/ASan tests"
 	@echo "  make test-strict    Run test + test-memory"
 	@echo "  make test-local     Build and run C unit tests"
 	@echo "  make test-all       Run all tests (C, C++, Rust)"
-	@echo "  make examples       Build C example programs"
+	@echo "  make examples       Build all example programs (C + C++ + Rust)"
+	@echo "  make c-examples     Build C example programs only"
+	@echo "  make cpp-examples   Build C++ example programs only"
+	@echo "  make rust-examples  Build Rust example programs only"
 	@echo "  make clean          Remove all build artifacts"
 	@echo ""
 	@echo "C++ bindings:"
 	@echo "  make cpp-test       Build and run C++ unit tests"
-	@echo "  make cpp-examples   Build C++ example programs"
 	@echo ""
 	@echo "Rust bindings:"
 	@echo "  make rust           Build Rust bindings"
 	@echo "  make rust-test      Run Rust tests"
-	@echo "  make rust-examples  Build Rust example programs"
 	@echo "  make rust-clean     Clean Rust build artifacts"
 	@echo ""
 	@echo "Installation:"
@@ -592,8 +597,8 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all core test test-memory test-strict test-local test-all examples install uninstall clean debug deps deps-check help \
-        cpp-test cpp-examples \
+.PHONY: all core test test-memory test-strict test-local test-all examples c-examples cpp-examples install uninstall clean debug deps deps-check help \
+        cpp-test \
         rust rust-test rust-examples rust-clean \
 	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
 	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \

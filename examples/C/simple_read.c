@@ -17,7 +17,7 @@
 
 #include "auraio.h"
 
-#define READ_SIZE (1024 * 1024)  /* 1MB */
+#define READ_SIZE (1024 * 1024) /* 1MB */
 
 /* Completion state */
 typedef struct {
@@ -86,7 +86,8 @@ int main(int argc, char **argv) {
 
     /* Submit async read */
     printf("Submitting async read of %d bytes...\n", READ_SIZE);
-    auraio_request_t *req = auraio_read(engine, fd, auraio_buf(buf), READ_SIZE, 0, on_read_done, &state);
+    auraio_request_t *req =
+        auraio_read(engine, fd, auraio_buf(buf), READ_SIZE, 0, on_read_done, &state);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
         auraio_buffer_free(engine, buf, READ_SIZE);
@@ -94,12 +95,12 @@ int main(int argc, char **argv) {
         auraio_destroy(engine);
         return 1;
     }
-    (void)req;  /* Request handle can be used for cancellation if needed */
+    (void)req; /* Request handle can be used for cancellation if needed */
 
     /* Wait for completion */
     printf("Waiting for completion...\n");
     while (!state.done) {
-        auraio_wait(engine, 100);  /* 100ms timeout */
+        auraio_wait(engine, 100); /* 100ms timeout */
     }
 
     /* Show first few bytes of data */
@@ -132,10 +133,54 @@ int main(int argc, char **argv) {
     for (int i = 0; i < rings; i++) {
         auraio_ring_stats_t rs;
         if (auraio_get_ring_stats(engine, i, &rs) == 0) {
-            printf("  Ring %d: phase=%s depth=%d/%d\n",
-                   i, auraio_phase_name(rs.aimd_phase),
+            printf("  Ring %d: phase=%s depth=%d/%d\n", i, auraio_phase_name(rs.aimd_phase),
                    rs.pending_count, rs.in_flight_limit);
         }
+    }
+
+    /* Latency histogram (demonstrates auraio_get_histogram) */
+    if (rings > 0) {
+        auraio_histogram_t hist;
+        if (auraio_get_histogram(engine, 0, &hist) == 0 && hist.total_count > 0) {
+            printf("\nLatency Histogram (Ring 0):\n");
+            printf("  Total samples: %u\n", hist.total_count);
+            printf("  Bucket width:  %d μs\n", hist.bucket_width_us);
+            printf("  Max tracked:   %d μs\n", hist.max_tracked_us);
+
+            /* Calculate percentiles from histogram */
+            uint32_t cumulative = 0;
+            uint32_t p50_threshold = hist.total_count / 2;
+            uint32_t p90_threshold = (hist.total_count * 90) / 100;
+            uint32_t p99_threshold = (hist.total_count * 99) / 100;
+            uint32_t p999_threshold = (hist.total_count * 999) / 1000;
+            int p50 = -1, p90 = -1, p99 = -1, p999 = -1;
+
+            for (int i = 0; i < AURAIO_HISTOGRAM_BUCKETS; i++) {
+                cumulative += hist.buckets[i];
+                if (p50 == -1 && cumulative >= p50_threshold) p50 = i;
+                if (p90 == -1 && cumulative >= p90_threshold) p90 = i;
+                if (p99 == -1 && cumulative >= p99_threshold) p99 = i;
+                if (p999 == -1 && cumulative >= p999_threshold) p999 = i;
+            }
+
+            printf("  P50 latency:   %.2f ms\n", (p50 * hist.bucket_width_us) / 1000.0);
+            printf("  P90 latency:   %.2f ms\n", (p90 * hist.bucket_width_us) / 1000.0);
+            printf("  P99 latency:   %.2f ms\n", (p99 * hist.bucket_width_us) / 1000.0);
+            printf("  P99.9 latency: %.2f ms\n", (p999 * hist.bucket_width_us) / 1000.0);
+            if (hist.overflow > 0) {
+                printf("  Overflow:      %u samples (> %d μs)\n", hist.overflow,
+                       hist.max_tracked_us);
+            }
+        }
+    }
+
+    /* Buffer pool statistics (demonstrates auraio_get_buffer_stats) */
+    auraio_buffer_stats_t buf_stats;
+    if (auraio_get_buffer_stats(engine, &buf_stats) == 0) {
+        printf("\nBuffer Pool Statistics:\n");
+        printf("  Total allocated:  %zu bytes\n", buf_stats.total_allocated_bytes);
+        printf("  Buffer count:     %zu\n", buf_stats.total_buffers);
+        printf("  Shard count:      %d\n", buf_stats.shard_count);
     }
 
     /* Cleanup */

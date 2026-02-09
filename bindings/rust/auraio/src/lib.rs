@@ -86,7 +86,7 @@ pub mod async_io;
 pub use buffer::{Buffer, BufferRef};
 pub use engine::{version, version_int, Engine};
 pub use error::{Error, Result};
-pub use options::Options;
+pub use options::{Options, RingSelect};
 pub use request::RequestHandle;
 pub use stats::Stats;
 

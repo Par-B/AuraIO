@@ -33,6 +33,9 @@ examples/C/bulk_reader
 examples/C/write_modes
 examples/C/quickstart
 examples/C/cancel_request
+examples/C/custom_config
+examples/C/vectored_io
+examples/C/registered_buffers
 
 # Example binaries (C++)
 examples/cpp/quickstart
@@ -40,6 +43,9 @@ examples/cpp/simple_read
 examples/cpp/bulk_reader
 examples/cpp/write_modes
 examples/cpp/coroutine_copy
+examples/cpp/custom_config
+examples/cpp/vectored_io
+examples/cpp/registered_buffers
 
 # BFFIO benchmark tool
 tools/BFFIO/BFFIO
@@ -48,6 +54,7 @@ tools/BFFIO/baseline_results/
 
 # Exporter binaries
 exporters/prometheus/prometheus_example
+exporters/otel/otel_example
 
 # Claude Code
 .claude/
