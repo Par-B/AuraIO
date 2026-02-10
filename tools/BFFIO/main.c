@@ -170,7 +170,8 @@ int main(int argc, char *argv[]) {
         int engine_depth = job->iodepth * 2;
         if (engine_depth < 256) engine_depth = 256;
         opts.queue_depth = engine_depth;
-        opts.ring_count = 0; /* auto-detect cores */
+        opts.ring_count =
+            (job->numjobs <= 1) ? 1 : 0; /* 1 ring for single-thread, auto for multi */
         opts.ring_select = (auraio_ring_select_t)job->ring_select;
 
         /* Pass user's P99 latency target to AIMD controller */

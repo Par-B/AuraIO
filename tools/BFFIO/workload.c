@@ -74,56 +74,49 @@ static inline int pattern_is_read_only(rw_pattern_t rw) {
 
 int io_ctx_pool_init(io_ctx_pool_t *pool, int capacity) {
     pool->capacity = capacity;
-    pool->free_count = capacity;
 
     pool->slots = calloc((size_t)capacity, sizeof(io_ctx_t));
     if (!pool->slots) {
         return -1;
     }
 
-    pool->free_stack = malloc((size_t)capacity * sizeof(int));
-    if (!pool->free_stack) {
-        free(pool->slots);
-        pool->slots = NULL;
-        return -1;
-    }
-
-    pthread_spin_init(&pool->lock, PTHREAD_PROCESS_PRIVATE);
-
-    /* Fill free stack with indices */
+    /* Build free list: slot[0]→slot[1]→...→slot[N-1]→-1
+     * free_head points to slot[capacity-1] (LIFO). */
     for (int i = 0; i < capacity; i++) {
         pool->slots[i].pool_idx = i;
-        pool->free_stack[i] = i;
+        atomic_store_explicit(&pool->slots[i].next_free, i - 1, memory_order_relaxed);
     }
+    atomic_store_explicit(&pool->free_head, capacity - 1, memory_order_release);
 
     return 0;
 }
 
 void io_ctx_pool_destroy(io_ctx_pool_t *pool) {
-    pthread_spin_destroy(&pool->lock);
     free(pool->slots);
-    free(pool->free_stack);
     pool->slots = NULL;
-    pool->free_stack = NULL;
-    pool->free_count = 0;
     pool->capacity = 0;
 }
 
 io_ctx_t *io_ctx_pool_get(io_ctx_pool_t *pool) {
-    pthread_spin_lock(&pool->lock);
-    if (pool->free_count <= 0) {
-        pthread_spin_unlock(&pool->lock);
-        return NULL;
+    int idx = atomic_load_explicit(&pool->free_head, memory_order_acquire);
+    while (idx >= 0) {
+        int next = atomic_load_explicit(&pool->slots[idx].next_free, memory_order_relaxed);
+        if (atomic_compare_exchange_weak_explicit(&pool->free_head, &idx, next,
+                                                  memory_order_acq_rel, memory_order_relaxed)) {
+            return &pool->slots[idx];
+        }
+        /* idx updated by CAS failure, retry */
     }
-    int idx = pool->free_stack[--pool->free_count];
-    pthread_spin_unlock(&pool->lock);
-    return &pool->slots[idx];
+    return NULL;
 }
 
 void io_ctx_pool_put(io_ctx_pool_t *pool, io_ctx_t *ctx) {
-    pthread_spin_lock(&pool->lock);
-    pool->free_stack[pool->free_count++] = ctx->pool_idx;
-    pthread_spin_unlock(&pool->lock);
+    int idx = ctx->pool_idx;
+    int old_head = atomic_load_explicit(&pool->free_head, memory_order_relaxed);
+    do {
+        atomic_store_explicit(&ctx->next_free, old_head, memory_order_relaxed);
+    } while (!atomic_compare_exchange_weak_explicit(&pool->free_head, &old_head, idx,
+                                                    memory_order_release, memory_order_relaxed));
 }
 
 /* ============================================================================
@@ -351,7 +344,14 @@ static void file_set_close(file_set_t *fset) {
  *
  * Callbacks run inside auraio_wait() on the worker thread, so tls_pool
  * points to the correct per-thread pool.
+ *
+ * Completion timestamp is cached per poll cycle via tls_completion_ns
+ * to avoid calling clock_gettime for every individual callback.
+ * Reset to 0 before each auraio_poll()/auraio_wait() call; the first
+ * callback in the batch calls now_ns() and subsequent callbacks reuse it.
  * ============================================================================ */
+
+static _Thread_local uint64_t tls_completion_ns;
 
 static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -360,7 +360,8 @@ static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) 
     /* Record stats only outside the ramp period */
     if (!atomic_load(ctx->ramping)) {
         if (ctx->submit_time_ns != 0) {
-            uint64_t latency = now_ns() - ctx->submit_time_ns;
+            if (tls_completion_ns == 0) tls_completion_ns = now_ns();
+            uint64_t latency = tls_completion_ns - ctx->submit_time_ns;
             stats_record_io(ctx->stats, latency, ctx->io_size, ctx->is_write);
         } else {
             stats_record_io_count(ctx->stats, ctx->io_size, ctx->is_write);
@@ -390,7 +391,8 @@ static void fsync_callback(auraio_request_t *req, ssize_t result, void *user_dat
 
     if (!atomic_load(ctx->ramping)) {
         if (ctx->submit_time_ns != 0) {
-            uint64_t latency = now_ns() - ctx->submit_time_ns;
+            if (tls_completion_ns == 0) tls_completion_ns = now_ns();
+            uint64_t latency = tls_completion_ns - ctx->submit_time_ns;
             stats_record_io(ctx->stats, latency, 0, 1);
         } else {
             stats_record_io_count(ctx->stats, 0, 1);
@@ -520,7 +522,12 @@ static void *worker_thread(void *arg) {
             }
         }
 
-        /* Submit I/O up to iodepth */
+        /* Submit I/O up to iodepth.
+         * Batch the submit timestamp: one clock_gettime per submission
+         * batch instead of per I/O.  All I/Os in a batch are submitted
+         * within microseconds so the error is well within one histogram
+         * bucket (50us). */
+        uint64_t batch_submit_ns = 0;
         while (atomic_load(&stats->inflight) < iodepth) {
             if (!atomic_load(tctx->running)) break;
             if (!config->time_based && per_thread_size > 0 && total_bytes >= per_thread_size) {
@@ -584,7 +591,12 @@ static void *worker_thread(void *arg) {
 
             /* Fill callback context */
             ctx->stats = stats;
-            ctx->submit_time_ns = do_sample ? now_ns() : 0;
+            if (do_sample) {
+                if (batch_submit_ns == 0) batch_submit_ns = now_ns();
+                ctx->submit_time_ns = batch_submit_ns;
+            } else {
+                ctx->submit_time_ns = 0;
+            }
             ctx->io_size = (size_t)bs;
             ctx->buffer = buf;
             ctx->engine = engine;
@@ -621,7 +633,7 @@ static void *worker_thread(void *arg) {
                     io_ctx_t *fsync_ctx = io_ctx_pool_get(&tctx->pool);
                     if (fsync_ctx) {
                         fsync_ctx->stats = stats;
-                        fsync_ctx->submit_time_ns = do_sample ? now_ns() : 0;
+                        fsync_ctx->submit_time_ns = do_sample ? batch_submit_ns : 0;
                         fsync_ctx->io_size = 0;
                         fsync_ctx->buffer = NULL;
                         fsync_ctx->engine = engine;
@@ -642,12 +654,16 @@ static void *worker_thread(void *arg) {
             }
         }
 
-        /* Process completions without blocking */
+        /* Reset completion timestamp cache before processing completions.
+         * The first callback in this poll cycle will call now_ns() once;
+         * subsequent callbacks reuse that timestamp. */
+        tls_completion_ns = 0;
         auraio_poll(engine);
     }
 
     /* Drain remaining inflight I/O for this thread */
     while (atomic_load(&stats->inflight) > 0) {
+        tls_completion_ns = 0;
         auraio_wait(engine, 1);
     }
 

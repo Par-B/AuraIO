@@ -14,20 +14,20 @@ typedef struct {
     void *buffer; /* pre-allocated, reused across I/Os */
     auraio_engine_t *engine;
     int is_write;
-    _Atomic int *ramping; /* skip stats during warmup */
-    void *pool;           /* owning io_ctx_pool_t* (for callback) */
-    int pool_idx;         /* index for return to free-stack */
+    _Atomic int *ramping;  /* skip stats during warmup */
+    void *pool;            /* owning io_ctx_pool_t* (for callback) */
+    int pool_idx;          /* index in pool's slots array */
+    _Atomic int next_free; /* lock-free list link (-1 = end) */
 } io_ctx_t;
 
 /* Pre-allocated pool of io_ctx_t (one per thread, sized to iodepth).
- * Thread-safe: auraio_wait() can fire callbacks on any thread, so
- * put() may be called from a different thread than get(). */
+ * Lock-free Treiber stack: get() pops, put() pushes via CAS.
+ * MPSC safe: get() is single-consumer (owning thread),
+ * put() can be called from any thread (cross-thread completions). */
 typedef struct {
-    io_ctx_t *slots;         /* pre-allocated array [capacity] */
-    int *free_stack;         /* indices of available slots */
-    int free_count;          /* current free count */
-    int capacity;            /* == iodepth */
-    pthread_spinlock_t lock; /* protects free_stack/free_count */
+    io_ctx_t *slots;       /* pre-allocated array [capacity] */
+    _Atomic int free_head; /* head of lock-free free list (-1 = empty) */
+    int capacity;          /* == iodepth */
 } io_ctx_pool_t;
 
 /* Initialize pool. Returns 0 on success, -1 on error. */
