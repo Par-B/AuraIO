@@ -55,10 +55,6 @@ typedef struct {
     _Atomic int *workers_done; /* count of finished workers */
     io_ctx_pool_t pool;        /* pre-allocated io_ctx pool */
 
-    /* Offset tracking */
-    uint64_t seq_offset; /* for sequential patterns (single-file compat) */
-    uint64_t file_size;  /* per-file size for offset generation */
-
     /* Multi-file support */
     int nrfiles;             /* number of files available */
     uint64_t per_file_size;  /* size of each individual file */

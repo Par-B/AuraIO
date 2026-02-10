@@ -2,7 +2,7 @@
 
 **Aura** = **A**daptive **U**ring **R**untime **A**rchitecture
 
-![Linux](https://img.shields.io/badge/platform-Linux%206.0%2B-blue)
+![Linux](https://img.shields.io/badge/platform-Linux%205.10%2B-blue)
 ![C11](https://img.shields.io/badge/language-C11-orange)
 ![C++20](https://img.shields.io/badge/language-C%2B%2B20-orange)
 ![Rust](https://img.shields.io/badge/language-Rust-orange)
@@ -289,9 +289,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
+# Callback-based API (default):
 auraio = { path = "path/to/auraio/bindings/rust/auraio" }
 
-# For async/await support:
+# Or with async/await support (enables Future-based async_read/async_write):
 auraio = { path = "path/to/auraio/bindings/rust/auraio", features = ["async"] }
 ```
 
@@ -305,7 +306,7 @@ make rust-examples  # Build Rust examples
 
 ## Requirements
 
-- **Linux 6.0+** (io_uring features)
+- **Linux 5.10+** (io_uring support; 6.0+ recommended for latest features)
 - **liburing** — `apt install liburing-dev`
 - **C11 compiler** (C API)
 - **C++20 compiler** (C++ API, optional)
@@ -363,7 +364,7 @@ Full API documentation: [`docs/`](docs/)
 **AIMD Self-Tuning:**
 1. Measures baseline P99 latency at low concurrency
 2. Probes: increases in-flight limit by +1 per tick while throughput improves
-3. Backs off: cuts limit by ×0.80 if P99 latency spikes past 10× baseline
+3. Backs off: cuts limit by ×0.80 if P99 latency spikes past 10× baseline (see `LATENCY_SPIKE_THRESHOLD` in `engine/src/adaptive_engine.h`)
 4. Converges to optimal depth without manual tuning
 
 Uses a gentler 20% decrease (vs TCP's 50%) because storage latency
@@ -394,13 +395,26 @@ Synchronous and async code coexist—call `auraio_wait()` immediately after subm
 
 AuraIO ships with **BFFIO** (Better Faster FIO), a drop-in FIO-compatible benchmark that uses AuraIO as its I/O engine. It accepts the same CLI flags and `.fio` job files as FIO, but replaces the static io_uring engine with AuraIO's AIMD adaptive tuning — automatically finding the optimal queue depth for your hardware.
 
+**Basic usage:**
 ```bash
 make BFFIO
 ./tools/BFFIO/BFFIO --name=test --rw=randread --bs=4k --size=1G \
     --directory=/tmp/bffio --direct=1 --runtime=10 --time_based
 ```
 
-See [docs/BFFIO.md](docs/BFFIO.md) for full usage, supported parameters, and baseline comparison instructions.
+**Multi-file workloads:**
+```bash
+# 4 files, round-robin distribution
+./tools/BFFIO/BFFIO --rw=randread --bs=4k --size=1G --nrfiles=4 \
+    --directory=/tmp/bffio --direct=1 --runtime=10 --time_based
+
+# Sequential file exhaustion pattern
+./tools/BFFIO/BFFIO --rw=read --bs=128k --nrfiles=4 --size=512M \
+    --file_service_type=sequential --directory=/tmp/bffio --direct=1 \
+    --runtime=10 --time_based
+```
+
+See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and [docs/BFFIO.md](docs/BFFIO.md) for design overview and baseline comparisons.
 
 ## Documentation
 
@@ -409,7 +423,8 @@ See [docs/BFFIO.md](docs/BFFIO.md) for full usage, supported parameters, and bas
 - [Async Lifecycle](docs/ASYNC_LIFECYCLE.md) — Submission vs completion semantics
 - [Observability Guide](docs/observability.md) — Stats API, Prometheus integration, sampling costs
 - [Performance Guide](docs/performance.md) — Tuning constants, benchmark methodology
-- [BFFIO Benchmark](docs/BFFIO.md) — FIO-compatible benchmark tool
+- [BFFIO Overview](docs/BFFIO.md) — FIO-compatible benchmark design and baseline comparisons
+- [BFFIO Usage Guide](tools/BFFIO/USAGE.md) — Complete CLI reference, options, examples
 - [Codebase Map](docs/CODEBASE_MAP.md) — File-level guide for contributors
 - [Examples](examples/) — Working code samples
 

@@ -672,7 +672,12 @@ void job_config_normalize(job_config_t *job) {
 
     if (job->filesize > 0) {
         /* filesize explicitly set: size = filesize * nrfiles */
-        job->size = job->filesize * (uint64_t)job->nrfiles;
+        if (job->filesize > UINT64_MAX / (uint64_t)job->nrfiles) {
+            fprintf(stderr, "BFFIO: warning: filesize * nrfiles overflows, clamping\n");
+            job->size = UINT64_MAX;
+        } else {
+            job->size = job->filesize * (uint64_t)job->nrfiles;
+        }
     } else if (job->size > 0) {
         /* size set but not filesize: filesize = size / nrfiles */
         job->filesize = job->size / (uint64_t)job->nrfiles;

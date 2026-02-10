@@ -547,9 +547,11 @@ static void *worker_thread(void *arg) {
                 }
             } else {
                 offset = tctx->seq_offsets[file_idx];
-                tctx->seq_offsets[file_idx] += bs;
-                if (tctx->seq_offsets[file_idx] + bs > per_file_size) {
-                    tctx->seq_offsets[file_idx] = 0;
+                if (offset + bs > per_file_size) {
+                    offset = 0;
+                    tctx->seq_offsets[file_idx] = bs;
+                } else {
+                    tctx->seq_offsets[file_idx] = offset + bs;
                 }
             }
 
@@ -719,7 +721,6 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
         tctx[i].running = &running;
         tctx[i].ramping = &ramping;
         tctx[i].workers_done = &workers_done;
-        tctx[i].file_size = per_file_size;
         tctx[i].nrfiles = fset.fd_count;
         tctx[i].per_file_size = per_file_size;
         tctx[i].file_service_type = config->file_service_type;
@@ -738,7 +739,6 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
             tctx[i].seq_offsets[f] = (uint64_t)i * (per_file_size / (uint64_t)num_threads);
             tctx[i].seq_offsets[f] = align_down(tctx[i].seq_offsets[f], config->bs);
         }
-        tctx[i].seq_offset = tctx[i].seq_offsets[0];
 
         /* Spread threads across files for RR/sequential */
         tctx[i].current_file_idx = i % fset.fd_count;
