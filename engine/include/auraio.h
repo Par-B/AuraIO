@@ -156,6 +156,7 @@ typedef struct {
     double p99_latency_ms;         /**< 99th percentile latency (ms) */
     int current_in_flight;         /**< Current in-flight operations */
     int optimal_in_flight;         /**< Tuned optimal in-flight limit */
+    int peak_in_flight;            /**< Observed peak in-flight across all rings */
     int optimal_batch_size;        /**< Tuned optimal batch size */
     uint64_t adaptive_spills;      /**< ADAPTIVE mode: times a submission spilled to
                                       another ring */
@@ -172,6 +173,7 @@ typedef struct {
     int64_t ops_completed;     /**< Total operations completed on this ring */
     int64_t bytes_transferred; /**< Total bytes transferred through this ring */
     int pending_count;         /**< Current in-flight operations */
+    int peak_in_flight;        /**< Observed peak in-flight (high-water mark) */
     int in_flight_limit;       /**< Current AIMD-tuned in-flight limit */
     int batch_threshold;       /**< Current AIMD-tuned batch threshold */
     double p99_latency_ms;     /**< Current P99 latency for this ring (ms) */

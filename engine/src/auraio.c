@@ -484,8 +484,12 @@ static void *tick_thread_func(void *arg) {
         int total_pending = 0;
         for (int i = 0; i < engine->ring_count; i++) {
             adaptive_tick(&engine->rings[i].adaptive);
-            total_pending +=
+            int pending =
                 atomic_load_explicit(&engine->rings[i].pending_count, memory_order_relaxed);
+            total_pending += pending;
+            if (pending > engine->rings[i].peak_pending_count) {
+                engine->rings[i].peak_pending_count = pending;
+            }
         }
         if (engine->ring_count > 0) {
             atomic_store_explicit(&engine->avg_ring_pending, total_pending / engine->ring_count,
@@ -1846,6 +1850,7 @@ void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
 
     /* Aggregate stats from all rings */
     int total_in_flight = 0;
+    int total_peak_in_flight = 0;
     int total_optimal_inflight = 0;
     int total_batch_size = 0;
     double total_throughput = 0.0;
@@ -1861,6 +1866,7 @@ void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
         stats->ops_completed += ring->ops_completed;
         stats->bytes_transferred += ring->bytes_completed;
         total_in_flight += atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
+        total_peak_in_flight += ring->peak_pending_count;
 
         /* Get adaptive controller values */
         adaptive_controller_t *ctrl = &ring->adaptive;
@@ -1881,6 +1887,7 @@ void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
     }
 
     stats->current_in_flight = total_in_flight;
+    stats->peak_in_flight = total_peak_in_flight;
     stats->optimal_in_flight = total_optimal_inflight;
     /* Guard against division by zero if no rings are active */
     stats->optimal_batch_size = engine->ring_count > 0 ? total_batch_size / engine->ring_count : 0;
@@ -1928,6 +1935,7 @@ int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx, auraio_ri
     stats->ops_completed = ring->ops_completed;
     stats->bytes_transferred = ring->bytes_completed;
     stats->pending_count = atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
+    stats->peak_in_flight = ring->peak_pending_count;
     stats->queue_depth = ring->max_requests;
 
     /* Use acquire ordering on all adaptive controller atomics to pair with

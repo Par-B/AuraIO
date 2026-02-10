@@ -442,7 +442,7 @@ void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, aurai
     if (engine) {
         auraio_stats_t engine_stats;
         auraio_get_stats(engine, &engine_stats);
-        result->auraio_final_depth = engine_stats.optimal_in_flight;
+        result->auraio_final_depth = engine_stats.peak_in_flight;
         result->auraio_p99_ms = engine_stats.p99_latency_ms;
         result->auraio_throughput_bps = engine_stats.current_throughput_bps;
         result->adaptive_spills = engine_stats.adaptive_spills;

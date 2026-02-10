@@ -112,6 +112,7 @@ typedef struct {
     int free_request_count;     /**< Number of free request slots */
     int max_requests;           /**< Queue depth */
     _Atomic int pending_count;  /**< Number of in-flight ops (atomic for lock-free reads) */
+    int peak_pending_count;     /**< High-water mark of pending_count (updated by tick thread) */
 
     /* Adaptive controller */
     adaptive_controller_t adaptive; /**< AIMD controller */
@@ -119,14 +120,15 @@ typedef struct {
     /* Submit-path counters (written during ring_submit_*).
      * Separated from completion-path counters to avoid false sharing
      * between the submit and completion code paths. */
-    _Alignas(64) _Atomic int queued_sqes;  /**< SQEs queued but not submitted */
-    int sample_counter;                    /**< Submission counter for sampling */
-    int64_t bytes_submitted;               /**< Total bytes requested at submission */
+    _Alignas(64) _Atomic int queued_sqes; /**< SQEs queued but not submitted */
+    int sample_counter;                   /**< Submission counter for sampling */
+    int64_t bytes_submitted;              /**< Total bytes requested at submission */
 
     /* Completion-path counters (written during process_completion) */
-    _Alignas(64) int64_t bytes_completed;  /**< Total bytes actually transferred (from CQE results) */
-    int64_t ops_completed;                 /**< Total ops completed */
-    _Atomic uint32_t fixed_buf_inflight;   /**< Registered-buffer ops currently in-flight */
+    _Alignas(64) int64_t
+        bytes_completed;                 /**< Total bytes actually transferred (from CQE results) */
+    int64_t ops_completed;               /**< Total ops completed */
+    _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
 } ring_ctx_t;
 
 /**
