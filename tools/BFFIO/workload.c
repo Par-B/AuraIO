@@ -455,7 +455,7 @@ static void *worker_thread(void *arg) {
     thread_stats_t *stats = tctx->stats;
 
     /* Initialize per-thread io_ctx pool */
-    if (io_ctx_pool_init(&tctx->pool, config->iodepth) != 0) {
+    if (io_ctx_pool_init(&tctx->pool, tctx->effective_depth) != 0) {
         fprintf(stderr, "BFFIO: thread %d: failed to init io_ctx pool\n", tctx->thread_id);
         return NULL;
     }
@@ -463,7 +463,7 @@ static void *worker_thread(void *arg) {
     /* Pre-allocate aligned buffers for each pool slot (zero-malloc hot path).
      * Fill with non-zero data once to avoid zero-page optimization on writes.
      * FIO also fills once at init (--refill_buffers is opt-in). */
-    for (int s = 0; s < config->iodepth; s++) {
+    for (int s = 0; s < tctx->effective_depth; s++) {
         tctx->pool.slots[s].buffer = auraio_buffer_alloc(engine, (size_t)config->bs);
         if (tctx->pool.slots[s].buffer) {
             memset(tctx->pool.slots[s].buffer, 0xA5 ^ (s & 0xFF), (size_t)config->bs);
@@ -494,7 +494,7 @@ static void *worker_thread(void *arg) {
     tctx->sample_calib_ns = now_ns();
     tctx->sample_io_count = 0;
 
-    int iodepth = config->iodepth;
+    int iodepth = tctx->effective_depth;
     uint64_t bs = config->bs;
     uint64_t per_file_size = tctx->per_file_size;
     int is_random = pattern_is_random(config->rw);
@@ -704,6 +704,18 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
         stats_init(&stats[i]);
     }
 
+    /* Determine effective submission depth per thread.
+     * Benchmark mode: user's iodepth is the hard cap (like FIO).
+     * Target-p99 mode: let AIMD own the depth — use engine queue depth
+     * so the worker never self-limits below the AIMD ceiling. */
+    int effective_depth = config->iodepth;
+    if (config->target_p99_ms > 0.0) {
+        auraio_ring_stats_t rstats;
+        if (auraio_get_ring_stats(engine, 0, &rstats) == 0 && rstats.queue_depth > 0) {
+            effective_depth = rstats.queue_depth;
+        }
+    }
+
     /* Create thread contexts */
     thread_ctx_t *tctx = calloc((size_t)num_threads, sizeof(thread_ctx_t));
     if (!tctx) {
@@ -724,6 +736,7 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
         tctx[i].nrfiles = fset.fd_count;
         tctx[i].per_file_size = per_file_size;
         tctx[i].file_service_type = config->file_service_type;
+        tctx[i].effective_depth = effective_depth;
 
         /* Allocate per-file sequential offsets */
         tctx[i].seq_offsets = calloc((size_t)fset.fd_count, sizeof(uint64_t));

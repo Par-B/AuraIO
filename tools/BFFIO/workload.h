@@ -54,6 +54,7 @@ typedef struct {
     _Atomic int *ramping;      /* true during ramp_time */
     _Atomic int *workers_done; /* count of finished workers */
     io_ctx_pool_t pool;        /* pre-allocated io_ctx pool */
+    int effective_depth;       /* submission cap: iodepth (bench) or engine depth (p99) */
 
     /* Multi-file support */
     int nrfiles;             /* number of files available */

@@ -368,6 +368,17 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
                     params_changed = true;
                 }
                 ctrl->plateau_count = 0;
+            } else if (ctrl->max_p99_ms > 0 && have_valid_p99 && p99_ms < ctrl->max_p99_ms) {
+                /* Target-p99 mode: latency headroom remains, keep probing
+                 * even though throughput has plateaued. Push depth until
+                 * we approach the user's latency ceiling. */
+                if (in_flight_limit < ctrl->max_queue_depth) {
+                    in_flight_limit += ADAPTIVE_AIMD_INCREASE;
+                    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
+                                          memory_order_relaxed);
+                    params_changed = true;
+                }
+                ctrl->plateau_count = 0;
             } else {
                 /* Plateau detected */
                 ctrl->plateau_count++;
