@@ -116,6 +116,16 @@ bench-scalability: perf_bench
 	./perf_bench scalability 3
 
 # ============================================================================
+# Performance Regression Test (raw io_uring vs AuraIO overhead)
+# ============================================================================
+
+perf_regression: perf_regression.c ../engine/lib/libauraio.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+perf-regression: perf_regression
+	./perf_regression
+
+# ============================================================================
 # Portable Performance Test Suite (with fio baseline)
 # ============================================================================
 
@@ -302,7 +312,7 @@ test_coverage_asan: test_coverage.c ../engine/lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
 
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression $(TSAN_TESTS) $(ASAN_TESTS)
 
 # ============================================================================
 # Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)
@@ -321,4 +331,5 @@ deep-analysis-no-valgrind: perf_bench
         ring-select bench bench-throughput bench-latency bench-scalability \
         check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
         analyze analyze-quick analyze-full analyze-no-fio \
-        deep-analysis deep-analysis-quick deep-analysis-no-valgrind
+        deep-analysis deep-analysis-quick deep-analysis-no-valgrind \
+        perf-regression

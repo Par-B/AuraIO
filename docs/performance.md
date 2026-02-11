@@ -327,4 +327,68 @@ AuraIO configures `io_uring` to minimize kernel-userspace friction:
 - **`IORING_SETUP_COOP_TASKRUN`** (kernel 5.19+): Completions are delivered cooperatively when the application polls, rather than via asynchronous interrupts. This reduces context switches and keeps completion data on the submitting core's cache.
 - **Merged flush+poll**: The wait path performs submission and completion reaping in a single pass, with an early exit as soon as the first completions arrive — avoiding unnecessary re-entry into the kernel.
 
+## 8. Performance Regression Test
+
+### Purpose
+
+`tests/perf_regression.c` measures AuraIO's per-operation overhead against a minimal raw io_uring baseline. It exists to answer: **"How much does AuraIO's adaptive machinery cost in real IOPS?"** and to catch regressions when the engine internals change.
+
+### Design Decisions
+
+**Why raw io_uring as the baseline (not fio)?**
+Fio has its own overhead (job parsing, stats, threading). A hand-written io_uring loop with no locks, no atomics, no callbacks, and no histograms represents the theoretical floor — the fastest possible single-threaded io_uring performance. This isolates AuraIO's overhead from any benchmark framework noise.
+
+**Why single-threaded, single-ring?**
+Multi-threading introduces scheduling noise, lock contention, and ring selection overhead — all of which are separate concerns with their own benchmarks. The regression test is specifically about per-operation overhead: the cost of AIMD checks, request pool management, callback dispatch, histogram sampling, and mutex acquisition that AuraIO adds on every I/O.
+
+**Why fixed batch submission (default: 8 SQEs per submit)?**
+The raw io_uring loop submits a fixed batch of SQEs per `io_uring_submit()` call. The default of 8 matches AuraIO's `ADAPTIVE_TARGET_SQE_RATIO` — the target number of SQEs per syscall that the internal batch optimizer converges to. This makes the comparison apples-to-apples: both paths amortize the `io_uring_enter` syscall over the same number of operations. Submitting one-at-a-time would unfairly penalize the raw baseline; filling the entire SQ would mask per-op overhead in syscall amortization.
+
+**Why sweep queue depths?**
+Different depths exercise different bottlenecks. At low depth (32), the overhead is dominated by syscall frequency. At high depth (256), it shifts to lock contention and memory pressure. Sweeping finds each implementation's optimal operating point and compares them at their best — not at an arbitrary fixed depth that might favor one over the other.
+
+**Three AuraIO configurations tested:**
+1. **Static (adaptive disabled)** at the raw-optimal depth — pure apples-to-apples comparison of the engine's per-op machinery with no background tuning
+2. **Adaptive** at depth=256 with AIMD enabled — measures the full stack including the tick thread, histogram recording, and limit adjustments. Uses extended warmup (2s vs 1s default) to let AIMD converge before measurement begins
+3. The AIMD converged depth is reported to show whether the controller found a similar optimum to the sweep
+
+**Latency sampling (1 in 8 ops):**
+Both paths use identical `clock_gettime(CLOCK_MONOTONIC)` sampling at 1-in-8 rate, matching AuraIO's internal `RING_LATENCY_SAMPLE_MASK`. Sampling every op would add ~20ns overhead that biases the measurement; 1-in-8 is enough for stable P99 estimation.
+
+**Temp file with unlink:**
+The default test file is created via `mkstemp` + `fallocate(1GB)` + `unlink`. The unlink ensures automatic cleanup even on crash. Data is written with random bytes to prevent the filesystem from returning zeros for unwritten regions. `O_DIRECT` is enabled via `fcntl(F_SETFL)` to bypass the page cache — the AIMD controller needs to see true device latency, and cached reads would make both paths appear identically fast.
+
+**Time-bound execution:**
+Each test phase runs for a configurable duration (default 5s measurement + 1s warmup) rather than a fixed op count. This ensures stable measurements regardless of device speed — fast NVMe and slow HDD both get enough samples for reliable statistics. The offset table (1M entries) wraps around, so tests can run for arbitrary durations.
+
+### Running
+
+```bash
+# Default: creates temp 1GB file, sweeps depths 32/64/128/256, 5s per test
+make perf-regression
+
+# Against a real device (best for stable numbers)
+AURAIO_PERF_FILE=/dev/nvme0n1 make perf-regression
+
+# Quick smoke test (2s per test, 1s warmup)
+cd tests && ./perf_regression --duration 2 --warmup 1 --depths 32,64
+
+# Custom batch size (e.g., compare batch=1 vs batch=16 vs batch=64)
+./perf_regression --batch-size 16 --verbose
+```
+
+### Interpreting Results
+
+The test reports IOPS overhead as a percentage: `(raw_IOPS - auraio_IOPS) / raw_IOPS * 100`. The exit code is 0 (PASS) if overhead is below the threshold (default 10%), 1 (FAIL) if above.
+
+**Negative overhead** (AuraIO faster than raw) is common and expected — AuraIO's batch flush logic often achieves better syscall amortization than the fixed-batch raw loop. This is a feature: the adaptive controller's batch optimizer is doing its job.
+
+**When overhead is positive**, it represents the real cost of: mutex lock/unlock per submission, request slot allocation, atomic counter updates, latency sampling, callback dispatch, and the AIMD tick thread. On fast media (tmpfs, NVMe), expect 2-8% overhead. On slower media (SATA SSD, HDD), the per-op overhead is dwarfed by device latency and effectively rounds to 0%.
+
+### Threshold Guidance
+
+- **10% (default)**: Conservative. Appropriate for general-purpose regression detection.
+- **5%**: Strict. Use for NVMe-focused deployments where per-op overhead is visible.
+- **15-20%**: Relaxed. Appropriate when adaptive tuning provides significant value (e.g., mixed workloads, variable-latency storage) and the overhead is an acceptable trade for auto-tuning.
+
 See [API Reference](api_reference.md) for full function signatures and [Architecture](architecture.md) for internal design details.

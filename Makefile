@@ -423,6 +423,11 @@ bench-deep-quick: engine
 	$(MAKE) -C tests perf_bench
 	cd tests && ./run_deep_analysis.sh --quick $(BENCH_DIR_FLAG)
 
+# Performance regression test: raw io_uring vs AuraIO overhead
+perf-regression: engine
+	$(MAKE) -C tests perf_regression
+	cd tests && ./perf_regression $(PERF_REGRESSION_ARGS)
+
 # =============================================================================
 # Dependency management
 # =============================================================================
@@ -583,6 +588,10 @@ help:
 	@echo "  make bench-deep-quick Quick deep analysis (~10 min)"
 	@echo "  BENCH_DIR=/path     Override test file directory (default: /tmp/auraio_bench)"
 	@echo ""
+	@echo "Regression testing:"
+	@echo "  make perf-regression  Raw io_uring vs AuraIO overhead test"
+	@echo "                        Set AURAIO_PERF_FILE=/path to test against a specific file/device"
+	@echo ""
 	@echo "Code quality:"
 	@echo "  make lint           Run cppcheck (errors + warnings)"
 	@echo "  make lint-strict    Run cppcheck with style checks"
@@ -607,7 +616,7 @@ help:
         cpp-test \
         rust rust-test rust-examples rust-clean \
 	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
-	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick \
+	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick perf-regression \
 	        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
 	        coverage coverage-check \
 	        integrations \
