@@ -129,6 +129,10 @@ typedef struct {
         bytes_completed;                 /**< Total bytes actually transferred (from CQE results) */
     int64_t ops_completed;               /**< Total ops completed */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
+
+    /* Single-thread fast path: skip mutexes when caller guarantees
+     * single-thread access. Set during init, const after. */
+    bool single_thread;
 } ring_ctx_t;
 
 /**
@@ -327,5 +331,25 @@ bool ring_should_flush(ring_ctx_t *ctx);
  * @return Ring fd, or -1 if not initialized
  */
 int ring_get_fd(ring_ctx_t *ctx);
+
+/* ============================================================================
+ * Conditional Locking (inline for hot-path use in adaptive_ring.c + auraio.c)
+ *
+ * When single_thread is set, all mutex ops are skipped. The flag is const
+ * after init, so branch prediction eliminates overhead after warmup.
+ * ============================================================================ */
+
+static inline void ring_lock(ring_ctx_t *ctx) {
+    if (!ctx->single_thread) pthread_mutex_lock(&ctx->lock);
+}
+static inline void ring_unlock(ring_ctx_t *ctx) {
+    if (!ctx->single_thread) pthread_mutex_unlock(&ctx->lock);
+}
+static inline void ring_cq_lock(ring_ctx_t *ctx) {
+    if (!ctx->single_thread) pthread_mutex_lock(&ctx->cq_lock);
+}
+static inline void ring_cq_unlock(ring_ctx_t *ctx) {
+    if (!ctx->single_thread) pthread_mutex_unlock(&ctx->cq_lock);
+}
 
 #endif /* ADAPTIVE_RING_H */

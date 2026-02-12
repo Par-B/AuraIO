@@ -585,6 +585,7 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
     auraio_options_init(&opts);
     opts.queue_depth = depth;
     opts.ring_count = 1;
+    opts.single_thread = true;
     opts.disable_adaptive = !adaptive;
     if (!adaptive) opts.initial_in_flight = depth;
 

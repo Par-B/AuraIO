@@ -172,6 +172,7 @@ int main(int argc, char *argv[]) {
         opts.queue_depth = engine_depth;
         opts.ring_count =
             (job->numjobs <= 1) ? 1 : 0; /* 1 ring for single-thread, auto for multi */
+        opts.single_thread = (job->numjobs <= 1); /* Skip mutexes for single-thread */
         opts.ring_select = (auraio_ring_select_t)job->ring_select;
 
         /* Pass user's P99 latency target to AIMD controller */

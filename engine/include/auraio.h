@@ -279,7 +279,10 @@ typedef struct {
     /* Ring selection */
     auraio_ring_select_t ring_select; /**< Ring selection mode (default: ADAPTIVE) */
 
-    uint32_t _reserved[8]; /**< Reserved for future use; must be zero */
+    /* Performance */
+    bool single_thread; /**< Skip ring mutexes (caller guarantees single-thread access) */
+
+    uint32_t _reserved[7]; /**< Reserved for future use; must be zero */
 } auraio_options_t;
 
 /**

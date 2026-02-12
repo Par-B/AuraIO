@@ -21,6 +21,8 @@
  * >0 means current thread is inside AuraIO completion callback(s). */
 static _Thread_local int callback_context_depth = 0;
 
+/* Conditional locking helpers are in adaptive_ring.h (inline). */
+
 /* ============================================================================
  * Ring Lifecycle
  * ============================================================================ */
@@ -170,9 +172,9 @@ void ring_destroy(ring_ctx_t *ctx) {
     /* Flush any batched-but-not-submitted SQEs before draining.
      * Without this, ring_wait() would block waiting for CQEs that
      * correspond to SQEs never submitted to the kernel. */
-    pthread_mutex_lock(&ctx->lock);
+    ring_lock(ctx);
     (void)ring_flush(ctx);
-    pthread_mutex_unlock(&ctx->lock);
+    ring_unlock(ctx);
 
     /* Wait for pending operations to complete with a timeout.
      * Benign race: pending_count read without lock. Worst case is one extra
@@ -183,9 +185,9 @@ void ring_destroy(ring_ctx_t *ctx) {
     while (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0 &&
            drain_attempts < 100) {
         /* Retry flush in case an earlier submit failed transiently. */
-        pthread_mutex_lock(&ctx->lock);
+        ring_lock(ctx);
         (void)ring_flush(ctx);
-        pthread_mutex_unlock(&ctx->lock);
+        ring_unlock(ctx);
         ring_wait(ctx, 100);
         drain_attempts++;
     }
@@ -575,15 +577,35 @@ int ring_flush(ring_ctx_t *ctx) {
  * @param req    Request from io_uring_cqe_get_data (may be NULL)
  * @param result Result from cqe->res
  */
-static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t result) {
+/**
+ * Batch entry for deferred counter updates and slot retirement.
+ * Populated during callback phase, consumed during batched lock phase.
+ */
+typedef struct {
+    int op_idx;
+    ssize_t result;
+    auraio_op_type_t op_type;
+} retire_entry_t;
+
+/**
+ * Process a single completion's callback phase (no lock held).
+ *
+ * Does adaptive recording, sets pending=false, invokes user callback.
+ * Returns the retirement info needed for deferred counter updates.
+ * Must be called before ring_retire_batch().
+ */
+static retire_entry_t process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t result) {
+    retire_entry_t retire = { .op_idx = -1, .result = result, .op_type = AURAIO_OP_CANCEL };
+
     if (!req) {
-        return;
+        return retire;
     }
 
-    /* Save callback info BEFORE any state changes.
+    /* Save callback info and retirement data BEFORE any state changes.
      * The callback may submit new operations that reuse this request slot,
      * so we must capture everything we need before potential reuse. */
-    int op_idx = req->op_idx;
+    retire.op_idx = req->op_idx;
+    retire.op_type = req->op_type;
     auraio_callback_t callback = req->callback;
     void *user_data = req->user_data;
 
@@ -618,23 +640,46 @@ static void process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t r
         atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
     }
 
-    /* After callback: update counters and return slot in one lock region.
-     * pending_count is momentarily inflated by 1 during callback execution,
-     * which may cause a spurious EAGAIN if the ring is exactly at capacity.
-     * This is acceptable: the caller handles EAGAIN gracefully, and the
-     * count is corrected immediately after callback returns. */
-    pthread_mutex_lock(&ctx->lock);
-    /* Don't count cancel operations in ops_completed — they are
-     * internal bookkeeping, not user I/O operations. */
-    if (req->op_type != AURAIO_OP_CANCEL) {
-        ctx->ops_completed++;
-        if (result > 0) {
-            ctx->bytes_completed += result;
-        }
+    return retire;
+}
+
+/**
+ * Batch-retire completed requests under a single ring->lock hold.
+ *
+ * Updates ops_completed, bytes_completed, pending_count, and returns
+ * all request slots to the free pool. This amortizes mutex overhead
+ * from O(completions) to O(1) per poll/wait cycle.
+ *
+ * pending_count is inflated during the callback phase (between
+ * process_completion and ring_retire_batch). This may cause spurious
+ * EAGAIN from ring_can_submit, which callers handle gracefully.
+ */
+static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, int count) {
+    if (count <= 0) {
+        return;
     }
-    atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ring_put_request(ctx, op_idx);
-    pthread_mutex_unlock(&ctx->lock);
+
+    int pending_delta = 0;
+
+    ring_lock(ctx);
+    for (int i = 0; i < count; i++) {
+        if (entries[i].op_idx < 0) {
+            continue; /* NULL req, skipped */
+        }
+        /* Don't count cancel operations in ops_completed — they are
+         * internal bookkeeping, not user I/O operations. */
+        if (entries[i].op_type != AURAIO_OP_CANCEL) {
+            ctx->ops_completed++;
+            if (entries[i].result > 0) {
+                ctx->bytes_completed += entries[i].result;
+            }
+        }
+        ring_put_request(ctx, entries[i].op_idx);
+        pending_delta++;
+    }
+    /* Single atomic decrement for the entire batch instead of one per CQE. */
+    atomic_fetch_sub_explicit(&ctx->pending_count, pending_delta, memory_order_relaxed);
+    ring_unlock(ctx);
 }
 
 /** Max CQEs to extract per lock acquisition in ring_poll().
@@ -648,20 +693,24 @@ int ring_poll(ring_ctx_t *ctx) {
 
     int completed = 0;
 
-    /* Batch-extract CQEs under a single lock hold, then process
-     * completions outside the lock. This amortizes mutex overhead
-     * from O(completions) to O(completions / RING_POLL_BATCH).
-     * Callbacks are invoked outside the lock to prevent deadlock
-     * (callbacks may re-enter auraio_read/write). */
+    /* Two-phase completion processing:
+     *
+     * Phase 1 (per-CQE, no ring->lock): extract CQE batch under cq_lock,
+     * then invoke adaptive recording + user callbacks without any lock.
+     *
+     * Phase 2 (batched, one ring->lock): update counters and return all
+     * request slots in a single lock hold. This amortizes mutex overhead
+     * from O(completions) to O(completions / RING_POLL_BATCH). */
     struct {
         auraio_request_t *req;
         ssize_t result;
     } batch[RING_POLL_BATCH];
+    retire_entry_t retire[RING_POLL_BATCH];
 
     while (1) {
         int n = 0;
 
-        pthread_mutex_lock(&ctx->cq_lock);
+        ring_cq_lock(ctx);
         while (n < RING_POLL_BATCH) {
             struct io_uring_cqe *cqe;
             if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
@@ -673,16 +722,19 @@ int ring_poll(ring_ctx_t *ctx) {
             TSAN_ACQUIRE(batch[n].req);
             n++;
         }
-        pthread_mutex_unlock(&ctx->cq_lock);
+        ring_cq_unlock(ctx);
 
         if (n == 0) {
             break;
         }
 
-        /* Process completions without holding cq_lock */
+        /* Phase 1: callbacks without holding any lock */
         for (int i = 0; i < n; i++) {
-            process_completion(ctx, batch[i].req, batch[i].result);
+            retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
         }
+
+        /* Phase 2: one lock acquisition for all counter updates */
+        ring_retire_batch(ctx, retire, n);
         completed += n;
     }
 
@@ -699,19 +751,18 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         return (0);
     }
 
-    /* Batch buffer shared by all paths. Both the initial peek/wait and
-     * any additional available CQEs are extracted in a single lock hold,
-     * eliminating the previous separate drain loop. */
+    /* Batch buffers shared by all paths. */
     struct {
         auraio_request_t *req;
         ssize_t result;
     } batch[RING_POLL_BATCH];
+    retire_entry_t retire[RING_POLL_BATCH];
     int completed = 0;
 
     if (timeout_ms == 0) {
         /* Non-blocking: batch-extract all available CQEs in one lock hold */
         int n = 0;
-        pthread_mutex_lock(&ctx->cq_lock);
+        ring_cq_lock(ctx);
         while (n < RING_POLL_BATCH) {
             struct io_uring_cqe *cqe;
             if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
@@ -723,11 +774,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             TSAN_ACQUIRE(batch[n].req);
             n++;
         }
-        pthread_mutex_unlock(&ctx->cq_lock);
+        ring_cq_unlock(ctx);
 
         for (int i = 0; i < n; i++) {
-            process_completion(ctx, batch[i].req, batch[i].result);
+            retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
         }
+        ring_retire_batch(ctx, retire, n);
         completed = n;
     } else {
         /* Blocking wait: try non-blocking peek first, then block if needed.
@@ -736,7 +788,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         struct io_uring_cqe *cqe;
         int n;
 
-        pthread_mutex_lock(&ctx->cq_lock);
+        ring_cq_lock(ctx);
         if (io_uring_peek_cqe(&ctx->ring, &cqe) == 0) {
             /* CQE available immediately - batch extract all available */
             batch[0].req = io_uring_cqe_get_data(cqe);
@@ -754,11 +806,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 TSAN_ACQUIRE(batch[n].req);
                 n++;
             }
-            pthread_mutex_unlock(&ctx->cq_lock);
+            ring_cq_unlock(ctx);
 
             for (int i = 0; i < n; i++) {
-                process_completion(ctx, batch[i].req, batch[i].result);
+                retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
             }
+            ring_retire_batch(ctx, retire, n);
             completed = n;
         } else {
             /* Nothing available - release lock and do blocking wait.
@@ -768,7 +821,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
              * cq_lock and batch-peek, which handles the case where
              * another thread consumed the waking CQE first. */
             int ret;
-            pthread_mutex_unlock(&ctx->cq_lock);
+            ring_cq_unlock(ctx);
 
             if (timeout_ms < 0) {
                 ret = io_uring_wait_cqe(&ctx->ring, &cqe);
@@ -797,7 +850,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
              * Another thread might have consumed the CQE that woke us;
              * n==0 is handled gracefully. */
             n = 0;
-            pthread_mutex_lock(&ctx->cq_lock);
+            ring_cq_lock(ctx);
             while (n < RING_POLL_BATCH) {
                 if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
                     break;
@@ -808,11 +861,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 TSAN_ACQUIRE(batch[n].req);
                 n++;
             }
-            pthread_mutex_unlock(&ctx->cq_lock);
+            ring_cq_unlock(ctx);
 
             for (int i = 0; i < n; i++) {
-                process_completion(ctx, batch[i].req, batch[i].result);
+                retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
             }
+            ring_retire_batch(ctx, retire, n);
             completed = n;
         }
     }

@@ -315,9 +315,9 @@ static int finalize_deferred_unregistration(auraio_engine_t *engine) {
         fixed_buf_inflight_total(engine) == 0) {
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
-            pthread_mutex_lock(&ring->lock);
+            ring_lock(ring);
             io_uring_unregister_buffers(&ring->ring);
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
         }
 
         free(engine->registered_buffers);
@@ -330,9 +330,9 @@ static int finalize_deferred_unregistration(auraio_engine_t *engine) {
     if (engine->files_registered && engine->files_unreg_pending) {
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
-            pthread_mutex_lock(&ring->lock);
+            ring_lock(ring);
             io_uring_unregister_files(&ring->ring);
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
         }
 
         free(engine->registered_files);
@@ -383,7 +383,7 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
     }
 
     ring_ctx_t *ring = select_ring(engine);
-    pthread_mutex_lock(&ring->lock);
+    ring_lock(ring);
 
     if (!ring_can_submit(ring)) {
         if (ring_flush(ring) < 0) {
@@ -391,26 +391,26 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
                 errno = 0;
             } else {
                 latch_fatal_submit_errno(engine, errno);
-                pthread_mutex_unlock(&ring->lock);
+                ring_unlock(ring);
                 return ctx;
             }
             if (allow_poll) {
-                pthread_mutex_unlock(&ring->lock);
+                ring_unlock(ring);
                 ring_poll(ring);
-                pthread_mutex_lock(&ring->lock);
+                ring_lock(ring);
             }
         } else {
             if (allow_poll) {
                 /* Release lock before polling: process_completion() re-acquires ring->lock
                  * to update counters, so holding it here would deadlock. */
-                pthread_mutex_unlock(&ring->lock);
+                ring_unlock(ring);
                 ring_poll(ring);
-                pthread_mutex_lock(&ring->lock);
+                ring_lock(ring);
             }
         }
 
         if (!ring_can_submit(ring)) {
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             errno = EAGAIN;
             return ctx;
         }
@@ -419,7 +419,7 @@ static submit_ctx_t submit_begin(auraio_engine_t *engine, bool allow_poll) {
     int op_idx;
     auraio_request_t *req = ring_get_request(ring, &op_idx);
     if (!req) {
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
         errno = ENOMEM;
         return ctx;
     }
@@ -440,7 +440,7 @@ static void submit_end(submit_ctx_t *ctx) {
             latch_fatal_submit_errno(ctx->engine, errno);
         }
     }
-    pthread_mutex_unlock(&ctx->ring->lock);
+    ring_unlock(ctx->ring);
 }
 
 /**
@@ -449,7 +449,7 @@ static void submit_end(submit_ctx_t *ctx) {
  */
 static void submit_abort(submit_ctx_t *ctx) {
     ring_put_request(ctx->ring, ctx->op_idx);
-    pthread_mutex_unlock(&ctx->ring->lock);
+    ring_unlock(ctx->ring);
 }
 
 /**
@@ -626,6 +626,7 @@ auraio_engine_t *auraio_create_with_options(const auraio_options_t *options) {
             goto cleanup_rings;
         }
         engine->rings[i].ring_idx = i;
+        engine->rings[i].single_thread = options->single_thread;
 
         /* Track if any ring has SQPOLL enabled */
         if (engine->rings[i].sqpoll_enabled) {
@@ -1159,11 +1160,11 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
     }
 
     ring_ctx_t *ring = &engine->rings[req->ring_idx];
-    pthread_mutex_lock(&ring->lock);
+    ring_lock(ring);
 
     /* Double-check it's still pending while holding lock */
     if (!atomic_load_explicit(&req->pending, memory_order_acquire)) {
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
         errno = EALREADY;
         return (-1);
     }
@@ -1172,7 +1173,7 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
     int op_idx;
     auraio_request_t *cancel_req = ring_get_request(ring, &op_idx);
     if (!cancel_req) {
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
         errno = ENOMEM;
         return (-1);
     }
@@ -1184,7 +1185,7 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
     cancel_req->user_data = NULL;
     if (ring_submit_cancel(ring, cancel_req, req) != 0) {
         ring_put_request(ring, op_idx);
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
         return (-1);
     }
 
@@ -1192,15 +1193,15 @@ int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req) {
     if (ring_flush(ring) < 0) {
         if (!flush_error_is_fatal(errno)) {
             errno = 0;
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             return (0);
         }
         latch_fatal_submit_errno(engine, errno);
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
         return (-1);
     }
 
-    pthread_mutex_unlock(&ring->lock);
+    ring_unlock(ring);
     return (0);
 }
 
@@ -1279,7 +1280,7 @@ int auraio_poll(auraio_engine_t *engine) {
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
 
-        if (pthread_mutex_trylock(&ring->lock) == 0) {
+        if (ring->single_thread || pthread_mutex_trylock(&ring->lock) == 0) {
             /* Got the lock - flush, then release before poll */
             if (ring_flush(ring) < 0) {
                 if (!flush_error_is_fatal(errno)) {
@@ -1289,7 +1290,7 @@ int auraio_poll(auraio_engine_t *engine) {
                     fatal_latched = true;
                 }
             }
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
 
             int completed = ring_poll(ring);
 
@@ -1308,7 +1309,7 @@ int auraio_poll(auraio_engine_t *engine) {
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
 
-            pthread_mutex_lock(&ring->lock);
+            ring_lock(ring);
             if (ring_flush(ring) < 0) {
                 if (!flush_error_is_fatal(errno)) {
                     errno = 0;
@@ -1317,7 +1318,7 @@ int auraio_poll(auraio_engine_t *engine) {
                     fatal_latched = true;
                 }
             }
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
 
             int completed = ring_poll(ring);
 
@@ -1369,7 +1370,7 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     int first_pending = -1; /* First ring with pending ops (for blocking) */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        pthread_mutex_lock(&ring->lock);
+        ring_lock(ring);
         if (ring_flush(ring) < 0) {
             if (!flush_error_is_fatal(errno)) {
                 errno = 0;
@@ -1379,7 +1380,7 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
             }
         }
         bool has_pending = (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0);
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
 
         int n = ring_poll(ring);
         if (n > 0) {
@@ -1495,10 +1496,10 @@ int auraio_drain(auraio_engine_t *engine, int timeout_ms) {
         bool has_pending = false;
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
-            pthread_mutex_lock(&ring->lock);
+            ring_lock(ring);
             if (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0)
                 has_pending = true;
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             if (has_pending) break;
         }
         if (!has_pending) {
@@ -1586,17 +1587,17 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
     /* Register with all rings - they share the registration */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        pthread_mutex_lock(&ring->lock);
+        ring_lock(ring);
 
         int ret = io_uring_register_buffers(&ring->ring, iovs, count);
         if (ret < 0) {
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             /* Unregister from already-registered rings */
             for (int j = 0; j < i; j++) {
                 ring_ctx_t *prev_ring = &engine->rings[j];
-                pthread_mutex_lock(&prev_ring->lock);
+                ring_lock(prev_ring);
                 io_uring_unregister_buffers(&prev_ring->ring);
-                pthread_mutex_unlock(&prev_ring->lock);
+                ring_unlock(prev_ring);
             }
             free(engine->registered_buffers);
             engine->registered_buffers = NULL;
@@ -1606,7 +1607,7 @@ int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, i
             return (-1);
         }
 
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
     }
 
     engine->buffers_registered = true;
@@ -1696,17 +1697,17 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
     /* Register with all rings */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        pthread_mutex_lock(&ring->lock);
+        ring_lock(ring);
 
         int ret = io_uring_register_files(&ring->ring, fds, count);
         if (ret < 0) {
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             /* Unregister from already-registered rings */
             for (int j = 0; j < i; j++) {
                 ring_ctx_t *prev_ring = &engine->rings[j];
-                pthread_mutex_lock(&prev_ring->lock);
+                ring_lock(prev_ring);
                 io_uring_unregister_files(&prev_ring->ring);
-                pthread_mutex_unlock(&prev_ring->lock);
+                ring_unlock(prev_ring);
             }
             free(engine->registered_files);
             engine->registered_files = NULL;
@@ -1716,7 +1717,7 @@ int auraio_register_files(auraio_engine_t *engine, const int *fds, int count) {
             return (-1);
         }
 
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
     }
 
     engine->files_registered = true;
@@ -1752,24 +1753,24 @@ int auraio_update_file(auraio_engine_t *engine, int index, int fd) {
     int old_fd = engine->registered_files[index];
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        pthread_mutex_lock(&ring->lock);
+        ring_lock(ring);
 
         int ret = io_uring_register_files_update(&ring->ring, index, &fd, 1);
         if (ret < 0) {
-            pthread_mutex_unlock(&ring->lock);
+            ring_unlock(ring);
             /* Roll back already-updated rings to old fd */
             for (int j = 0; j < i; j++) {
                 ring_ctx_t *prev_ring = &engine->rings[j];
-                pthread_mutex_lock(&prev_ring->lock);
+                ring_lock(prev_ring);
                 io_uring_register_files_update(&prev_ring->ring, index, &old_fd, 1);
-                pthread_mutex_unlock(&prev_ring->lock);
+                ring_unlock(prev_ring);
             }
             pthread_rwlock_unlock(&engine->reg_lock);
             errno = -ret;
             return (-1);
         }
 
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
     }
 
     /* Update our copy */
@@ -1861,7 +1862,7 @@ void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
 
         /* Lock ring while reading stats to prevent data races with
          * completion handlers and tick thread */
-        pthread_mutex_lock(&ring->lock);
+        ring_lock(ring);
 
         stats->ops_completed += ring->ops_completed;
         stats->bytes_transferred += ring->bytes_completed;
@@ -1883,7 +1884,7 @@ void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats) {
             max_p99 = p99;
         }
 
-        pthread_mutex_unlock(&ring->lock);
+        ring_unlock(ring);
     }
 
     stats->current_in_flight = total_in_flight;
@@ -1930,7 +1931,7 @@ int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx, auraio_ri
     }
 
     ring_ctx_t *ring = &engine->rings[ring_idx];
-    pthread_mutex_lock(&ring->lock);
+    ring_lock(ring);
 
     stats->ops_completed = ring->ops_completed;
     stats->bytes_transferred = ring->bytes_completed;
@@ -1953,7 +1954,7 @@ int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx, auraio_ri
     stats->aimd_phase = atomic_load_explicit(&ctrl->phase, memory_order_acquire);
     memset(stats->_reserved, 0, sizeof(stats->_reserved));
 
-    pthread_mutex_unlock(&ring->lock);
+    ring_unlock(ring);
     return 0;
 }
 
@@ -1965,7 +1966,7 @@ int auraio_get_histogram(const auraio_engine_t *engine, int ring_idx, auraio_his
     }
 
     ring_ctx_t *ring = &engine->rings[ring_idx];
-    pthread_mutex_lock(&ring->lock);
+    ring_lock(ring);
 
     /* Read from the active histogram.  Individual bucket loads are atomic but
      * the overall snapshot is approximate — see auraio_histogram_t docs. */
@@ -1979,7 +1980,7 @@ int auraio_get_histogram(const auraio_engine_t *engine, int ring_idx, auraio_his
     hist->max_tracked_us = LATENCY_MAX_US;
     memset(hist->_reserved, 0, sizeof(hist->_reserved));
 
-    pthread_mutex_unlock(&ring->lock);
+    ring_unlock(ring);
     return 0;
 }
 
