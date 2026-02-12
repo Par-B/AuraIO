@@ -341,11 +341,29 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
     int num_bufs = rc->depth;
     void **bufs = malloc((size_t)num_bufs * sizeof(void *));
     io_slot_t *slots = calloc((size_t)num_bufs, sizeof(io_slot_t));
+    int *free_stack = malloc((size_t)num_bufs * sizeof(int));
+    if (!bufs || !slots || !free_stack) {
+        fprintf(stderr, "allocation failed\n");
+        free(bufs);
+        free(slots);
+        free(free_stack);
+        auraio_destroy(engine);
+        return result;
+    }
     int max_block = rc->block_size;
     if (rc->phase2_block_size > max_block) max_block = rc->phase2_block_size;
-    for (int i = 0; i < num_bufs; i++) bufs[i] = aligned_alloc(4096, (size_t)max_block);
-
-    int *free_stack = malloc((size_t)num_bufs * sizeof(int));
+    for (int i = 0; i < num_bufs; i++) {
+        bufs[i] = aligned_alloc(4096, (size_t)max_block);
+        if (!bufs[i]) {
+            fprintf(stderr, "aligned_alloc failed\n");
+            for (int j = 0; j < i; j++) free(bufs[j]);
+            free(bufs);
+            free(slots);
+            free(free_stack);
+            auraio_destroy(engine);
+            return result;
+        }
+    }
     int free_top = num_bufs;
     for (int i = 0; i < num_bufs; i++) free_stack[i] = i;
 
@@ -504,7 +522,7 @@ static noise_result_t run_noise_scenario(int fd, int depth, bool adaptive, int p
 // ============================================================================
 
 static const char *fmt_iops(double iops, char *buf, size_t len) {
-    if (iops >= 1000000) snprintf(buf, len, "%.0fK", iops / 1000);
+    if (iops >= 1000000) snprintf(buf, len, "%.1fM", iops / 1000000);
     else if (iops >= 1000) snprintf(buf, len, "%.0fK", iops / 1000);
     else snprintf(buf, len, "%.0f", iops);
     return buf;
@@ -824,6 +842,7 @@ int main(int argc, char **argv) {
 
     free(rand_offsets);
     free(seq_offsets);
+    if (cfg.file_is_temp) free((void *)cfg.file_path);
     close(fd);
     return 0;
 }
