@@ -428,6 +428,11 @@ perf-regression: engine
 	$(MAKE) -C tests perf_regression
 	cd tests && ./perf_regression $(PERF_REGRESSION_ARGS)
 
+# Adaptive value benchmark: proves AIMD beats static depth tuning
+bench-adaptive: engine
+	$(MAKE) -C tests adaptive_value
+	cd tests && ./adaptive_value $(ADAPTIVE_BENCH_ARGS)
+
 # =============================================================================
 # Dependency management
 # =============================================================================
@@ -591,6 +596,8 @@ help:
 	@echo "Regression testing:"
 	@echo "  make perf-regression  Raw io_uring vs AuraIO overhead test"
 	@echo "                        Set AURAIO_PERF_FILE=/path to test against a specific file/device"
+	@echo "  make bench-adaptive   Adaptive AIMD vs static depth comparison"
+	@echo "                        Set ADAPTIVE_BENCH_ARGS='--quick' for short run"
 	@echo ""
 	@echo "Code quality:"
 	@echo "  make lint           Run cppcheck (errors + warnings)"
@@ -616,7 +623,7 @@ help:
         cpp-test \
         rust rust-test rust-examples rust-clean \
 	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
-	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick perf-regression \
+	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick perf-regression bench-adaptive \
 	        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
 	        coverage coverage-check \
 	        integrations \

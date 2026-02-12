@@ -126,6 +126,16 @@ perf-regression: perf_regression
 	./perf_regression
 
 # ============================================================================
+# Adaptive Value Benchmark (proves AIMD beats static depth tuning)
+# ============================================================================
+
+adaptive_value: adaptive_value.c ../engine/lib/libauraio.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+
+bench-adaptive: adaptive_value
+	./adaptive_value
+
+# ============================================================================
 # Portable Performance Test Suite (with fio baseline)
 # ============================================================================
 
@@ -312,7 +322,7 @@ test_coverage_asan: test_coverage.c ../engine/lib/libauraio_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
 
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value $(TSAN_TESTS) $(ASAN_TESTS)
 
 # ============================================================================
 # Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)
@@ -332,4 +342,4 @@ deep-analysis-no-valgrind: perf_bench
         check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
         analyze analyze-quick analyze-full analyze-no-fio \
         deep-analysis deep-analysis-quick deep-analysis-no-valgrind \
-        perf-regression
+        perf-regression bench-adaptive

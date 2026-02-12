@@ -8,24 +8,36 @@
 ![Rust](https://img.shields.io/badge/language-Rust-orange)
 ![io_uring](https://img.shields.io/badge/backend-io__uring-green)
 
-> Self-tuning async I/O for Linux. Zero config. Maximum throughput.
+> io_uring that tunes itself. No knobs. No benchmarking sweeps. Just optimal I/O.
 
-AuraIO is a drop-in async I/O library that automatically optimizes itself. Replace your blocking `read()`/`write()` calls with AuraIO and get io_uring performance with AIMD self-tuning—no manual configuration required.
+AuraIO is a drop-in async I/O library for Linux that **continuously finds the right queue depth** using AIMD congestion control. You don't pick a number and hope — AuraIO tracks the optimum across changing conditions, per ring, per storage target.
 
-## Why AuraIO?
+## The Problem: Static Depth Is a Treadmill
 
-| Challenge | Traditional Approach | AuraIO Approach |
-|-----------|---------------------|-----------------|
-| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `auraio_read()`/`auraio_write()` |
-| **Queue depth tuning** | Guess a number, benchmark, repeat | AIMD finds optimal depth automatically |
-| **Multi-core scaling** | Manual ring-per-core setup | Automatic per-CPU rings with CPU-aware routing |
-| **Buffer management** | Roll your own allocator | Built-in scalable pool with thread-local caching |
+Every io_uring application has the same question: *what queue depth should I use?*
 
-**The pitch:** Get 90% of hand-tuned io_uring performance with 10% of the code.
+The standard answer is: benchmark it. But that answer has a shelf life. The optimal depth depends on the storage device, the workload mix, the number of tenants sharing the device, thermal conditions, background compaction — all of which change at runtime. A depth you benchmarked on Tuesday is wrong by Thursday.
+
+**Where static depth fails:**
+
+| Scenario | What happens with a fixed depth |
+|----------|--------------------------------|
+| **Noisy neighbor** | Another VM starts heavy writes. Your P99 spikes because your depth is too aggressive. By the time you notice, you've been violating SLOs for minutes. |
+| **Workload phase change** | Your app switches from sequential bulk loads to random lookups. Optimal depth drops from 128 to 16. Static depth either wastes IOPS or blows latency. |
+| **P99 constraint** | You need max throughput under 2ms P99. The right depth is somewhere between 32 and 64 — but you don't know where without sweeping, and it drifts. |
+| **Multi-tenant storage** | Shared NVMe behind a hypervisor. Available bandwidth shifts constantly. No single depth is right for more than a few seconds. |
+
+AuraIO replaces this treadmill with AIMD that tracks the optimum continuously:
+- Probes up (+1 depth per tick) while throughput improves
+- Backs off (×0.80) when latency spikes
+- Reconverges within seconds when conditions change
+- Works per-ring, per-storage-target — no global tuning
+
+**The result:** You get io_uring performance without io_uring tuning. One function call, zero configuration, continuous optimality.
 
 ## Drop-In Adoption
 
-AuraIO requires minimal code changes. You don't need to restructure your application—just replace I/O calls.
+AuraIO requires minimal code changes. You don't need to restructure your application — just replace I/O calls.
 
 **Before (blocking):**
 ```c
@@ -46,6 +58,16 @@ void on_complete(auraio_request_t *req, ssize_t n, void *ctx) {
 ```
 
 **Migration effort:** ~20 lines of boilerplate, then mechanical transformation of each I/O call.
+
+## Why AuraIO?
+
+| Challenge | Traditional Approach | AuraIO Approach |
+|-----------|---------------------|-----------------|
+| **Queue depth tuning** | Benchmark, pick a number, redeploy when it drifts | AIMD finds and tracks optimal depth continuously |
+| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `auraio_read()`/`auraio_write()` |
+| **Multi-core scaling** | Manual ring-per-core setup | Automatic per-CPU rings with CPU-aware routing |
+| **Changing conditions** | Re-benchmark when storage or load changes | Adapts in seconds — noisy neighbors, phase changes, thermal throttling |
+| **Buffer management** | Roll your own allocator | Built-in scalable pool with thread-local caching |
 
 ## Three APIs: C, C++, and Rust
 
@@ -154,10 +176,10 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
 
 ## Features
 
-- **Zero Configuration** — Automatically detects cores, tunes queue depth via AIMD
+- **AIMD Self-Tuning** — Finds and tracks optimal concurrency continuously, per ring, per target
+- **Zero Configuration** — Automatically detects cores, allocates rings, sizes queues
 - **Per-Core Rings** — One io_uring per CPU eliminates cross-core contention
 - **Smart Ring Selection** — Three modes: ADAPTIVE (CPU-local with overflow spilling), CPU_LOCAL (strict affinity), ROUND_ROBIN (max scaling)
-- **AIMD Self-Tuning** — Finds optimal concurrency without benchmarking
 - **Scalable Buffer Pool** — Thread-local caches, auto-scaling shards
 - **Triple API** — C for systems, C++ for applications, Rust for safety
 - **Coroutine Support** — C++20 `co_await` and Rust async/await
@@ -263,6 +285,50 @@ fn main() -> Result<()> {
 
 See [`examples/`](examples/) for more: bulk readers, write modes, coroutines, async copy.
 
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Your Application                      │
+├─────────────────────────────────────────────────────────────┤
+│                         AuraIO API                          │
+├───────────────────┬───────────────────┬───────┬─────────────┤
+│  Ring 0 (Core 0)  │  Ring 1 (Core 1)  │  ...  │   Ring N    │
+│  ┌─────────────┐  │  ┌─────────────┐  │       │             │
+│  │  Adaptive   │  │  │  Adaptive   │  │       │             │
+│  │  Controller │  │  │  Controller │  │       │             │
+│  └─────────────┘  │  └─────────────┘  │       │             │
+├───────────────────┴───────────────────┴───────┴─────────────┤
+│                      io_uring / Kernel                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**AIMD Self-Tuning:**
+1. **Baseline** — Measures P99 latency at low concurrency (depth 4)
+2. **Probe** — Increases in-flight limit by +1 per tick (10ms) while throughput improves
+3. **Back off** — Cuts limit by ×0.80 if P99 latency spikes (see `LATENCY_SPIKE_THRESHOLD` in `engine/src/adaptive_engine.h`)
+4. **Converge** — Settles at the depth that maximizes throughput without blowing latency
+5. **Re-probe** — Periodically re-tests to track changing conditions
+
+Uses a gentler 20% decrease (vs TCP's 50%) because storage latency
+is more predictable than network RTT — fewer oscillations, faster convergence.
+
+**Result:** Adapts automatically to NVMe, HDD, network storage, noisy neighbors, and workload phase changes.
+
+## Proving It: Adaptive Value Benchmark
+
+AuraIO includes a benchmark (`tests/adaptive_value`) that demonstrates where adaptive AIMD outperforms static depth tuning on real block devices:
+
+```bash
+make bench-adaptive                              # Full run on default temp file
+make bench-adaptive ADAPTIVE_BENCH_ARGS="--file /dev/nvme0n1 --duration 30"  # Real device
+```
+
+Three scenarios:
+1. **Noisy Neighbor** — Background writes create variable I/O pressure. Static depth either over-commits (P99 spikes) or under-commits (wastes IOPS). Adaptive backs off during noise, probes back up during quiet.
+2. **P99-Constrained Throughput** — Find max IOPS under a latency ceiling. Static requires sweeping across depths. Adaptive converges to the right depth automatically.
+3. **Workload Phase Change** — Sequential reads switch to random reads mid-run. Optimal depth changes dramatically. Adaptive reconverges in seconds.
+
 ## Installation
 
 ### C/C++ Library
@@ -343,35 +409,6 @@ make rust-examples  # Build Rust examples
 
 Full API documentation: [`docs/`](docs/)
 
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Your Application                      │
-├─────────────────────────────────────────────────────────────┤
-│                         AuraIO API                          │
-├───────────────────┬───────────────────┬───────┬─────────────┤
-│  Ring 0 (Core 0)  │  Ring 1 (Core 1)  │  ...  │   Ring N    │
-│  ┌─────────────┐  │  ┌─────────────┐  │       │             │
-│  │  Adaptive   │  │  │  Adaptive   │  │       │             │
-│  │  Controller │  │  │  Controller │  │       │             │
-│  └─────────────┘  │  └─────────────┘  │       │             │
-├───────────────────┴───────────────────┴───────┴─────────────┤
-│                      io_uring / Kernel                      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**AIMD Self-Tuning:**
-1. Measures baseline P99 latency at low concurrency
-2. Probes: increases in-flight limit by +1 per tick while throughput improves
-3. Backs off: cuts limit by ×0.80 if P99 latency spikes past 10× baseline (see `LATENCY_SPIKE_THRESHOLD` in `engine/src/adaptive_engine.h`)
-4. Converges to optimal depth without manual tuning
-
-Uses a gentler 20% decrease (vs TCP's 50%) because storage latency
-is more predictable than network RTT—fewer oscillations, faster convergence.
-
-**Result:** Adapts automatically to NVMe, HDD, network storage, or noisy neighbors.
-
 ## Incremental Adoption
 
 You don't need to rewrite your application:
@@ -381,7 +418,7 @@ You don't need to rewrite your application:
 3. **Measure** — Compare throughput/latency
 4. **Expand** — Migrate more call sites over time
 
-Synchronous and async code coexist—call `auraio_wait()` immediately after submission for sync-style semantics while still getting io_uring efficiency.
+Synchronous and async code coexist — call `auraio_wait()` immediately after submission for sync-style semantics while still getting io_uring efficiency.
 
 ## Performance Tips
 
