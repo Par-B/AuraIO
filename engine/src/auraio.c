@@ -347,6 +347,13 @@ static int finalize_deferred_unregistration(auraio_engine_t *engine) {
 }
 
 static int maybe_finalize_deferred_unregistration(auraio_engine_t *engine) {
+    /* Fast path: if nothing is registered, there's nothing to finalize.
+     * Avoids rwlock acquisition on every poll/wait call. */
+    if (!atomic_load_explicit(&engine->buffers_registered, memory_order_acquire) &&
+        !atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        return (0);
+    }
+
     bool need_finalize = false;
 
     pthread_rwlock_rdlock(&engine->reg_lock);
@@ -1264,11 +1271,15 @@ int auraio_poll(auraio_engine_t *engine) {
     /* Drain eventfd to clear POLLIN state after completions.
      * Without this, epoll would immediately return again even
      * though we've processed all available CQEs.
+     * Skip in single_thread mode: direct poll callers don't use epoll,
+     * so the eventfd read is a wasted syscall.
      * EAGAIN expected if no data. Other errors (EBADF etc) indicate
      * broken state with no recovery - ignore and continue. */
-    uint64_t eventfd_val;
-    if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
-        /* Intentionally ignored - see comment above */
+    if (!engine->rings[0].single_thread) {
+        uint64_t eventfd_val;
+        if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
+            /* Intentionally ignored - see comment above */
+        }
     }
 
     int total = 0;
@@ -1355,11 +1366,14 @@ int auraio_wait(auraio_engine_t *engine, int timeout_ms) {
     /* Drain eventfd to clear POLLIN state after completions.
      * Without this, epoll would immediately return again even
      * though we've processed all available CQEs.
+     * Skip in single_thread mode: direct poll callers don't use epoll.
      * EAGAIN expected if no data. Other errors (EBADF etc) indicate
      * broken state with no recovery - ignore and continue. */
-    uint64_t eventfd_val;
-    if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
-        /* Intentionally ignored - see comment above */
+    if (!engine->rings[0].single_thread) {
+        uint64_t eventfd_val;
+        if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
+            /* Intentionally ignored - see comment above */
+        }
     }
 
     /* Single-pass flush+poll: flush each ring and immediately poll it.
