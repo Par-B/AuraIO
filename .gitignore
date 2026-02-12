@@ -22,6 +22,7 @@ tests/test_*_tsan
 tests/test_*_asan
 tests/stress_test
 tests/perf_bench
+tests/adaptive_value
 tests/default.profraw
 
 # Benchmark results (generated)
