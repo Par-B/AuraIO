@@ -658,6 +658,12 @@ int ring_flush(ring_ctx_t *ctx) {
 
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted < 0) {
+        /* Submit failed. The SQEs are still in the kernel SQ and will be
+         * retried on the next flush. Log the error but don't fail hard —
+         * the caller will retry via the next flush or drain cycle.
+         * Persistent failures will be caught by ring_destroy's timeout. */
+        aura_log(AURA_LOG_WARN, "io_uring_submit failed: %s (queued=%d)", strerror(-submitted),
+                 ctx->queued_sqes);
         errno = -submitted;
         return (-1);
     }
@@ -872,7 +878,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         ring_cq_unlock(ctx);
 
         if (timeout_ms < 0) {
-            ret = io_uring_wait_cqe(&ctx->ring, &cqe);
+            /* Use 1-second timeout instead of infinite wait to avoid hanging
+             * if another thread consumes the waking CQE between our cq_lock
+             * release and this call. The outer caller (ring_destroy) will
+             * retry if pending_count is still > 0. */
+            struct __kernel_timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
+            ret = io_uring_wait_cqe_timeout(&ctx->ring, &cqe, &ts);
         } else {
             struct __kernel_timespec ts;
             ts.tv_sec = timeout_ms / 1000;

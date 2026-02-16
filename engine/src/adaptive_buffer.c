@@ -836,13 +836,14 @@ void buf_size_map_destroy(buf_size_map_t *map) {
     pthread_mutex_destroy(&map->lock);
 }
 
-/* Grow the table (caller must hold wrlock) */
-static void buf_map_grow(buf_size_map_t *map) {
+/* Grow the table (caller must hold lock).
+ * Returns 0 on success, -1 on allocation failure. */
+static int buf_map_grow(buf_size_map_t *map) {
     size_t old_cap = map->capacity;
     size_t new_cap = old_cap * 2;
     buf_map_entry_t *old = map->entries;
     buf_map_entry_t *new_entries = calloc(new_cap, sizeof(buf_map_entry_t));
-    if (!new_entries) return; /* grow failed — insertions will still work, just slower */
+    if (!new_entries) return -1;
 
     size_t new_mask = new_cap - 1;
     for (size_t i = 0; i < old_cap; i++) {
@@ -858,9 +859,10 @@ static void buf_map_grow(buf_size_map_t *map) {
     map->entries = new_entries;
     map->capacity = new_cap;
     free(old);
+    return 0;
 }
 
-void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
+int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     uintptr_t key = (uintptr_t)ptr;
 
     pthread_mutex_lock(&map->lock);
@@ -868,7 +870,11 @@ void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     /* Check load factor and grow if needed */
     size_t count = atomic_load_explicit(&map->count, memory_order_relaxed);
     if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
-        buf_map_grow(map);
+        if (buf_map_grow(map) != 0) {
+            pthread_mutex_unlock(&map->lock);
+            errno = ENOMEM;
+            return -1;
+        }
     }
 
     size_t mask = map->capacity - 1;
@@ -880,6 +886,7 @@ void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     map->entries[idx].class_idx = (uint8_t)class_idx;
     atomic_fetch_add_explicit(&map->count, 1, memory_order_relaxed);
     pthread_mutex_unlock(&map->lock);
+    return 0;
 }
 
 int buf_size_map_remove(buf_size_map_t *map, void *ptr) {

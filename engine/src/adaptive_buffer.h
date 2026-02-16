@@ -211,7 +211,7 @@ typedef struct {
 
 int buf_size_map_init(buf_size_map_t *map);
 void buf_size_map_destroy(buf_size_map_t *map);
-void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx);
+int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx);
 int buf_size_map_remove(buf_size_map_t *map, void *ptr);
 
 /**

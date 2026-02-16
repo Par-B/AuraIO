@@ -719,13 +719,16 @@ void aura_destroy(aura_engine_t *engine) {
      * buffers still referenced by in-flight operations. */
     aura_drain(engine, -1);
 
-    /* Unregister buffers and files (safe now that I/O is drained) */
-    if (engine->buffers_registered) {
-        aura_unregister_buffers(engine);
+    /* Unregister buffers and files (safe now that I/O is drained).
+     * Call finalize directly instead of aura_unregister_* to avoid the
+     * aura_wait loop which can livelock post-shutdown (no new I/O). */
+    if (engine->buffers_registered && !engine->buffers_unreg_pending) {
+        aura_request_unregister_buffers(engine);
     }
-    if (engine->files_registered) {
-        aura_unregister_files(engine);
+    if (engine->files_registered && !engine->files_unreg_pending) {
+        aura_request_unregister_files(engine);
     }
+    finalize_deferred_unregistration(engine);
 
     /* Close unified eventfd */
     if (engine->event_fd >= 0) {
@@ -1797,7 +1800,10 @@ void *aura_buffer_alloc(aura_engine_t *engine, size_t size) {
 
     void *buf = buffer_pool_alloc(&engine->buffer_pool, size);
     if (buf) {
-        buf_size_map_insert(&engine->buf_size_map, buf, size_to_class(size));
+        if (buf_size_map_insert(&engine->buf_size_map, buf, size_to_class(size)) != 0) {
+            buffer_pool_free(&engine->buffer_pool, buf, size);
+            return NULL;
+        }
     }
     return buf;
 }

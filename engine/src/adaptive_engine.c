@@ -134,20 +134,43 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
         return -1;
     }
 
-    memset(ctrl, 0, sizeof(*ctrl));
-
-    ctrl->max_queue_depth = max_queue_depth;
-    ctrl->min_in_flight = 4; /* Never go below 4 */
+    /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
+     * On platforms where _Atomic types use internal locks, memset would
+     * destroy the lock state. Instead, init atomics first, then zero
+     * the non-atomic fields individually. */
     atomic_init(&ctrl->current_in_flight_limit, initial_inflight);
     atomic_init(&ctrl->current_batch_threshold, ADAPTIVE_MIN_BATCH);
-
     atomic_init(&ctrl->current_p99_ms, 0.0);
     atomic_init(&ctrl->current_throughput_bps, 0.0);
     atomic_init(&ctrl->phase, ADAPTIVE_PHASE_BASELINE);
-    atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
-    atomic_store_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
-    atomic_store_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
-    atomic_store_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
+    atomic_init(&ctrl->submit_calls, 0);
+    atomic_init(&ctrl->sqes_submitted, 0);
+    atomic_init(&ctrl->sample_start_ns, get_time_ns());
+    atomic_init(&ctrl->sample_bytes, 0);
+
+    /* Zero all non-atomic fields */
+    ctrl->max_queue_depth = max_queue_depth;
+    ctrl->min_in_flight = 4; /* Never go below 4 */
+    ctrl->baseline_p99_ms = 0.0;
+    ctrl->latency_rise_threshold = 0.0;
+    ctrl->max_p99_ms = 0.0;
+    ctrl->prev_throughput_bps = 0.0;
+    ctrl->warmup_count = 0;
+    ctrl->plateau_count = 0;
+    ctrl->steady_count = 0;
+    ctrl->spike_count = 0;
+    ctrl->settling_timer = 0;
+    ctrl->entered_via_backoff = false;
+    ctrl->prev_in_flight_limit = 0;
+    ctrl->p99_head = 0;
+    ctrl->p99_count = 0;
+    ctrl->throughput_head = 0;
+    ctrl->throughput_count = 0;
+    ctrl->baseline_head = 0;
+    ctrl->baseline_count = 0;
+    memset(ctrl->p99_window, 0, sizeof(ctrl->p99_window));
+    memset(ctrl->throughput_window, 0, sizeof(ctrl->throughput_window));
+    memset(ctrl->baseline_window, 0, sizeof(ctrl->baseline_window));
 
     /* Initialize double-buffered histogram */
     adaptive_hist_pair_init(&ctrl->hist_pair);
@@ -354,8 +377,13 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         } else {
             ctrl->spike_count = 0;
 
-            /* Check if we're still gaining throughput */
-            if (efficiency_ratio > ADAPTIVE_ER_EPSILON) {
+            /* Check if we're still gaining throughput.
+             * Use relative threshold: throughput must increase by at least
+             * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
+             * relative to current throughput to be considered improvement. */
+            double er_threshold =
+                throughput_bps > 0 ? throughput_bps * ADAPTIVE_ER_EPSILON_RATIO : 0.0;
+            if (efficiency_ratio > er_threshold) {
                 /* Still improving - increase */
                 if (in_flight_limit < ctrl->max_queue_depth) {
                     in_flight_limit += ADAPTIVE_AIMD_INCREASE;
@@ -380,6 +408,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
                 ctrl->plateau_count++;
                 if (ctrl->plateau_count >= 3) {
                     /* Confirmed plateau - enter steady */
+                    ctrl->entered_via_backoff = false;
                     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING,
                                           memory_order_release);
                     ctrl->settling_timer = 0;
@@ -406,8 +435,16 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
             atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
             ctrl->steady_count = 0;
         }
-        /* Check for sustained steady state */
-        else if (ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
+        /* Re-probe after backoff: the transient spike may have passed, so
+         * try increasing in-flight again rather than staying at a reduced level. */
+        else if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
+            ctrl->entered_via_backoff = false;
+            ctrl->plateau_count = 0;
+            ctrl->spike_count = 0;
+        }
+        /* Check for sustained steady state (only from plateau, not backoff) */
+        else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
             atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
         }
         break;
@@ -422,6 +459,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
                               memory_order_relaxed);
         params_changed = true;
         ctrl->plateau_count = 0;
+        ctrl->entered_via_backoff = true;
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
         ctrl->settling_timer = 0;
         break;

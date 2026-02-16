@@ -82,9 +82,10 @@
  *  Gentler than TCP's 50% because storage latency is more predictable. */
 #define ADAPTIVE_AIMD_DECREASE 0.80
 
-/** Near-zero efficiency ratio threshold. If efficiency ratio is below 1%,
- *  consider it a plateau (throughput not increasing with more in-flight). */
-#define ADAPTIVE_ER_EPSILON 0.01
+/** Minimum relative throughput gain to consider improvement. If throughput
+ *  increases by less than 1% relative to current throughput per unit of
+ *  in-flight increase, consider it a plateau. */
+#define ADAPTIVE_ER_EPSILON_RATIO 0.01
 
 /** Latency guard multiplier. Trigger backoff when P99 exceeds baseline by
  *  this factor. 10x allows normal variation while catching saturation. */
@@ -135,6 +136,11 @@
 /** Ticks in STEADY before CONVERGED. Stay in STEADY for 500 ticks (5 seconds)
  *  with stable metrics before declaring tuning complete. */
 #define ADAPTIVE_STEADY_THRESHOLD 500
+
+/** Ticks in STEADY before re-probing. After backoff, re-enter PROBING after
+ *  100 ticks (1 second) of stable metrics to recover from transient spikes.
+ *  Only applies when the controller entered STEADY via BACKOFF, not plateau. */
+#define ADAPTIVE_REPROBE_INTERVAL 100
 
 /* Histogram configuration:
  *
@@ -233,6 +239,7 @@ typedef struct {
     int steady_count;              /**< Time in STEADY phase */
     int spike_count;               /**< Consecutive latency spikes */
     int settling_timer;            /**< Time in SETTLING phase */
+    bool entered_via_backoff;      /**< STEADY was reached via BACKOFF (not plateau) */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;
@@ -284,6 +291,8 @@ void adaptive_record_completion(adaptive_controller_t *ctrl, int64_t latency_ns,
  * Process a tick (every 10ms)
  *
  * Updates statistics, calculates P99, and adjusts parameters.
+ * NOT thread-safe: must be called from a single thread only (the tick thread).
+ * Concurrent calls will corrupt internal state (sliding windows, counters).
  *
  * @param ctrl Controller
  * @return true if parameters changed, false otherwise
@@ -308,7 +317,9 @@ void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count);
  * @param ctrl Controller
  * @return Current limit
  */
-static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) { return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed); }
+static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
+    return atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+}
 
 /**
  * Get current batch threshold
@@ -318,7 +329,9 @@ static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) { ret
  * @param ctrl Controller
  * @return Current threshold
  */
-static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) { return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed); }
+static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
+    return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
+}
 
 /**
  * Get current phase name
