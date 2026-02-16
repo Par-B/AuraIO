@@ -658,9 +658,11 @@ int ring_flush(ring_ctx_t *ctx) {
 
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted < 0) {
-        /* Submit failed. The SQEs are still in the kernel SQ and will be
-         * retried on the next flush. Log the error but don't fail hard —
-         * the caller will retry via the next flush or drain cycle.
+        /* Submit failed. SQEs remain in the kernel SQ for retry on the next
+         * flush. queued_sqes is intentionally NOT reset: if some SQEs were
+         * somehow consumed despite the error, the count stays conservatively
+         * high (causing benign no-op retries) rather than dropping to zero
+         * and losing track of pending SQEs.
          * Persistent failures will be caught by ring_destroy's timeout. */
         aura_log(AURA_LOG_WARN, "io_uring_submit failed: %s (queued=%d)", strerror(-submitted),
                  ctx->queued_sqes);
@@ -933,6 +935,8 @@ bool ring_should_flush(ring_ctx_t *ctx) {
         return false;
     }
 
+    /* Advisory check — reads queued_sqes without lock. Safe because the field
+     * is _Atomic and a stale value only affects flush timing, not correctness. */
     int threshold = adaptive_get_batch_threshold(&ctx->adaptive);
     return ctx->queued_sqes >= threshold;
 }

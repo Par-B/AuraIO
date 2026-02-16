@@ -253,6 +253,10 @@ typedef struct {
      * Aligned to cacheline boundary to prevent false sharing with
      * the sliding windows above. */
     _Alignas(64) adaptive_histogram_pair_t hist_pair;
+
+#ifndef NDEBUG
+    _Atomic int tick_entered; /**< Debug: detect concurrent adaptive_tick calls */
+#endif
 } adaptive_controller_t;
 
 /* ============================================================================

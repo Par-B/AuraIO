@@ -1138,7 +1138,7 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
 
 aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset, off_t len,
                                aura_callback_t callback, void *user_data) {
-    if (!engine || fd < 0 || offset < 0 || len < 0) {
+    if (!engine || fd < 0 || offset < 0 || len <= 0) {
         errno = EINVAL;
         return NULL;
     }

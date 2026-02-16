@@ -66,6 +66,11 @@ void adaptive_hist_record(adaptive_histogram_t *hist, int64_t latency_us) {
     } else {
         atomic_fetch_add_explicit(&hist->buckets[bucket], 1, memory_order_relaxed);
     }
+    /* Both increments use relaxed ordering for performance. A concurrent
+     * reader of the *active* histogram (via aura_get_histogram) may briefly
+     * see total_count > sum(buckets). This is acceptable for diagnostic
+     * snapshots. The primary consumer (adaptive_hist_p99) reads the
+     * swapped-out histogram where no concurrent writes occur. */
     atomic_fetch_add_explicit(&hist->total_count, 1, memory_order_relaxed);
 }
 
@@ -182,6 +187,10 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     /* Initialize double-buffered histogram */
     adaptive_hist_pair_init(&ctrl->hist_pair);
 
+#ifndef NDEBUG
+    atomic_init(&ctrl->tick_entered, 0);
+#endif
+
     return 0;
 }
 
@@ -238,8 +247,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * Concurrent calls would double-swap the histogram (fetch_xor twice),
      * causing both callers to read the active histogram and corrupt state. */
 #ifndef NDEBUG
-    static _Atomic int tick_entered = 0;
-    int prev = atomic_fetch_add_explicit(&tick_entered, 1, memory_order_relaxed);
+    int prev = atomic_fetch_add_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
     assert(prev == 0 && "adaptive_tick called concurrently — not thread-safe");
 #endif
 
@@ -265,7 +273,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     /* If we don't have enough data and haven't hit max window, accumulate more */
     if (!have_min_samples && !have_min_time && !hit_max_time) {
 #ifndef NDEBUG
-        atomic_fetch_sub_explicit(&tick_entered, 1, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
 #endif
         return false; /* Skip this tick, keep accumulating */
     }
@@ -504,7 +512,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
 
 #ifndef NDEBUG
-    atomic_fetch_sub_explicit(&tick_entered, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
 #endif
     return params_changed;
 }

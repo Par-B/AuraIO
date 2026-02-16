@@ -755,6 +755,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Pool destroyed — shards are gone, just free the buffer directly.
      * This can happen when a late callback frees a buffer after destroy. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub(&pool->total_allocated, size);
+        atomic_fetch_sub(&pool->total_buffers, 1);
         free(buf);
         return;
     }
