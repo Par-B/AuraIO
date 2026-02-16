@@ -26,6 +26,7 @@ tests/perf_bench
 tests/adaptive_value
 tests/default.profraw
 tests/perf_regression
+tests/test_request_fd_fix
 
 # Benchmark results (generated)
 tests/bench_results/
