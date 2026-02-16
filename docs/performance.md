@@ -218,7 +218,7 @@ for (int i = 0; i < 256; i++) {
 engine.register_buffers(iovs);
 
 // Use registered buffers:
-engine.read(fd, auraio::BufferRef::fixed(0), 4096, offset, callback);
+engine.read(fd, aura::BufferRef::fixed(0), 4096, offset, callback);
 
 // Cleanup:
 engine.unregister_buffers();
@@ -249,10 +249,10 @@ aura_engine_t *engine = aura_create_with_options(&opts);
 **How to use (C++)**:
 
 ```cpp
-auraio::Options opts;
+aura::Options opts;
 opts.enable_sqpoll(true)
     .sqpoll_idle_ms(2000);
-auraio::Engine engine(opts);
+aura::Engine engine(opts);
 ```
 
 **Requirements and trade-offs**:

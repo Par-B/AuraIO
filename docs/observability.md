@@ -131,9 +131,9 @@ Rust bindings currently expose aggregate stats only. Per-ring stats, histograms,
 ## C++ Usage
 
 ```cpp
-#include <auraio.hpp>
+#include <aura.hpp>
 
-auraio::Engine engine;
+aura::Engine engine;
 
 // Aggregate
 auto stats = engine.get_stats();
@@ -146,7 +146,7 @@ for (int i = 0; i < engine.ring_count(); i++) {
               << " depth=" << rs.in_flight_limit() << "\n";
 
     auto hist = engine.get_histogram(i);
-    for (int b = 0; b < auraio::Histogram::bucket_count; b++) {
+    for (int b = 0; b < aura::Histogram::bucket_count; b++) {
         if (hist.bucket(b) > 0)
             std::cout << "  " << hist.bucket_lower_us(b) << "-"
                       << hist.bucket_upper_us(b) << "us: "
@@ -161,7 +161,7 @@ std::cout << bs.total_buffers() << " buffers in " << bs.shard_count() << " shard
 
 ## Prometheus Integration
 
-AuraIO ships a standalone Prometheus exposition text formatter in `integrations/prometheus/C/`. It has **no external dependencies** beyond libauraio itself.
+AuraIO ships a standalone Prometheus exposition text formatter in `integrations/prometheus/C/`. It has **no external dependencies** beyond libaura itself.
 
 Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
 

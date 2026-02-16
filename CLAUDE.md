@@ -29,10 +29,10 @@ cd tests && make test_ring && ./test_ring
 **Stack**: C11 engine library + C++20 bindings + Rust bindings, io_uring via liburing
 
 **Structure**:
-- `engine/src/` - Engine C library (auraio.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
-- `engine/include/auraio.h` - Public C API
-- `engine/include/auraio.hpp` - C++ bindings with RAII, coroutines, and concepts
-- `bindings/rust/` - Rust bindings (auraio-sys FFI + safe auraio crate with async support)
+- `engine/src/` - Engine C library (aura.c, adaptive_ring.c, adaptive_engine.c, adaptive_buffer.c)
+- `engine/include/aura.h` - Public C API
+- `engine/include/aura.hpp` - C++ bindings with RAII, coroutines, and concepts
+- `bindings/rust/` - Rust bindings (aura-sys FFI + safe aura crate with async support)
 - `integrations/` - External system integrations (Prometheus, OpenTelemetry) with C/C++/Rust examples
 - `tools/BFFIO/` - FIO-compatible benchmark with AIMD auto-tuning
 - `examples/` - C, C++, and Rust examples
@@ -44,13 +44,13 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 
 - C11, 4-space indent, snake_case
 - Prefixes: `aura_` (public), `ring_`/`adaptive_`/`buffer_` (internal)
-- Public API in `engine/include/auraio.h`, implementation in `engine/src/auraio.c`
+- Public API in `engine/include/aura.h`, implementation in `engine/src/aura.c`
 - Tuning constants at top of `engine/src/adaptive_engine.h`
 
 ## Development Workflow
 
 - **CHANGELOG.md**: Update before committing major changes (new features, breaking changes, significant refactors). Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
-- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/auraio.h` (AURA_VERSION_*) together with CHANGELOG.md.
+- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/aura.h` (AURA_VERSION_*) together with CHANGELOG.md.
 
 ## Non-Obvious Patterns
 

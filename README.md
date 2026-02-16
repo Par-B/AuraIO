@@ -76,7 +76,7 @@ void on_complete(aura_request_t *req, ssize_t n, void *ctx) {
 For databases, storage engines, proxies, and infrastructure:
 
 ```c
-#include <auraio.h>
+#include <aura.h>
 
 aura_engine_t *engine = aura_create();
 void *buf = aura_buffer_alloc(engine, 4096);
@@ -84,7 +84,7 @@ void *buf = aura_buffer_alloc(engine, 4096);
 aura_read(engine, fd, aura_buf(buf), 4096, 0, callback, user_data);
 aura_wait(engine, -1);
 
-aura_buffer_free(engine, buf, 4096);
+aura_buffer_free(engine, buf);
 aura_destroy(engine);
 ```
 
@@ -93,9 +93,9 @@ aura_destroy(engine);
 For services, applications, and rapid development:
 
 ```cpp
-#include <auraio.hpp>
+#include <aura.hpp>
 
-auraio::Engine engine;
+aura::Engine engine;
 auto buf = engine.allocate_buffer(4096);
 
 engine.read(fd, buf, 4096, 0, [&](auto& req, ssize_t n) {
@@ -108,7 +108,7 @@ engine.wait();
 **With C++20 coroutines:**
 
 ```cpp
-auraio::Task<void> copy_file(auraio::Engine& engine, int src, int dst) {
+aura::Task<void> copy_file(aura::Engine& engine, int src, int dst) {
     auto buf = engine.allocate_buffer(65536);
     for (off_t off = 0; ; off += 65536) {
         ssize_t n = co_await engine.async_read(src, buf, 65536, off);
@@ -123,7 +123,7 @@ auraio::Task<void> copy_file(auraio::Engine& engine, int src, int dst) {
 For Rust applications requiring safe, high-performance async I/O:
 
 ```rust
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::os::unix::io::AsRawFd;
 
 fn main() -> Result<()> {
@@ -147,9 +147,9 @@ fn main() -> Result<()> {
 **With async/await (feature flag):**
 
 ```rust
-use auraio::{Engine, async_io::AsyncEngine};
+use aura::{Engine, async_io::AsyncEngine};
 
-async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
+async fn copy_file(engine: &Engine, src: i32, dst: i32) -> aura::Result<()> {
     let buf = engine.allocate_buffer(65536)?;
     let mut offset = 0i64;
     loop {
@@ -192,7 +192,7 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
 ### C Example
 
 ```c
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <fcntl.h>
 
@@ -224,12 +224,12 @@ int main(void) {
 ### C++ Example
 
 ```cpp
-#include <auraio.hpp>
+#include <aura.hpp>
 #include <iostream>
 #include <fcntl.h>
 
 int main() {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buf = engine.allocate_buffer(4096);
 
     int fd = open("/etc/hostname", O_RDONLY);
@@ -249,7 +249,7 @@ int main() {
 ### Rust Example
 
 ```rust
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -343,10 +343,10 @@ sudo make install
 **Linking:**
 ```bash
 # C
-gcc myapp.c -lauraio -luring -lpthread -o myapp
+gcc myapp.c -laura -luring -lpthread -o myapp
 
 # C++
-g++ -std=c++20 myapp.cpp -lauraio -luring -lpthread -o myapp
+g++ -std=c++20 myapp.cpp -laura -luring -lpthread -o myapp
 ```
 
 ### Rust Crate
@@ -356,10 +356,10 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Callback-based API (default):
-auraio = { path = "path/to/auraio/bindings/rust/auraio" }
+aura = { path = "path/to/auraio/bindings/rust/aura" }
 
 # Or with async/await support (enables Future-based async_read/async_write):
-auraio = { path = "path/to/auraio/bindings/rust/auraio", features = ["async"] }
+aura = { path = "path/to/auraio/bindings/rust/aura", features = ["async"] }
 ```
 
 Or build the Rust bindings from the repository:

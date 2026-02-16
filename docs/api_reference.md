@@ -1,6 +1,6 @@
 # AuraIO API Reference
 
-**Version 0.1.0**
+**Version 0.4.0**
 
 AuraIO is a self-tuning async I/O library for Linux built on io_uring. It provides three API surfaces: a C11 core library, C++20 bindings with RAII and coroutine support, and Rust bindings with safe and async wrappers.
 
@@ -42,9 +42,9 @@ AuraIO is a self-tuning async I/O library for Linux built on io_uring. It provid
 
 ## C API
 
-Header: `#include <auraio.h>`
+Header: `#include <aura.h>`
 
-Link: `-lauraio -luring -lpthread`
+Link: `-laura -luring -lpthread`
 
 ### Opaque Types
 
@@ -149,10 +149,9 @@ Create with inline helpers -- do not construct manually:
 ### Fsync Flags
 
 ```c
-typedef enum {
-  AURA_FSYNC_DEFAULT  = 0,
-  AURA_FSYNC_DATASYNC = 1,
-} aura_fsync_flags_t;
+// Fsync flags (unsigned int with constants)
+#define AURA_FSYNC_DEFAULT  0
+#define AURA_FSYNC_DATASYNC 1
 ```
 
 | Flag | Description |
@@ -216,10 +215,10 @@ An approximate snapshot of the active histogram window. Because the snapshot is 
 | Macro | Value | Description |
 |-------|-------|-------------|
 | `AURA_VERSION_MAJOR` | 0 | Major version |
-| `AURA_VERSION_MINOR` | 1 | Minor version |
+| `AURA_VERSION_MINOR` | 4 | Minor version |
 | `AURA_VERSION_PATCH` | 0 | Patch version |
-| `AURA_VERSION` | 100 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURA_VERSION_STRING` | `"0.1.0"` | Version string |
+| `AURA_VERSION` | 400 | Combined: `major * 10000 + minor * 100 + patch` |
+| `AURA_VERSION_STRING` | `"0.4.0"` | Version string |
 
 #### AIMD Phase Constants
 
@@ -403,7 +402,7 @@ Submit an async gather write from multiple buffers. Same parameters as `aura_rea
 
 ```c
 aura_request_t *aura_fsync(aura_engine_t *engine, int fd,
-                               aura_fsync_flags_t flags,
+                               unsigned int flags,
                                aura_callback_t callback, void *user_data);
 ```
 
@@ -413,7 +412,7 @@ Submit an async fsync. Pass `AURA_FSYNC_DEFAULT` for a full fsync (metadata + da
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
 | `fd` | `int` | Open file descriptor |
-| `flags` | `aura_fsync_flags_t` | `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1) |
+| `flags` | `unsigned int` | `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -584,16 +583,15 @@ Allocate a page-aligned buffer from the engine's pool. Suitable for `O_DIRECT` I
 ##### `aura_buffer_free`
 
 ```c
-void aura_buffer_free(aura_engine_t *engine, void *buf, size_t size);
+void aura_buffer_free(aura_engine_t *engine, void *buf);
 ```
 
-Return a buffer to the engine's pool. Thread-safe.
+Return a buffer to the engine's pool. Thread-safe. The size is stored internally and does not need to be provided.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
 | `buf` | `void *` | Buffer to free (may be `NULL`) |
-| `size` | `size_t` | **Must** match the original allocation size exactly; passing a different size causes undefined behavior |
 
 ---
 
@@ -718,7 +716,7 @@ All stats functions are thread-safe and safe to call during active I/O.
 ##### `aura_get_stats`
 
 ```c
-void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats);
+void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
 ```
 
 Get engine-wide aggregate statistics. If `engine` or `stats` is `NULL`, the call is a no-op (stats zeroed if only engine is `NULL`).
@@ -727,6 +725,7 @@ Get engine-wide aggregate statistics. If `engine` or `stats` is `NULL`, the call
 |-----------|------|-------------|
 | `engine` | `const aura_engine_t *` | Engine handle |
 | `stats` | `aura_stats_t *` | Output struct |
+| `stats_size` | `size_t` | Size of the stats struct (use `sizeof(aura_stats_t)`) |
 
 ---
 
@@ -744,7 +743,7 @@ int aura_get_ring_count(const aura_engine_t *engine);
 
 ```c
 int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
-                          aura_ring_stats_t *stats);
+                          aura_ring_stats_t *stats, size_t stats_size);
 ```
 
 Get per-ring statistics.
@@ -754,6 +753,7 @@ Get per-ring statistics.
 | `engine` | `const aura_engine_t *` | Engine handle |
 | `ring_idx` | `int` | Ring index (0 to `aura_get_ring_count()-1`) |
 | `stats` | `aura_ring_stats_t *` | Output struct |
+| `stats_size` | `size_t` | Size of the stats struct (use `sizeof(aura_ring_stats_t)`) |
 
 **Returns:** 0 on success. -1 if engine/stats is `NULL` or `ring_idx` is out of range (stats zeroed on invalid index).
 
@@ -835,7 +835,7 @@ int aura_version_int(void);
 
 ## C++ API
 
-Header: `#include <auraio.hpp>` (includes all sub-headers)
+Header: `#include <aura.hpp>` (includes all sub-headers)
 
 Requires: C++20 (`-std=c++20`)
 
@@ -843,9 +843,9 @@ Namespace: `auraio`
 
 ### Error Handling
 
-The C++ API throws exceptions on failure. I/O and lifecycle operations throw `auraio::Error`. Per-ring stats/histogram accessors throw `std::out_of_range` on invalid ring index. Exceptions thrown from user callbacks result in `std::terminate()`.
+The C++ API throws exceptions on failure. I/O and lifecycle operations throw `aura::Error`. Per-ring stats/histogram accessors throw `std::out_of_range` on invalid ring index. Exceptions thrown from user callbacks result in `std::terminate()`.
 
-### `auraio::Error`
+### `aura::Error`
 
 Defined in `<auraio/error.hpp>`. Inherits from `std::system_error`.
 
@@ -876,17 +876,17 @@ Free functions:
 
 ---
 
-### `auraio::Options`
+### `aura::Options`
 
 Defined in `<auraio/options.hpp>`. Builder pattern for engine configuration.
 
 ```cpp
-auraio::Options opts;
+aura::Options opts;
 opts.queue_depth(512)
     .ring_count(4)
     .enable_sqpoll(true);
 
-auraio::Engine engine(opts);
+aura::Engine engine(opts);
 ```
 
 **Builder methods** (all return `Options&` for chaining, all `noexcept`):
@@ -904,7 +904,7 @@ auraio::Engine engine(opts);
 | `sqpoll_idle_ms(int)` | ms | SQPOLL idle timeout |
 | `ring_select(RingSelect)` | mode | Ring selection mode |
 
-`RingSelect` enum: `auraio::RingSelect::Adaptive`, `CpuLocal`, `RoundRobin`.
+`RingSelect` enum: `aura::RingSelect::Adaptive`, `CpuLocal`, `RoundRobin`.
 
 **Getters** (all `[[nodiscard]] noexcept`): same names as setters, no arguments.
 
@@ -912,7 +912,7 @@ auraio::Engine engine(opts);
 
 ---
 
-### `auraio::Engine`
+### `aura::Engine`
 
 Defined in `<auraio/engine.hpp>`. Main engine class. Move-only (non-copyable).
 
@@ -1009,7 +1009,7 @@ Coroutine awaitables throw `Error` on negative results when resumed.
 
 ---
 
-### `auraio::Request`
+### `aura::Request`
 
 Defined in `<auraio/request.hpp>`. Non-owning reference to an in-flight request. Valid from submission until callback begins.
 
@@ -1023,7 +1023,7 @@ Defined in `<auraio/request.hpp>`. Non-owning reference to an in-flight request.
 
 ---
 
-### `auraio::BufferRef`
+### `aura::BufferRef`
 
 Defined in `<auraio/buffer.hpp>`. Lightweight buffer descriptor (value type, no ownership).
 
@@ -1042,7 +1042,7 @@ Free functions: `buf(void* ptr)`, `buf_fixed(int index, size_t offset = 0)`.
 
 ---
 
-### `auraio::Buffer`
+### `aura::Buffer`
 
 Defined in `<auraio/buffer.hpp>`. RAII buffer from engine pool. Move-only. Automatically freed on destruction. If a `Buffer` outlives its `Engine`, AuraIO falls back to `free()` instead of touching destroyed engine state.
 
@@ -1071,7 +1071,7 @@ Created via `Engine::allocate_buffer(size)`.
 
 All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 
-#### `auraio::Stats`
+#### `aura::Stats`
 
 | Method | Returns | C Field |
 |--------|---------|---------|
@@ -1085,7 +1085,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `adaptive_spills()` | `uint64_t` | `adaptive_spills` |
 | `c_stats()` | `const aura_stats_t&` | Full C struct |
 
-#### `auraio::RingStats`
+#### `aura::RingStats`
 
 | Method | Returns | C Field |
 |--------|---------|---------|
@@ -1102,7 +1102,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `ring_index()` | `int` | (set by Engine) |
 | `c_stats()` | `const aura_ring_stats_t&` | Full C struct |
 
-#### `auraio::Histogram`
+#### `aura::Histogram`
 
 **Constants:**
 
@@ -1123,7 +1123,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `bucket_upper_us(int idx)` | `int` | Upper bound of bucket (us). 0 for out-of-range |
 | `c_histogram()` | `const aura_histogram_t&` | Full C struct |
 
-#### `auraio::BufferStats`
+#### `aura::BufferStats`
 
 | Method | Returns | C Field |
 |--------|---------|---------|
@@ -1138,7 +1138,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 
 Defined in `<auraio/coro.hpp>`. Requires C++20 coroutines.
 
-#### `auraio::Task<T>`
+#### `aura::Task<T>`
 
 Lazy coroutine producing a value of type `T`. Use `Task<void>` (or `Task<>`) for coroutines that do not return a value. Move-only.
 
@@ -1168,13 +1168,13 @@ ssize_t result = task.get();
 
 Tasks can be composed with `co_await`: `T result = co_await some_task;`
 
-#### `auraio::IoAwaitable`
+#### `aura::IoAwaitable`
 
 Returned by `Engine::async_read` and `Engine::async_write`. Not constructed directly.
 
 When `co_await`ed, submits the I/O operation and suspends the coroutine. Resumes with `ssize_t` (bytes transferred). Throws `Error` if the result is negative.
 
-#### `auraio::FsyncAwaitable`
+#### `aura::FsyncAwaitable`
 
 Returned by `Engine::async_fsync` and `Engine::async_fdatasync`. Not constructed directly.
 
@@ -1190,9 +1190,9 @@ Requires: Rust edition 2021, `libauraio` and `liburing` linked
 
 ### Rust Error Handling
 
-The Rust API uses `Result<T, auraio::Error>` (aliased as `auraio::Result<T>`) instead of exceptions.
+The Rust API uses `Result<T, aura::Error>` (aliased as `aura::Result<T>`) instead of exceptions.
 
-#### `auraio::Error`
+#### `aura::Error`
 
 ```rust
 pub enum Error {
@@ -1215,14 +1215,14 @@ The `Error::from_raw_os_error(code)` constructor automatically maps `ECANCELED` 
 
 `Error` implements `std::error::Error`, `Send`, and `Sync`.
 
-`auraio::Result<T>` is a type alias for `std::result::Result<T, Error>`.
+`aura::Result<T>` is a type alias for `std::result::Result<T, Error>`.
 
 ---
 
 ### Options
 
 ```rust
-use auraio::Options;
+use aura::Options;
 
 let opts = Options::new()
     .queue_depth(512)
@@ -1247,9 +1247,9 @@ let opts = Options::new()
 | `sqpoll_idle_ms(i32)` | timeout | SQPOLL idle timeout |
 | `ring_select(RingSelect)` | mode | Ring selection mode |
 
-#### `auraio::RingSelect`
+#### `aura::RingSelect`
 
-Not re-exported at crate root; defined in `auraio::options`. The `Options::ring_select()` method accepts this enum.
+Not re-exported at crate root; defined in `aura::options`. The `Options::ring_select()` method accepts this enum.
 
 ```rust
 pub enum RingSelect {
@@ -1264,7 +1264,7 @@ pub enum RingSelect {
 ### Engine
 
 ```rust
-use auraio::Engine;
+use aura::Engine;
 
 let engine = Engine::new()?;
 // or
@@ -1342,14 +1342,14 @@ The callback type is `FnOnce(Result<usize>) + Send + 'static`. The callback rece
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `auraio::version()` | `&'static str` | Library version string |
-| `auraio::version_int()` | `i32` | Library version as integer |
+| `aura::version()` | `&'static str` | Library version string |
+| `aura::version_int()` | `i32` | Library version as integer |
 
 ---
 
 ### Buffer and BufferRef
 
-#### `auraio::Buffer`
+#### `aura::Buffer`
 
 RAII buffer allocated from the engine's pool. Automatically freed on drop. `Send` but not `Sync`. If a `Buffer` outlives its `Engine`, the buffer is still freed safely (the engine's inner handle is reference-counted with `Arc`).
 
@@ -1367,7 +1367,7 @@ RAII buffer allocated from the engine's pool. Automatically freed on drop. `Send
 
 `From<&Buffer>` and `From<&mut Buffer>` are implemented for `BufferRef`, allowing `(&buf).into()` to create a `BufferRef`.
 
-#### `auraio::BufferRef`
+#### `aura::BufferRef`
 
 Lightweight buffer descriptor. `Copy + Clone + Debug`. Can represent either an unregistered buffer pointer or a registered buffer index.
 
@@ -1424,7 +1424,7 @@ Feature-gated behind `async` feature flag. Provides `Future`-based async I/O tha
 Automatically implemented for `Engine` when the `async` feature is enabled.
 
 ```rust
-use auraio::{Engine, async_io::AsyncEngine};
+use aura::{Engine, async_io::AsyncEngine};
 
 // Submit I/O and get a Future:
 let future = unsafe { engine.async_read(fd, &buf, 4096, 0) }?;
