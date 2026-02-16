@@ -55,7 +55,7 @@ Even with a callback that does ZERO latency tracking (just counts ops+bytes, 2 a
 8. Auto-flush check: may call `io_uring_submit()` + `adaptive_record_submit()`
 9. `pthread_mutex_unlock(&ring->lock)`: release
 
-**Completion path** (per I/O, from `auraio_poll` -> `ring_poll`):
+**Completion path** (per I/O, from `aura_poll` -> `ring_poll`):
 1. `pthread_mutex_lock(&ring->cq_lock)`: acquire CQ lock
 2. `io_uring_peek_cqe()`: check for completion
 3. `io_uring_cqe_seen()`: mark CQE consumed

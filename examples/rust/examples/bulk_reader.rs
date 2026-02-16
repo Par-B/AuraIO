@@ -6,7 +6,7 @@
 //!
 //! Usage: cargo run --example bulk_reader -- <directory>
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::env;
 use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
 
     let dirname = &args[1];
 
-    // Create the auraio engine
+    // Create the aura engine
     println!("Creating async I/O engine...");
     let engine = Engine::new()?;
 
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
         let start = start_time;
 
         // Get raw pointer before moving buf into the closure
-        let buf_ref = unsafe { auraio::BufferRef::from_ptr(buf.as_ptr() as *mut std::ffi::c_void) };
+        let buf_ref = unsafe { aura::BufferRef::from_ptr(buf.as_ptr() as *mut std::ffi::c_void) };
 
         // Submit the read - file and buf are moved into the closure to keep
         // them alive until the callback fires, then dropped for cleanup

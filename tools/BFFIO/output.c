@@ -8,7 +8,7 @@
  *   output_normal() - FIO-style text summary to stdout
  *   output_json()   - Full FIO 3.36-compatible JSON structure
  *
- * Both include an extra "AuraIO" section with adaptive tuning info
+ * Both include an extra "Aura" section with adaptive tuning info
  * (converged depth, phase, p99) that FIO parsers safely ignore.
  */
 
@@ -262,10 +262,10 @@ void output_normal(const job_result_t *results, int num_jobs, const bench_config
         if (job->rw == RW_READWRITE || job->rw == RW_RANDRW) {
             fprintf(out,
                     "%s: (g=0): rw=%s, bs=(R) %" PRIu64 "B-(W) %" PRIu64
-                    "B, ioengine=AuraIO, direct=%d\n",
+                    "B, ioengine=Aura, direct=%d\n",
                     r->jobname, rw_pattern_name(job->rw), job->bs, job->bs, job->direct);
         } else {
-            fprintf(out, "%s: (g=0): rw=%s, bs=(R) %" PRIu64 "B, ioengine=AuraIO, direct=%d\n",
+            fprintf(out, "%s: (g=0): rw=%s, bs=(R) %" PRIu64 "B, ioengine=Aura, direct=%d\n",
                     r->jobname, rw_pattern_name(job->rw), job->bs, job->direct);
         }
 
@@ -275,21 +275,21 @@ void output_normal(const job_result_t *results, int num_jobs, const bench_config
         /* Write direction */
         print_direction_normal(&r->write, "write", out);
 
-        /* Blank line before AuraIO info */
+        /* Blank line before Aura info */
         fprintf(out, "\n");
 
-        /* AuraIO adaptive tuning info */
+        /* Aura adaptive tuning info */
         if (r->target_p99_ms > 0.0) {
             fprintf(out,
-                    "  AuraIO: max concurrency=%d at p99=%.2fms"
+                    "  Aura: max concurrency=%d at p99=%.2fms"
                     " (target: %.2fms), phase=%s\n",
-                    r->auraio_final_depth, r->auraio_p99_ms, r->target_p99_ms,
-                    r->auraio_phase_name);
+                    r->aura_final_depth, r->aura_p99_ms, r->target_p99_ms,
+                    r->aura_phase_name);
         } else {
             fprintf(out,
-                    "  AuraIO: converged to depth %d, phase=%s,"
+                    "  Aura: converged to depth %d, phase=%s,"
                     " p99=%.2fms, spills=%" PRIu64 "\n",
-                    r->auraio_final_depth, r->auraio_phase_name, r->auraio_p99_ms,
+                    r->aura_final_depth, r->aura_phase_name, r->aura_p99_ms,
                     r->adaptive_spills);
         }
     }
@@ -373,12 +373,12 @@ static void json_direction(FILE *out, const direction_result_t *r, const char *i
     fprintf(out, "%s  \"short_ios\" : %" PRIu64 ",\n", indent, r->short_ios);
     fprintf(out, "%s  \"drop_ios\" : 0,\n", indent);
 
-    /* slat_ns: zeroed (AuraIO tracks total latency only) */
+    /* slat_ns: zeroed (Aura tracks total latency only) */
     fprintf(out, "%s  \"slat_ns\" : ", indent);
     json_zeroed_lat_ns(out, inner);
     fprintf(out, ",\n");
 
-    /* clat_ns: zeroed (AuraIO tracks total latency only) */
+    /* clat_ns: zeroed (Aura tracks total latency only) */
     fprintf(out, "%s  \"clat_ns\" : ", indent);
     json_zeroed_lat_ns(out, inner);
     fprintf(out, ",\n");
@@ -505,7 +505,7 @@ static void json_job_options(FILE *out, const job_config_t *job, const char *ind
     fprintf(out, "%s  \"name\" : ", indent);
     json_escape_string(out, job->name);
     fprintf(out, ",\n");
-    fprintf(out, "%s  \"ioengine\" : \"AuraIO\",\n", indent);
+    fprintf(out, "%s  \"ioengine\" : \"Aura\",\n", indent);
     fprintf(out, "%s  \"rw\" : \"%s\",\n", indent, rw_pattern_name(job->rw));
     fprintf(out, "%s  \"bs\" : \"%s\",\n", indent, bs_buf);
     fprintf(out, "%s  \"direct\" : \"%d\",\n", indent, job->direct);
@@ -574,7 +574,7 @@ void output_json(const job_result_t *results, int num_jobs, const bench_config_t
 
     /* Top-level object */
     fprintf(out, "{\n");
-    fprintf(out, "  \"fio version\" : \"BFFIO-1.0 (AuraIO)\",\n");
+    fprintf(out, "  \"fio version\" : \"BFFIO-1.0 (Aura)\",\n");
     fprintf(out, "  \"timestamp\" : %ld,\n", (long)now);
     fprintf(out, "  \"timestamp_ms\" : %" PRId64 ",\n", timestamp_ms);
     fprintf(out, "  \"time\" : \"%s\",\n", time_str);
@@ -582,7 +582,7 @@ void output_json(const job_result_t *results, int num_jobs, const bench_config_t
     /* Global options */
     fprintf(out, "  \"global options\" : {\n");
     fprintf(out, "    \"direct\" : \"1\",\n");
-    fprintf(out, "    \"ioengine\" : \"AuraIO\"\n");
+    fprintf(out, "    \"ioengine\" : \"Aura\"\n");
     fprintf(out, "  },\n");
 
     /* Jobs array */
@@ -640,18 +640,18 @@ void output_json(const job_result_t *results, int num_jobs, const bench_config_t
         fprintf(out, "      \"majf\" : 0,\n");
         fprintf(out, "      \"minf\" : 0,\n");
 
-        /* AuraIO adaptive tuning info (extra section, parsers ignore it) */
-        fprintf(out, "      \"AuraIO\" : {\n");
+        /* Aura adaptive tuning info (extra section, parsers ignore it) */
+        fprintf(out, "      \"Aura\" : {\n");
         if (r->target_p99_ms > 0.0) {
             fprintf(out, "        \"target_p99_ms\" : %.2f,\n", r->target_p99_ms);
-            fprintf(out, "        \"max_concurrency\" : %d,\n", r->auraio_final_depth);
+            fprintf(out, "        \"max_concurrency\" : %d,\n", r->aura_final_depth);
         }
-        fprintf(out, "        \"final_depth\" : %d,\n", r->auraio_final_depth);
+        fprintf(out, "        \"final_depth\" : %d,\n", r->aura_final_depth);
         fprintf(out, "        \"phase\" : ");
-        json_escape_string(out, r->auraio_phase_name);
+        json_escape_string(out, r->aura_phase_name);
         fprintf(out, ",\n");
-        fprintf(out, "        \"p99_ms\" : %.2f,\n", r->auraio_p99_ms);
-        fprintf(out, "        \"throughput_bps\" : %.0f\n", r->auraio_throughput_bps);
+        fprintf(out, "        \"p99_ms\" : %.2f,\n", r->aura_p99_ms);
+        fprintf(out, "        \"throughput_bps\" : %.0f\n", r->aura_throughput_bps);
         fprintf(out, "      }\n");
 
         /* Close job object */

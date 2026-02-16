@@ -7,13 +7,13 @@
 //!
 //! Usage: cargo run --example custom_config --manifest-path examples/rust/Cargo.toml
 
-use auraio::{Engine, Options, RingSelect, Result};
+use aura::{Engine, Options, RingSelect, Result};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-const TEST_FILE: &str = "/tmp/auraio_config_test.dat";
+const TEST_FILE: &str = "/tmp/aura_config_test.dat";
 const FILE_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 const BUF_SIZE: usize = 4096;
 const NUM_OPS: usize = 20;
@@ -94,7 +94,7 @@ fn main() -> Result<()> {
         )
     };
     if wfd < 0 {
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     let data = vec![0u8; FILE_SIZE];
@@ -104,7 +104,7 @@ fn main() -> Result<()> {
     }
     if written != FILE_SIZE as isize {
         std::fs::remove_file(TEST_FILE).ok();
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // Open for reading
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
     };
     if fd < 0 {
         std::fs::remove_file(TEST_FILE).ok();
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // ===================================================================

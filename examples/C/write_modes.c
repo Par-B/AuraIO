@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#include <auraio.h>
+#include <aura.h>
 
 #define WRITE_SIZE (64 * 1024) /* 64KB per write */
 #define NUM_WRITES 16 /* Number of writes per test */
@@ -41,7 +41,7 @@ static int64_t get_time_ns(void) {
 /**
  * Callback invoked when write completes.
  */
-void on_write_done(auraio_request_t *req, ssize_t result, void *user_data) {
+void on_write_done(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     write_state_t *state = user_data;
 
@@ -63,7 +63,7 @@ int run_write_test(const char *filename, int use_direct) {
     printf("\n=== Testing %s writes ===\n", mode_name);
 
     /* Create engine */
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
         fprintf(stderr, "Failed to create engine: %s\n", strerror(errno));
         return -1;
@@ -79,19 +79,19 @@ int run_write_test(const char *filename, int use_direct) {
     if (fd < 0) {
         if (use_direct && errno == EINVAL) {
             printf("O_DIRECT not supported on this filesystem, skipping\n");
-            auraio_destroy(engine);
+            aura_destroy(engine);
             return 0;
         }
         fprintf(stderr, "Failed to open '%s': %s\n", filename, strerror(errno));
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return -1;
     }
 
     /* Allocate buffer - use aligned for O_DIRECT, regular malloc for buffered */
     void *buf;
     if (use_direct) {
-        buf = auraio_buffer_alloc(engine, WRITE_SIZE);
-        printf("Using aligned buffer from auraio_buffer_alloc()\n");
+        buf = aura_buffer_alloc(engine, WRITE_SIZE);
+        printf("Using aligned buffer from aura_buffer_alloc()\n");
     } else {
         buf = malloc(WRITE_SIZE);
         printf("Using regular malloc() buffer\n");
@@ -100,7 +100,7 @@ int run_write_test(const char *filename, int use_direct) {
     if (!buf) {
         fprintf(stderr, "Failed to allocate buffer\n");
         close(fd);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return -1;
     }
 
@@ -116,8 +116,8 @@ int run_write_test(const char *filename, int use_direct) {
     printf("Submitting %d async writes of %d bytes each...\n", NUM_WRITES, WRITE_SIZE);
     for (int i = 0; i < NUM_WRITES; i++) {
         off_t offset = i * WRITE_SIZE;
-        auraio_request_t *req =
-            auraio_write(engine, fd, auraio_buf(buf), WRITE_SIZE, offset, on_write_done, &state);
+        aura_request_t *req =
+            aura_write(engine, fd, aura_buf(buf), WRITE_SIZE, offset, on_write_done, &state);
         if (!req) {
             fprintf(stderr, "Failed to submit write %d: %s\n", i, strerror(errno));
             break;
@@ -127,7 +127,7 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Wait for all completions */
     while (state.completed < state.total) {
-        auraio_wait(engine, 100);
+        aura_wait(engine, 100);
     }
 
     /* Calculate results */
@@ -139,19 +139,19 @@ int run_write_test(const char *filename, int use_direct) {
     printf("Total: %.2f MB, Throughput: %.2f MB/s\n", total_mb, throughput);
 
     /* Get engine stats */
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
     printf("P99 latency: %.2f ms\n", stats.p99_latency_ms);
     printf("Optimal in-flight: %d\n", stats.optimal_in_flight);
 
-    /* Fsync to ensure data is on disk (use async auraio_fsync) */
+    /* Fsync to ensure data is on disk (use async aura_fsync) */
     printf("Fsyncing...\n");
     write_state_t fsync_state = { .completed = 0, .total = 1, .start_ns = 0, .end_ns = 0 };
-    auraio_request_t *fsync_req =
-        auraio_fsync(engine, fd, AURAIO_FSYNC_DEFAULT, on_write_done, &fsync_state);
+    aura_request_t *fsync_req =
+        aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, on_write_done, &fsync_state);
     if (fsync_req) {
         while (fsync_state.completed < fsync_state.total) {
-            auraio_wait(engine, 100);
+            aura_wait(engine, 100);
         }
     } else {
         fprintf(stderr, "Fsync submission failed: %s\n", strerror(errno));
@@ -160,12 +160,12 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Cleanup */
     if (use_direct) {
-        auraio_buffer_free(engine, buf, WRITE_SIZE);
+        aura_buffer_free(engine, buf, WRITE_SIZE);
     } else {
         free(buf);
     }
     close(fd);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 
     return 0;
 }

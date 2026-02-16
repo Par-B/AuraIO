@@ -11,7 +11,7 @@
  * Requires: C++20 with coroutine support (g++ -std=c++20 -fcoroutines)
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -32,7 +32,7 @@ constexpr size_t CHUNK_SIZE = 256 * 1024; // 256KB chunks
  * Each co_await suspends the coroutine until the I/O completes,
  * allowing other work to proceed.
  */
-auraio::Task<size_t> async_copy(auraio::Engine &engine, int src_fd, int dst_fd, size_t file_size) {
+aura::Task<size_t> async_copy(aura::Engine &engine, int src_fd, int dst_fd, size_t file_size) {
     auto buffer = engine.allocate_buffer(CHUNK_SIZE);
     size_t total_copied = 0;
     off_t offset = 0;
@@ -45,7 +45,7 @@ auraio::Task<size_t> async_copy(auraio::Engine &engine, int src_fd, int dst_fd, 
         ssize_t bytes_read = co_await engine.async_read(src_fd, buffer, chunk, offset);
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
-                throw auraio::Error(static_cast<int>(-bytes_read), "read failed");
+                throw aura::Error(static_cast<int>(-bytes_read), "read failed");
             }
             break; // EOF
         }
@@ -53,7 +53,7 @@ auraio::Task<size_t> async_copy(auraio::Engine &engine, int src_fd, int dst_fd, 
         // Async write - suspends coroutine until complete
         ssize_t bytes_written = co_await engine.async_write(dst_fd, buffer, bytes_read, offset);
         if (bytes_written < 0) {
-            throw auraio::Error(static_cast<int>(-bytes_written), "write failed");
+            throw aura::Error(static_cast<int>(-bytes_written), "write failed");
         }
 
         total_copied += bytes_written;
@@ -78,7 +78,7 @@ auraio::Task<size_t> async_copy(auraio::Engine &engine, int src_fd, int dst_fd, 
 size_t get_file_size(int fd) {
     struct stat st;
     if (fstat(fd, &st) < 0) {
-        throw auraio::Error(errno, "fstat");
+        throw aura::Error(errno, "fstat");
     }
     return static_cast<size_t>(st.st_size);
 }
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
         // Open source file
         src_fd = open(src_path, O_RDONLY);
         if (src_fd < 0) {
-            throw auraio::Error(errno, src_path);
+            throw aura::Error(errno, src_path);
         }
 
         // Get source file size
@@ -116,11 +116,11 @@ int main(int argc, char **argv) {
         // Create destination file
         dst_fd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (dst_fd < 0) {
-            throw auraio::Error(errno, dst_path);
+            throw aura::Error(errno, dst_path);
         }
 
         // Create engine
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Start the copy coroutine
         auto start_time = Clock::now();
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
         std::cout << "\nDone! File copied successfully.\n";
         return 0;
 
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         if (src_fd >= 0) close(src_fd);
         if (dst_fd >= 0) close(dst_fd);

@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libaura
+Description: Self-tuning asynchronous I/O library for Linux using io_uring
+Version: @VERSION@
+Requires: liburing
+Libs: -L${libdir} -laura -lpthread
+Cflags: -I${includedir}

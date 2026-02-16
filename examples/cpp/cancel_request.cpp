@@ -8,7 +8,7 @@
  * Usage: ./cancel_request <file>
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <atomic>
@@ -27,7 +27,7 @@ int main(int argc, char *argv[]) {
 
     try {
         // Create engine with RAII
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Open file
         int fd = open(argv[1], O_RDONLY);
@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
         // Submit async read with lambda callback
         std::cout << "Submitting async read...\n";
         auto req = engine.read(
-            fd, buf, READ_SIZE, 0, [&completed, &read_result](auraio::Request &, ssize_t result) {
+            fd, buf, READ_SIZE, 0, [&completed, &read_result](aura::Request &, ssize_t result) {
                 read_result.store(result, std::memory_order_release);
                 completed.store(true, std::memory_order_release);
 

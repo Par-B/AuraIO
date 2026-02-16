@@ -30,7 +30,7 @@
 #include <inttypes.h>
 #include <time.h>
 
-#include "../include/auraio.h"
+#include "../include/aura.h"
 
 /* --- Configuration --- */
 #define DEFAULT_OPS 5000
@@ -44,14 +44,14 @@
 
 /* --- Per-thread context --- */
 typedef struct {
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
     int fd;
     int ops_target;
     _Atomic int ops_completed;
     pthread_barrier_t *barrier; /* NULL for non-ADAPTIVE modes */
 } worker_ctx_t;
 
-static void completion_cb(auraio_request_t *req, ssize_t result, void *user_data) {
+static void completion_cb(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)result;
     worker_ctx_t *ctx = user_data;
@@ -65,32 +65,32 @@ static void completion_cb(auraio_request_t *req, ssize_t result, void *user_data
 static void *worker_simple(void *arg) {
     worker_ctx_t *ctx = arg;
 
-    void *buf = auraio_buffer_alloc(ctx->engine, BUF_SIZE);
+    void *buf = aura_buffer_alloc(ctx->engine, BUF_SIZE);
     if (!buf) return NULL;
 
     int submitted = 0;
     int batch = 0;
 
     while (submitted < ctx->ops_target) {
-        auraio_request_t *req =
-            auraio_read(ctx->engine, ctx->fd, auraio_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+        aura_request_t *req =
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
         if (req) {
             submitted++;
             batch++;
         } else {
-            auraio_poll(ctx->engine);
+            aura_poll(ctx->engine);
         }
 
         if (batch >= 16) {
-            auraio_poll(ctx->engine);
+            aura_poll(ctx->engine);
             batch = 0;
         }
     }
 
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted)
-        auraio_wait(ctx->engine, 100);
+        aura_wait(ctx->engine, 100);
 
-    auraio_buffer_free(ctx->engine, buf, BUF_SIZE);
+    aura_buffer_free(ctx->engine, buf, BUF_SIZE);
     return NULL;
 }
 
@@ -106,7 +106,7 @@ static void *worker_simple(void *arg) {
 static void *worker_adaptive(void *arg) {
     worker_ctx_t *ctx = arg;
 
-    void *buf = auraio_buffer_alloc(ctx->engine, BUF_SIZE);
+    void *buf = aura_buffer_alloc(ctx->engine, BUF_SIZE);
     if (!buf) return NULL;
 
     int submitted = 0;
@@ -114,8 +114,8 @@ static void *worker_adaptive(void *arg) {
     /* Phase 1: Fill without polling — pending grows to FILL_COUNT.
      * CQEs accumulate in the CQ but aren't reaped, so pending_count stays high. */
     for (int i = 0; i < FILL_COUNT && submitted < ctx->ops_target; i++) {
-        auraio_request_t *req =
-            auraio_read(ctx->engine, ctx->fd, auraio_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+        aura_request_t *req =
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
         if (req) submitted++;
         else break; /* Pool full */
     }
@@ -135,22 +135,22 @@ static void *worker_adaptive(void *arg) {
      *   - avg ≈ FILL_COUNT (tick saw all rings loaded)
      *   - Gate 1: pending(24) >= limit*3/4 = 6 → PASS
      *   - Gate 2: pending(24) > avg(24)*2 = 48 → false → PASS → SPILL
-     * Poll only when the request pool is exhausted (auraio_read returns NULL). */
+     * Poll only when the request pool is exhausted (aura_read returns NULL). */
     int batch = 0;
     while (submitted < ctx->ops_target) {
-        auraio_request_t *req =
-            auraio_read(ctx->engine, ctx->fd, auraio_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+        aura_request_t *req =
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
         if (req) {
             submitted++;
             batch++;
         } else {
             /* Pool exhausted — must drain some completions to free request slots */
-            auraio_poll(ctx->engine);
+            aura_poll(ctx->engine);
         }
 
         /* Poll infrequently to keep pending elevated */
         if (batch >= QUEUE_DEPTH) {
-            auraio_poll(ctx->engine);
+            aura_poll(ctx->engine);
             batch = 0;
         }
     }
@@ -158,22 +158,22 @@ static void *worker_adaptive(void *arg) {
     /* Drain */
     int spins = 0;
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted) {
-        auraio_wait(ctx->engine, 100);
+        aura_wait(ctx->engine, 100);
         if (++spins > 50000) break;
     }
 
-    auraio_buffer_free(ctx->engine, buf, BUF_SIZE);
+    aura_buffer_free(ctx->engine, buf, BUF_SIZE);
     return NULL;
 }
 
 /* --- Mode name helper --- */
-static const char *mode_name(auraio_ring_select_t mode) {
+static const char *mode_name(aura_ring_select_t mode) {
     switch (mode) {
-    case AURAIO_SELECT_ADAPTIVE:
+    case AURA_SELECT_ADAPTIVE:
         return "ADAPTIVE";
-    case AURAIO_SELECT_CPU_LOCAL:
+    case AURA_SELECT_CPU_LOCAL:
         return "CPU_LOCAL";
-    case AURAIO_SELECT_ROUND_ROBIN:
+    case AURA_SELECT_ROUND_ROBIN:
         return "ROUND_ROBIN";
     default:
         return "UNKNOWN";
@@ -193,25 +193,25 @@ typedef struct {
 } test_result_t;
 
 /* --- Run one mode --- */
-static void run_mode(auraio_ring_select_t mode, int ring_count, int ops_per_thread, int fd,
+static void run_mode(aura_ring_select_t mode, int ring_count, int ops_per_thread, int fd,
                      test_result_t *result) {
     memset(result, 0, sizeof(*result));
     result->name = mode_name(mode);
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.ring_count = ring_count;
     opts.queue_depth = QUEUE_DEPTH;
     opts.ring_select = mode;
     opts.disable_adaptive = true;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "  ERROR: failed to create engine for %s\n", result->name);
         return;
     }
 
-    int actual_rings = auraio_get_ring_count(engine);
+    int actual_rings = aura_get_ring_count(engine);
     result->ring_count = actual_rings;
     result->ops_per_thread = ops_per_thread;
 
@@ -220,7 +220,7 @@ static void run_mode(auraio_ring_select_t mode, int ring_count, int ops_per_thre
 
     /* Barrier for ADAPTIVE mode synchronization */
     pthread_barrier_t barrier;
-    int use_adaptive_worker = (mode == AURAIO_SELECT_ADAPTIVE);
+    int use_adaptive_worker = (mode == AURA_SELECT_ADAPTIVE);
     if (use_adaptive_worker) pthread_barrier_init(&barrier, NULL, thread_count);
 
     worker_ctx_t *workers = calloc(thread_count, sizeof(worker_ctx_t));
@@ -249,14 +249,14 @@ static void run_mode(auraio_ring_select_t mode, int ring_count, int ops_per_thre
     result->elapsed_ms = (t1.tv_sec - t0.tv_sec) * 1000.0 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
 
     /* Collect stats */
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
     result->spills = stats.adaptive_spills;
 
     result->rings_used = 0;
     for (int i = 0; i < actual_rings && i < MAX_RINGS; i++) {
-        auraio_ring_stats_t rs;
-        auraio_get_ring_stats(engine, i, &rs);
+        aura_ring_stats_t rs;
+        aura_get_ring_stats(engine, i, &rs);
         result->per_ring_ops[i] = rs.ops_completed;
         if (rs.ops_completed > 0) result->rings_used++;
     }
@@ -264,7 +264,7 @@ static void run_mode(auraio_ring_select_t mode, int ring_count, int ops_per_thre
     if (use_adaptive_worker) pthread_barrier_destroy(&barrier);
     free(workers);
     free(threads);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* --- Print results --- */
@@ -341,15 +341,15 @@ int main(int argc, char *argv[]) {
 
     printf("\n--- Running CPU_LOCAL ---");
     fflush(stdout);
-    run_mode(AURAIO_SELECT_CPU_LOCAL, ring_count, ops_per_thread, fd, &results[0]);
+    run_mode(AURA_SELECT_CPU_LOCAL, ring_count, ops_per_thread, fd, &results[0]);
 
     printf("\n--- Running ROUND_ROBIN ---");
     fflush(stdout);
-    run_mode(AURAIO_SELECT_ROUND_ROBIN, ring_count, ops_per_thread, fd, &results[1]);
+    run_mode(AURA_SELECT_ROUND_ROBIN, ring_count, ops_per_thread, fd, &results[1]);
 
     printf("\n--- Running ADAPTIVE ---");
     fflush(stdout);
-    run_mode(AURAIO_SELECT_ADAPTIVE, ring_count, ops_per_thread, fd, &results[2]);
+    run_mode(AURA_SELECT_ADAPTIVE, ring_count, ops_per_thread, fd, &results[2]);
 
     printf("\n\n=== Results ===");
     for (int i = 0; i < 3; i++) print_result(&results[i]);

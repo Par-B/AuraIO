@@ -3,7 +3,7 @@
  * @brief Unit tests for AuraIO C++ bindings
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <string>
 #include <stdexcept>
@@ -96,7 +96,7 @@ static int tests_failed = 0;
 class TempFile {
   public:
     TempFile(size_t size = 4096) {
-        snprintf(path_, sizeof(path_), "/tmp/auraio_test_XXXXXX");
+        snprintf(path_, sizeof(path_), "/tmp/aura_test_XXXXXX");
         fd_ = mkstemp(path_);
         if (fd_ < 0) {
             throw std::runtime_error("Failed to create temp file");
@@ -139,26 +139,26 @@ class TempFile {
 // =============================================================================
 
 TEST(engine_default_construct) {
-    auraio::Engine engine;
+    aura::Engine engine;
     ASSERT(engine.handle() != nullptr);
 }
 
 TEST(engine_with_options) {
-    auraio::Options opts;
+    aura::Options opts;
     opts.queue_depth(64).ring_count(2).disable_adaptive(false);
 
-    auraio::Engine engine(opts);
+    aura::Engine engine(opts);
     ASSERT(engine.handle() != nullptr);
 }
 
 TEST(engine_not_movable) {
-    static_assert(!std::is_move_constructible_v<auraio::Engine>,
+    static_assert(!std::is_move_constructible_v<aura::Engine>,
                   "Engine must not be move-constructible");
-    static_assert(!std::is_move_assignable_v<auraio::Engine>, "Engine must not be move-assignable");
+    static_assert(!std::is_move_assignable_v<aura::Engine>, "Engine must not be move-assignable");
 }
 
 TEST(engine_poll_fd_valid) {
-    auraio::Engine engine;
+    aura::Engine engine;
     int fd = engine.poll_fd();
     ASSERT_GE(fd, 0);
 }
@@ -168,17 +168,17 @@ TEST(engine_poll_fd_valid) {
 // =============================================================================
 
 TEST(options_default_values) {
-    auraio::Options opts;
+    aura::Options opts;
     const auto &c = opts.c_options();
 
-    // Verify defaults match auraio_options_init
+    // Verify defaults match aura_options_init
     ASSERT_EQ(c.queue_depth, 256);
     ASSERT_EQ(c.ring_count, 0); // 0 = auto-detect
     ASSERT_EQ(c.disable_adaptive, false);
 }
 
 TEST(options_builder_chain) {
-    auraio::Options opts;
+    aura::Options opts;
 
     // Verify chaining returns reference to same object
     auto &ref = opts.queue_depth(128);
@@ -191,7 +191,7 @@ TEST(options_builder_chain) {
 }
 
 TEST(options_all_setters) {
-    auraio::Options opts;
+    aura::Options opts;
     opts.queue_depth(512)
         .ring_count(8)
         .initial_in_flight(16)
@@ -212,21 +212,21 @@ TEST(options_all_setters) {
 
 TEST(options_ring_select) {
     // Default should be Adaptive
-    auraio::Options opts;
-    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::Adaptive);
+    aura::Options opts;
+    ASSERT_EQ(opts.ring_select(), aura::RingSelect::Adaptive);
 
     // Round-trip each mode
-    opts.ring_select(auraio::RingSelect::CpuLocal);
-    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::CpuLocal);
+    opts.ring_select(aura::RingSelect::CpuLocal);
+    ASSERT_EQ(opts.ring_select(), aura::RingSelect::CpuLocal);
 
-    opts.ring_select(auraio::RingSelect::RoundRobin);
-    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::RoundRobin);
+    opts.ring_select(aura::RingSelect::RoundRobin);
+    ASSERT_EQ(opts.ring_select(), aura::RingSelect::RoundRobin);
 
-    opts.ring_select(auraio::RingSelect::Adaptive);
-    ASSERT_EQ(opts.ring_select(), auraio::RingSelect::Adaptive);
+    opts.ring_select(aura::RingSelect::Adaptive);
+    ASSERT_EQ(opts.ring_select(), aura::RingSelect::Adaptive);
 
     // Verify C struct mapping
-    ASSERT_EQ(opts.c_options().ring_select, AURAIO_SELECT_ADAPTIVE);
+    ASSERT_EQ(opts.c_options().ring_select, AURA_SELECT_ADAPTIVE);
 }
 
 // =============================================================================
@@ -234,7 +234,7 @@ TEST(options_ring_select) {
 // =============================================================================
 
 TEST(buffer_allocate) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     ASSERT_NE(buffer.data(), nullptr);
@@ -245,17 +245,17 @@ TEST(buffer_allocate) {
 }
 
 TEST(buffer_move_construct) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer1 = engine.allocate_buffer(4096);
     void *ptr = buffer1.data();
 
-    auraio::Buffer buffer2(std::move(buffer1));
+    aura::Buffer buffer2(std::move(buffer1));
     ASSERT_EQ(buffer2.data(), ptr);
     ASSERT_EQ(buffer1.data(), nullptr);
 }
 
 TEST(buffer_move_assign) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer1 = engine.allocate_buffer(4096);
     auto buffer2 = engine.allocate_buffer(4096);
 
@@ -267,17 +267,17 @@ TEST(buffer_move_assign) {
 }
 
 TEST(buffer_wrap_no_free) {
-    auraio::Engine engine;
+    aura::Engine engine;
     alignas(4096) char stack_buf[4096];
 
-    auto buffer = auraio::Buffer::wrap(stack_buf, sizeof(stack_buf));
+    auto buffer = aura::Buffer::wrap(stack_buf, sizeof(stack_buf));
     ASSERT_EQ(buffer.data(), static_cast<void *>(stack_buf));
     ASSERT_EQ(buffer.size(), sizeof(stack_buf));
     // Destructor should not try to free stack memory
 }
 
 TEST(buffer_span_access) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     auto span = buffer.span();
@@ -291,27 +291,27 @@ TEST(buffer_span_access) {
 
 TEST(bufferref_from_ptr) {
     char buf[64];
-    auraio::BufferRef ref(buf);
+    aura::BufferRef ref(buf);
 
     auto c = ref.c_buf();
     ASSERT_EQ(c.u.ptr, static_cast<void *>(buf));
-    ASSERT_EQ(c.type, AURAIO_BUF_UNREGISTERED);
+    ASSERT_EQ(c.type, AURA_BUF_UNREGISTERED);
 }
 
 TEST(bufferref_from_buffer) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
-    auraio::BufferRef ref = buffer; // Implicit conversion
+    aura::BufferRef ref = buffer; // Implicit conversion
     auto c = ref.c_buf();
     ASSERT_EQ(c.u.ptr, buffer.data());
 }
 
 TEST(bufferref_fixed) {
-    auto ref = auraio::BufferRef::fixed(5, 128);
+    auto ref = aura::BufferRef::fixed(5, 128);
     auto c = ref.c_buf();
 
-    ASSERT_EQ(c.type, AURAIO_BUF_REGISTERED);
+    ASSERT_EQ(c.type, AURA_BUF_REGISTERED);
     ASSERT_EQ(c.u.fixed.index, 5);
     ASSERT_EQ(c.u.fixed.offset, 128u);
 }
@@ -321,12 +321,12 @@ TEST(bufferref_fixed) {
 // =============================================================================
 
 TEST(error_from_errno) {
-    auraio::Error err(EINVAL, "test operation");
+    aura::Error err(EINVAL, "test operation");
     ASSERT_EQ(err.code(), EINVAL);
 }
 
 TEST(error_what_message) {
-    auraio::Error err(ENOENT, "open file");
+    aura::Error err(ENOENT, "open file");
     std::string msg = err.what();
 
     ASSERT(msg.find("open file") != std::string::npos);
@@ -335,11 +335,11 @@ TEST(error_what_message) {
 }
 
 TEST(error_predicates) {
-    ASSERT(auraio::Error(EINVAL).is_invalid());
-    ASSERT(auraio::Error(EAGAIN).is_again());
-    ASSERT(auraio::Error(ENOENT).is_not_found());
-    ASSERT(auraio::Error(ECANCELED).is_cancelled());
-    ASSERT(auraio::Error(EBUSY).is_busy());
+    ASSERT(aura::Error(EINVAL).is_invalid());
+    ASSERT(aura::Error(EAGAIN).is_again());
+    ASSERT(aura::Error(ENOENT).is_not_found());
+    ASSERT(aura::Error(ECANCELED).is_cancelled());
+    ASSERT(aura::Error(EBUSY).is_busy());
 }
 
 // =============================================================================
@@ -347,7 +347,7 @@ TEST(error_predicates) {
 // =============================================================================
 
 TEST(request_null_handle) {
-    auraio::Request req(nullptr);
+    aura::Request req(nullptr);
     ASSERT(!req);
     ASSERT_EQ(req.fd(), -1);
     ASSERT(!req.pending());
@@ -358,7 +358,7 @@ TEST(request_null_handle) {
 // =============================================================================
 
 TEST(stats_all_fields) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto stats = engine.get_stats();
 
     // Initial stats should be zero/near-zero
@@ -378,15 +378,15 @@ TEST(request_unregister_buffers) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto fixed_storage = engine.allocate_buffer(4096);
     std::array<iovec, 1> iovs = {iovec{fixed_storage.data(), fixed_storage.size()}};
     engine.register_buffers(iovs);
 
     std::atomic<bool> completed{false};
     std::atomic<ssize_t> read_result{0};
-    (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 4096, 0,
-                      [&](auraio::Request &, ssize_t result) {
+    (void)engine.read(file.fd(), aura::BufferRef::fixed(0, 0), 4096, 0,
+                      [&](aura::Request &, ssize_t result) {
                           read_result.store(result, std::memory_order_seq_cst);
                           completed.store(true, std::memory_order_seq_cst);
                       });
@@ -395,9 +395,9 @@ TEST(request_unregister_buffers) {
 
     bool rejected_during_drain = false;
     try {
-        (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 64, 0,
-                          [](auraio::Request &, ssize_t) {});
-    } catch (const auraio::Error &e) {
+        (void)engine.read(file.fd(), aura::BufferRef::fixed(0, 0), 64, 0,
+                          [](aura::Request &, ssize_t) {});
+    } catch (const aura::Error &e) {
         rejected_during_drain = e.is_busy() || e.is_not_found();
     }
     ASSERT(rejected_during_drain);
@@ -409,9 +409,9 @@ TEST(request_unregister_buffers) {
 
     bool got_not_found = false;
     try {
-        (void)engine.read(file.fd(), auraio::BufferRef::fixed(0, 0), 64, 0,
-                          [](auraio::Request &, ssize_t) {});
-    } catch (const auraio::Error &e) {
+        (void)engine.read(file.fd(), aura::BufferRef::fixed(0, 0), 64, 0,
+                          [](aura::Request &, ssize_t) {});
+    } catch (const aura::Error &e) {
         got_not_found = e.is_not_found();
     }
     ASSERT(got_not_found);
@@ -424,7 +424,7 @@ TEST(request_unregister_files) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     std::array<int, 1> fds = {file.fd()};
     engine.register_files(fds);
 
@@ -433,7 +433,7 @@ TEST(request_unregister_files) {
     bool rejected_update = false;
     try {
         engine.update_file(0, file.fd());
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         rejected_update = e.is_busy() || e.is_not_found();
     }
     ASSERT(rejected_update);
@@ -454,13 +454,13 @@ TEST(read_basic) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
     ssize_t bytes_read = 0;
 
-    (void)engine.read(file.fd(), buffer, 4096, 0, [&](auraio::Request &, ssize_t result) {
+    (void)engine.read(file.fd(), buffer, 4096, 0, [&](aura::Request &, ssize_t result) {
         completed = true;
         bytes_read = result;
     });
@@ -479,14 +479,14 @@ TEST(read_with_capture) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     std::string captured_message = "not set";
     int captured_value = 0;
 
     (void)engine.read(file.fd(), buffer, 4096, 0,
-                      [&captured_message, &captured_value](auraio::Request &, ssize_t result) {
+                      [&captured_message, &captured_value](aura::Request &, ssize_t result) {
                           captured_message = "completed";
                           captured_value = static_cast<int>(result);
                       });
@@ -500,7 +500,7 @@ TEST(write_basic) {
     TempFile file(4096);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     // Fill buffer with pattern
@@ -509,7 +509,7 @@ TEST(write_basic) {
     bool completed = false;
     ssize_t bytes_written = 0;
 
-    (void)engine.write(file.fd(), buffer, 4096, 0, [&](auraio::Request &, ssize_t result) {
+    (void)engine.write(file.fd(), buffer, 4096, 0, [&](aura::Request &, ssize_t result) {
         completed = true;
         bytes_written = result;
     });
@@ -523,10 +523,10 @@ TEST(fsync_basic) {
     TempFile file(4096);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     bool completed = false;
 
-    (void)engine.fsync(file.fd(), [&](auraio::Request &, ssize_t result) {
+    (void)engine.fsync(file.fd(), [&](aura::Request &, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -539,10 +539,10 @@ TEST(fdatasync_basic) {
     TempFile file(4096);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     bool completed = false;
 
-    (void)engine.fdatasync(file.fd(), [&](auraio::Request &, ssize_t result) {
+    (void)engine.fdatasync(file.fd(), [&](aura::Request &, ssize_t result) {
         completed = true;
         ASSERT_EQ(result, 0);
     });
@@ -555,7 +555,7 @@ TEST(readv_basic) {
     TempFile file(8192);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buf1 = engine.allocate_buffer(4096);
     auto buf2 = engine.allocate_buffer(4096);
 
@@ -565,7 +565,7 @@ TEST(readv_basic) {
     ssize_t total_read = 0;
 
     (void)engine.readv(file.fd(), std::span<const iovec>(iov, 2), 0,
-                       [&](auraio::Request &, ssize_t result) {
+                       [&](aura::Request &, ssize_t result) {
                            completed = true;
                            total_read = result;
                        });
@@ -579,7 +579,7 @@ TEST(writev_basic) {
     TempFile file(8192);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buf1 = engine.allocate_buffer(4096);
     auto buf2 = engine.allocate_buffer(4096);
 
@@ -592,7 +592,7 @@ TEST(writev_basic) {
     ssize_t total_written = 0;
 
     (void)engine.writev(file.fd(), std::span<const iovec>(iov, 2), 0,
-                        [&](auraio::Request &, ssize_t result) {
+                        [&](aura::Request &, ssize_t result) {
                             completed = true;
                             total_written = result;
                         });
@@ -610,12 +610,12 @@ TEST(poll_processes_completions) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
     (void)engine.read(file.fd(), buffer, 4096, 0,
-                      [&](auraio::Request &, ssize_t) { completed = true; });
+                      [&](aura::Request &, ssize_t) { completed = true; });
 
     // Poll until complete (bounded to prevent hang)
     for (int i = 0; i < 5000 && !completed; i++) {
@@ -630,12 +630,12 @@ TEST(wait_blocks) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     bool completed = false;
     (void)engine.read(file.fd(), buffer, 4096, 0,
-                      [&](auraio::Request &, ssize_t) { completed = true; });
+                      [&](aura::Request &, ssize_t) { completed = true; });
 
     // wait() should block until at least one completion
     int n = engine.wait();
@@ -646,7 +646,7 @@ TEST(wait_blocks) {
 // Note: this test relies on 20ms sleeps to observe lock contention ordering.
 // May be flaky under heavy system load but is not a correctness issue.
 TEST(run_serializes_with_poll) {
-    auraio::Engine engine;
+    aura::Engine engine;
     std::atomic<bool> poll_returned{false};
 
     std::thread run_thread([&]() { engine.run(); });
@@ -670,7 +670,7 @@ TEST(multiple_concurrent_ops) {
     TempFile file(16384);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buf1 = engine.allocate_buffer(4096);
     auto buf2 = engine.allocate_buffer(4096);
     auto buf3 = engine.allocate_buffer(4096);
@@ -678,13 +678,13 @@ TEST(multiple_concurrent_ops) {
 
     int completed = 0;
 
-    (void)engine.read(file.fd(), buf1, 4096, 0, [&](auraio::Request &, ssize_t) { completed++; });
+    (void)engine.read(file.fd(), buf1, 4096, 0, [&](aura::Request &, ssize_t) { completed++; });
     (void)engine.read(file.fd(), buf2, 4096, 4096,
-                      [&](auraio::Request &, ssize_t) { completed++; });
+                      [&](aura::Request &, ssize_t) { completed++; });
     (void)engine.read(file.fd(), buf3, 4096, 8192,
-                      [&](auraio::Request &, ssize_t) { completed++; });
+                      [&](aura::Request &, ssize_t) { completed++; });
     (void)engine.read(file.fd(), buf4, 4096, 12288,
-                      [&](auraio::Request &, ssize_t) { completed++; });
+                      [&](aura::Request &, ssize_t) { completed++; });
 
     // Wait for all (bounded to prevent hang)
     for (int i = 0; i < 100 && completed < 4; i++) {
@@ -699,9 +699,9 @@ TEST(multiple_concurrent_ops) {
 // =============================================================================
 
 TEST(raii_engine_scope) {
-    auraio_engine_t *raw = nullptr;
+    aura_engine_t *raw = nullptr;
     {
-        auraio::Engine engine;
+        aura::Engine engine;
         raw = engine.handle();
         ASSERT_NE(raw, nullptr);
     }
@@ -710,7 +710,7 @@ TEST(raii_engine_scope) {
 }
 
 TEST(raii_buffer_scope) {
-    auraio::Engine engine;
+    aura::Engine engine;
     {
         auto buffer = engine.allocate_buffer(4096);
         ASSERT_NE(buffer.data(), nullptr);
@@ -722,7 +722,7 @@ TEST(raii_buffer_scope) {
 }
 
 TEST(raii_exception_safety) {
-    auraio::Engine engine;
+    aura::Engine engine;
 
     try {
         auto buffer = engine.allocate_buffer(4096);
@@ -737,9 +737,9 @@ TEST(raii_exception_safety) {
 }
 
 TEST(raii_buffer_outlives_engine_scope) {
-    auraio::Buffer escaped;
+    aura::Buffer escaped;
     {
-        auraio::Engine engine;
+        aura::Engine engine;
         escaped = engine.allocate_buffer(4096);
         ASSERT_NE(escaped.data(), nullptr);
     }
@@ -752,13 +752,13 @@ TEST(raii_buffer_outlives_engine_scope) {
 // =============================================================================
 
 TEST(read_invalid_fd_throws) {
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     bool threw = false;
     try {
-        (void)engine.read(-1, buffer, 4096, 0, [](auraio::Request &, ssize_t) {});
-    } catch (const auraio::Error &e) {
+        (void)engine.read(-1, buffer, 4096, 0, [](aura::Request &, ssize_t) {});
+    } catch (const aura::Error &e) {
         threw = true;
         // fd=-1 may produce EBADF or EINVAL depending on kernel/io_uring version
         ASSERT(e.code() == EBADF || e.code() == EINVAL);
@@ -767,11 +767,11 @@ TEST(read_invalid_fd_throws) {
 }
 
 TEST(buffer_as_null_throws) {
-    auraio::Buffer buf; // Default-constructed — null
+    aura::Buffer buf; // Default-constructed — null
     bool threw = false;
     try {
         (void)buf.as<int>();
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         threw = true;
         ASSERT_EQ(e.code(), EINVAL);
     }
@@ -784,13 +784,13 @@ TEST(buffer_as_null_throws) {
 
 #if __has_include(<coroutine>)
 
-auraio::Task<ssize_t> async_read_task(auraio::Engine &engine, int fd, auraio::Buffer &buf,
+aura::Task<ssize_t> async_read_task(aura::Engine &engine, int fd, aura::Buffer &buf,
                                       size_t len, off_t off) {
     ssize_t result = co_await engine.async_read(fd, buf, len, off);
     co_return result;
 }
 
-auraio::Task<void> async_write_task(auraio::Engine &engine, int fd, auraio::Buffer &buf, size_t len,
+aura::Task<void> async_write_task(aura::Engine &engine, int fd, aura::Buffer &buf, size_t len,
                                     off_t off) {
     co_await engine.async_write(fd, buf, len, off);
 }
@@ -799,7 +799,7 @@ TEST(async_read_basic) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     auto task = async_read_task(engine, file.fd(), buffer, 4096, 0);
@@ -820,7 +820,7 @@ TEST(async_write_basic) {
     TempFile file(4096);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
     std::memset(buffer.data(), 'W', 4096);
 
@@ -838,7 +838,7 @@ TEST(async_write_basic) {
     task.get(); // May throw if there was an error
 }
 
-auraio::Task<void> async_fsync_task(auraio::Engine &engine, int fd) {
+aura::Task<void> async_fsync_task(aura::Engine &engine, int fd) {
     co_await engine.async_fsync(fd);
 }
 
@@ -846,7 +846,7 @@ TEST(async_fsync_basic) {
     TempFile file(4096);
     file.reopen(O_RDWR);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto task = async_fsync_task(engine, file.fd());
 
     // Start the coroutine
@@ -860,7 +860,7 @@ TEST(async_fsync_basic) {
     task.get();
 }
 
-auraio::Task<ssize_t> async_sequential_reads(auraio::Engine &engine, int fd, auraio::Buffer &buf) {
+aura::Task<ssize_t> async_sequential_reads(aura::Engine &engine, int fd, aura::Buffer &buf) {
     ssize_t total = 0;
     total += co_await engine.async_read(fd, buf, 1024, 0);
     total += co_await engine.async_read(fd, buf, 1024, 1024);
@@ -872,7 +872,7 @@ TEST(coroutine_sequential) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
-    auraio::Engine engine;
+    aura::Engine engine;
     auto buffer = engine.allocate_buffer(4096);
 
     auto task = async_sequential_reads(engine, file.fd(), buffer);

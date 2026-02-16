@@ -3,7 +3,7 @@
  * @brief Example: AuraIO Prometheus metrics endpoint
  *
  * Demonstrates how to serve AuraIO metrics via a simple HTTP server.
- * In production, integrate auraio_metrics_prometheus() into your
+ * In production, integrate aura_metrics_prometheus() into your
  * existing HTTP server framework.
  *
  * Build:
@@ -14,8 +14,8 @@
  *   curl http://localhost:9091/metrics
  */
 
-#include <auraio.h>
-#include "auraio_prometheus.h"
+#include <aura.h>
+#include "aura_prometheus.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -45,7 +45,7 @@ static void handle_signal(int sig) {
     running = 0;
 }
 
-static void serve_metrics(int client_fd, auraio_engine_t *engine) {
+static void serve_metrics(int client_fd, aura_engine_t *engine) {
     char *buf = malloc(METRICS_BUF_SIZE);
     if (!buf) {
         const char *err = "HTTP/1.1 500 Internal Server Error\r\n\r\n";
@@ -53,7 +53,7 @@ static void serve_metrics(int client_fd, auraio_engine_t *engine) {
         return;
     }
 
-    int len = auraio_metrics_prometheus(engine, buf, METRICS_BUF_SIZE);
+    int len = aura_metrics_prometheus(engine, buf, METRICS_BUF_SIZE);
     if (len < 0) {
         const char *err = (errno == ENOBUFS) ? "HTTP/1.1 500 Buffer Too Small\r\n\r\n"
                                               : "HTTP/1.1 500 Internal Server Error\r\n\r\n";
@@ -90,26 +90,26 @@ int main(void) {
     signal(SIGPIPE, SIG_IGN);
 
     /* Create a minimal AuraIO engine for demonstration */
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.ring_count = 1;
     opts.queue_depth = 64;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create AuraIO engine: %s\n", strerror(errno));
         return 1;
     }
 
-    printf("AuraIO Prometheus Exporter (v%s)\n", auraio_version());
+    printf("AuraIO Prometheus Exporter (v%s)\n", aura_version());
     printf("Engine: %d ring(s), queue_depth=%d\n",
-           auraio_get_ring_count(engine), opts.queue_depth);
+           aura_get_ring_count(engine), opts.queue_depth);
 
     /* Set up TCP server */
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         perror("socket");
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
@@ -125,14 +125,14 @@ int main(void) {
     if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("bind");
         close(server_fd);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
     if (listen(server_fd, 8) < 0) {
         perror("listen");
         close(server_fd);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
@@ -170,6 +170,6 @@ int main(void) {
 
     printf("\nShutting down...\n");
     close(server_fd);
-    auraio_destroy(engine);
+    aura_destroy(engine);
     return 0;
 }

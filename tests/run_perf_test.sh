@@ -7,7 +7,7 @@
 #   --quick       Run quick benchmarks (5 sec each)
 #   --full        Run full benchmarks (30 sec each)
 #   --baseline    Run fio baseline only
-#   --auraio      Run AuraIO benchmarks only
+#   --aura      Run AuraIO benchmarks only
 #   --compare     Run both and compare (default)
 #   --with-perf   Run with perf stat (requires root/perf access)
 #   --help        Show this help
@@ -17,7 +17,7 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-TEST_DIR="/tmp/auraio_bench"
+TEST_DIR="/tmp/aura_bench"
 RESULTS_DIR="${SCRIPT_DIR}/bench_results"
 
 # Test parameters
@@ -36,7 +36,7 @@ NC='\033[0m' # No Color
 
 # Parse arguments
 RUN_BASELINE=true
-RUN_AURAIO=true
+RUN_AURA=true
 USE_PERF=false
 QUICK=false
 
@@ -53,17 +53,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --baseline)
             RUN_BASELINE=true
-            RUN_AURAIO=false
+            RUN_AURA=false
             shift
             ;;
-        --auraio)
+        --aura)
             RUN_BASELINE=false
-            RUN_AURAIO=true
+            RUN_AURA=true
             shift
             ;;
         --compare)
             RUN_BASELINE=true
-            RUN_AURAIO=true
+            RUN_AURA=true
             shift
             ;;
         --with-perf)
@@ -186,7 +186,7 @@ fi
 # Build AuraIO
 # ============================================================================
 
-if [ "$RUN_AURAIO" = true ]; then
+if [ "$RUN_AURA" = true ]; then
     echo "Building AuraIO..."
     cd "$PROJECT_ROOT"
     make clean > /dev/null 2>&1 || true
@@ -369,13 +369,13 @@ run_fio_baseline() {
 # AuraIO Benchmark Tests
 # ============================================================================
 
-run_auraio_benchmark() {
+run_aura_benchmark() {
     echo "============================================"
     echo "Running AuraIO Benchmark Tests"
     echo "============================================"
     echo ""
 
-    local auraio_results="$RESULTS_DIR/auraio_results.txt"
+    local aura_results="$RESULTS_DIR/aura_results.txt"
     local perf_bench="$SCRIPT_DIR/perf_bench"
 
     if [ ! -x "$perf_bench" ]; then
@@ -419,7 +419,7 @@ run_auraio_benchmark() {
         $runner "$perf_bench" syscall "$DURATION"
         echo ""
 
-    } 2>&1 | tee "$auraio_results"
+    } 2>&1 | tee "$aura_results"
 
     echo ""
 }
@@ -465,11 +465,11 @@ if [ "$RUN_BASELINE" = true ]; then
     run_fio_baseline
 fi
 
-if [ "$RUN_AURAIO" = true ]; then
-    run_auraio_benchmark
+if [ "$RUN_AURA" = true ]; then
+    run_aura_benchmark
 fi
 
-if [ "$RUN_BASELINE" = true ] && [ "$RUN_AURAIO" = true ]; then
+if [ "$RUN_BASELINE" = true ] && [ "$RUN_AURA" = true ]; then
     generate_report
 fi
 

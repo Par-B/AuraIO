@@ -19,7 +19,7 @@
 #include <sys/time.h>
 #include <limits.h>
 
-#include <auraio.h>
+#include <aura.h>
 
 #define MAX_FILES 10000
 #define READ_SIZE (256 * 1024) /* 256KB per file */
@@ -27,7 +27,7 @@
 
 /* Context for tracking bulk read progress */
 typedef struct {
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
     int files_pending;
     int files_completed;
     long long bytes_read;
@@ -45,11 +45,11 @@ typedef struct {
 /**
  * Callback invoked when a file read completes.
  *
- * Thread-safety: auraio invokes callbacks sequentially from the polling
- * thread (auraio_wait/auraio_run), so no synchronization is needed for
+ * Thread-safety: aura invokes callbacks sequentially from the polling
+ * thread (aura_wait/aura_run), so no synchronization is needed for
  * ctx->bytes_read and other bulk_ctx fields.
  */
-void on_file_read(auraio_request_t *req, ssize_t result, void *user_data) {
+void on_file_read(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     file_ctx_t *fctx = user_data;
     bulk_ctx_t *ctx = fctx->bulk;
@@ -62,7 +62,7 @@ void on_file_read(auraio_request_t *req, ssize_t result, void *user_data) {
 
     /* Clean up per-file resources */
     close(fctx->fd);
-    auraio_buffer_free(ctx->engine, fctx->buf, READ_SIZE);
+    aura_buffer_free(ctx->engine, fctx->buf, READ_SIZE);
     free(fctx);
 
     ctx->files_completed++;
@@ -83,7 +83,7 @@ void on_file_read(auraio_request_t *req, ssize_t result, void *user_data) {
 
     /* Stop when all files done */
     if (ctx->files_pending == 0) {
-        auraio_stop(ctx->engine);
+        aura_stop(ctx->engine);
     }
 }
 
@@ -108,11 +108,11 @@ int main(int argc, char **argv) {
 
     const char *dirname = argv[1];
 
-    /* Create the auraio engine */
+    /* Create the aura engine */
     printf("Creating async I/O engine...\n");
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
-        fprintf(stderr, "Failed to create auraio engine: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to create aura engine: %s\n", strerror(errno));
         return 1;
     }
 
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
     DIR *dir = opendir(dirname);
     if (!dir) {
         fprintf(stderr, "Failed to open directory '%s': %s\n", dirname, strerror(errno));
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
         }
 
         /* Allocate buffer */
-        void *buf = auraio_buffer_alloc(engine, READ_SIZE);
+        void *buf = aura_buffer_alloc(engine, READ_SIZE);
         if (!buf) {
             close(fd);
             continue;
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         /* Allocate per-file context for cleanup in callback */
         file_ctx_t *fctx = malloc(sizeof(file_ctx_t));
         if (!fctx) {
-            auraio_buffer_free(engine, buf, READ_SIZE);
+            aura_buffer_free(engine, buf, READ_SIZE);
             close(fd);
             continue;
         }
@@ -180,12 +180,12 @@ int main(int argc, char **argv) {
         fctx->buf = buf;
 
         /* Submit async read */
-        if (auraio_read(engine, fd, auraio_buf(buf), READ_SIZE, 0, on_file_read, fctx) != NULL) {
+        if (aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_file_read, fctx) != NULL) {
             ctx.files_pending++;
             submitted++;
         } else {
             free(fctx);
-            auraio_buffer_free(engine, buf, READ_SIZE);
+            aura_buffer_free(engine, buf, READ_SIZE);
             close(fd);
         }
     }
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
 
     if (submitted == 0) {
         printf("No files found to read.\n");
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
     printf("Running event loop (self-tuning in progress)...\n\n");
 
     /* Process until all complete */
-    auraio_run(engine);
+    aura_run(engine);
 
     /* Final stats */
     printf("\n\n");
@@ -220,15 +220,15 @@ int main(int argc, char **argv) {
     printf("Average speed:    %.2f MB/s\n", (ctx.bytes_read / (1024.0 * 1024.0)) / total_elapsed);
 
     /* Engine tuning results */
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
     printf("\nAdaptive tuning results:\n");
     printf("  Optimal in-flight: %d\n", stats.optimal_in_flight);
     printf("  Optimal batch:     %d\n", stats.optimal_batch_size);
     printf("  P99 latency:       %.2f ms\n", stats.p99_latency_ms);
 
     /* Cleanup */
-    auraio_destroy(engine);
+    aura_destroy(engine);
 
     printf("\nDone!\n");
     return 0;

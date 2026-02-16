@@ -50,28 +50,28 @@ Link: `-lauraio -luring -lpthread`
 
 | Type | Description |
 |------|-------------|
-| `auraio_engine_t` | Engine handle. Created by `auraio_create()`, destroyed by `auraio_destroy()`. Thread-safe for submissions from multiple threads. |
-| `auraio_request_t` | Request handle. Returned by I/O submission functions. Valid from submission until the completion callback begins execution. Can be used with `auraio_cancel()` and `auraio_request_pending()` while in-flight. |
+| `aura_engine_t` | Engine handle. Created by `aura_create()`, destroyed by `aura_destroy()`. Thread-safe for submissions from multiple threads. |
+| `aura_request_t` | Request handle. Returned by I/O submission functions. Valid from submission until the completion callback begins execution. Can be used with `aura_cancel()` and `aura_request_pending()` while in-flight. |
 
 ### Callback Type
 
 ```c
-typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result, void *user_data);
+typedef void (*aura_callback_t)(aura_request_t *req, ssize_t result, void *user_data);
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `req` | `auraio_request_t *` | Request handle (valid only during callback) |
+| `req` | `aura_request_t *` | Request handle (valid only during callback) |
 | `result` | `ssize_t` | Bytes transferred on success, negative errno on failure, `-ECANCELED` if cancelled |
 | `user_data` | `void *` | User pointer from the submission call |
 
 Passing `NULL` as a callback is permitted -- the I/O executes but no completion notification is delivered.
 
-Callbacks execute in the context of `auraio_poll()` or `auraio_wait()`. Since these functions drain completions from **all** rings, a callback may fire on **any thread** that calls `auraio_wait()` -- not necessarily the thread that submitted the I/O. Do not use thread-local storage to identify the originating context; instead, pass all necessary state through `user_data`. The `user_data` pointer (and any memory it references) must remain valid until the callback has executed. Callbacks may submit new I/O but must not call `auraio_destroy()`.
+Callbacks execute in the context of `aura_poll()` or `aura_wait()`. Since these functions drain completions from **all** rings, a callback may fire on **any thread** that calls `aura_wait()` -- not necessarily the thread that submitted the I/O. Do not use thread-local storage to identify the originating context; instead, pass all necessary state through `user_data`. The `user_data` pointer (and any memory it references) must remain valid until the callback has executed. Callbacks may submit new I/O but must not call `aura_destroy()`.
 
 ### Configuration
 
-#### `auraio_options_t`
+#### `aura_options_t`
 
 ```c
 typedef struct {
@@ -85,84 +85,84 @@ typedef struct {
   bool disable_adaptive;
   bool enable_sqpoll;
   int sqpoll_idle_ms;
-  auraio_ring_select_t ring_select;
-} auraio_options_t;
+  aura_ring_select_t ring_select;
+} aura_options_t;
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `struct_size` | `size_t` | (set by init) | Set by `auraio_options_init()`; used for ABI forward-compatibility |
+| `struct_size` | `size_t` | (set by init) | Set by `aura_options_init()`; used for ABI forward-compatibility |
 | `queue_depth` | `int` | 256 | Queue depth per io_uring ring |
 | `ring_count` | `int` | 0 (auto) | Number of rings. 0 = one per CPU core |
 | `initial_in_flight` | `int` | queue_depth/4 | Starting in-flight operation limit |
 | `min_in_flight` | `int` | 4 | Floor for AIMD in-flight limit |
 | `max_p99_latency_ms` | `double` | 0 (auto) | Target P99 latency threshold. 0 = auto-detect |
-| `buffer_alignment` | `size_t` | system page size | Alignment for `auraio_buffer_alloc()` |
+| `buffer_alignment` | `size_t` | system page size | Alignment for `aura_buffer_alloc()` |
 | `disable_adaptive` | `bool` | false | Disable AIMD adaptive tuning |
 | `enable_sqpoll` | `bool` | false | Use kernel-side submission polling (requires root or `CAP_SYS_NICE`) |
 | `sqpoll_idle_ms` | `int` | 1000 | SQPOLL idle timeout before kernel thread sleeps |
-| `ring_select` | `auraio_ring_select_t` | `AURAIO_SELECT_ADAPTIVE` | Ring selection mode (see below) |
+| `ring_select` | `aura_ring_select_t` | `AURA_SELECT_ADAPTIVE` | Ring selection mode (see below) |
 
-Always initialize with `auraio_options_init()` before modifying fields.
+Always initialize with `aura_options_init()` before modifying fields.
 
-#### `auraio_ring_select_t`
+#### `aura_ring_select_t`
 
 ```c
 typedef enum {
-  AURAIO_SELECT_ADAPTIVE = 0,
-  AURAIO_SELECT_CPU_LOCAL,
-  AURAIO_SELECT_ROUND_ROBIN
-} auraio_ring_select_t;
+  AURA_SELECT_ADAPTIVE = 0,
+  AURA_SELECT_CPU_LOCAL,
+  AURA_SELECT_ROUND_ROBIN
+} aura_ring_select_t;
 ```
 
 | Mode | When to use |
 |------|-------------|
-| `AURAIO_SELECT_ADAPTIVE` | Default. Uses CPU-local ring until congested (>75% of in-flight limit). If local load > 2x average, stays local (outlier). Otherwise, spills via power-of-two random choice to the lighter of two non-local rings. Best for most workloads. |
-| `AURAIO_SELECT_CPU_LOCAL` | Strict CPU affinity. Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring. |
-| `AURAIO_SELECT_ROUND_ROBIN` | Always distributes via atomic round-robin. Best for single-thread event loops or benchmarks that need maximum ring utilization from fewer threads. |
+| `AURA_SELECT_ADAPTIVE` | Default. Uses CPU-local ring until congested (>75% of in-flight limit). If local load > 2x average, stays local (outlier). Otherwise, spills via power-of-two random choice to the lighter of two non-local rings. Best for most workloads. |
+| `AURA_SELECT_CPU_LOCAL` | Strict CPU affinity. Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring. |
+| `AURA_SELECT_ROUND_ROBIN` | Always distributes via atomic round-robin. Best for single-thread event loops or benchmarks that need maximum ring utilization from fewer threads. |
 
 ### Buffer Descriptor
 
 ```c
 typedef enum {
-  AURAIO_BUF_UNREGISTERED = 0,
-  AURAIO_BUF_REGISTERED = 1
-} auraio_buf_type_t;
+  AURA_BUF_UNREGISTERED = 0,
+  AURA_BUF_REGISTERED = 1
+} aura_buf_type_t;
 
 typedef struct {
-  auraio_buf_type_t type;
+  aura_buf_type_t type;
   union {
     void *ptr;
     struct { int index; size_t offset; } fixed;
   } u;
-} auraio_buf_t;
+} aura_buf_t;
 ```
 
 Create with inline helpers -- do not construct manually:
 
 | Helper | Description |
 |--------|-------------|
-| `auraio_buf(void *ptr)` | Wrap a regular buffer pointer |
-| `auraio_buf_fixed(int index, size_t offset)` | Reference a registered buffer at offset. Returns an invalid (NULL-pointer) descriptor if `index < 0`. |
-| `auraio_buf_fixed_idx(int index)` | Reference a registered buffer at offset 0 |
+| `aura_buf(void *ptr)` | Wrap a regular buffer pointer |
+| `aura_buf_fixed(int index, size_t offset)` | Reference a registered buffer at offset. Returns an invalid (NULL-pointer) descriptor if `index < 0`. |
+| `aura_buf_fixed_idx(int index)` | Reference a registered buffer at offset 0 |
 
 ### Fsync Flags
 
 ```c
 typedef enum {
-  AURAIO_FSYNC_DEFAULT  = 0,
-  AURAIO_FSYNC_DATASYNC = 1,
-} auraio_fsync_flags_t;
+  AURA_FSYNC_DEFAULT  = 0,
+  AURA_FSYNC_DATASYNC = 1,
+} aura_fsync_flags_t;
 ```
 
 | Flag | Description |
 |------|-------------|
-| `AURAIO_FSYNC_DEFAULT` | Full fsync (metadata + data) |
-| `AURAIO_FSYNC_DATASYNC` | fdatasync (data only, skip metadata if possible) |
+| `AURA_FSYNC_DEFAULT` | Full fsync (metadata + data) |
+| `AURA_FSYNC_DATASYNC` | fdatasync (data only, skip metadata if possible) |
 
 ### Statistics Types
 
-#### `auraio_stats_t` -- Aggregate Engine Stats
+#### `aura_stats_t` -- Aggregate Engine Stats
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -175,7 +175,7 @@ typedef enum {
 | `optimal_batch_size` | `int` | AIMD-tuned aggregate batch size |
 | `adaptive_spills` | `uint64_t` | ADAPTIVE mode: count of submissions that spilled to another ring |
 
-#### `auraio_ring_stats_t` -- Per-Ring Stats
+#### `aura_ring_stats_t` -- Per-Ring Stats
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -189,7 +189,7 @@ typedef enum {
 | `aimd_phase` | `int` | Controller phase (0-5, see constants below) |
 | `queue_depth` | `int` | Kernel queue depth for this ring |
 
-#### `auraio_histogram_t` -- Latency Histogram
+#### `aura_histogram_t` -- Latency Histogram
 
 An approximate snapshot of the active histogram window. Because the snapshot is read from a concurrently-written histogram, individual bucket values are atomic but `total_count` may differ slightly from the sum of buckets + overflow. When adaptive tuning is disabled (`disable_adaptive = true`), the histogram accumulates data indefinitely instead of being periodically reset.
 
@@ -201,7 +201,7 @@ An approximate snapshot of the active histogram window. Because the snapshot is 
 | `bucket_width_us` | `int` | Width of each bucket in microseconds |
 | `max_tracked_us` | `int` | Maximum tracked latency in microseconds |
 
-#### `auraio_buffer_stats_t` -- Buffer Pool Stats
+#### `aura_buffer_stats_t` -- Buffer Pool Stats
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -215,31 +215,31 @@ An approximate snapshot of the active histogram window. Because the snapshot is 
 
 | Macro | Value | Description |
 |-------|-------|-------------|
-| `AURAIO_VERSION_MAJOR` | 0 | Major version |
-| `AURAIO_VERSION_MINOR` | 1 | Minor version |
-| `AURAIO_VERSION_PATCH` | 0 | Patch version |
-| `AURAIO_VERSION` | 100 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURAIO_VERSION_STRING` | `"0.1.0"` | Version string |
+| `AURA_VERSION_MAJOR` | 0 | Major version |
+| `AURA_VERSION_MINOR` | 1 | Minor version |
+| `AURA_VERSION_PATCH` | 0 | Patch version |
+| `AURA_VERSION` | 100 | Combined: `major * 10000 + minor * 100 + patch` |
+| `AURA_VERSION_STRING` | `"0.1.0"` | Version string |
 
 #### AIMD Phase Constants
 
-Used in `auraio_ring_stats_t.aimd_phase`:
+Used in `aura_ring_stats_t.aimd_phase`:
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `AURAIO_PHASE_BASELINE` | 0 | Collecting baseline latency samples |
-| `AURAIO_PHASE_PROBING` | 1 | Additive increase -- testing higher depth |
-| `AURAIO_PHASE_STEADY` | 2 | Throughput plateau -- holding position |
-| `AURAIO_PHASE_BACKOFF` | 3 | Multiplicative decrease -- P99 exceeded target |
-| `AURAIO_PHASE_SETTLING` | 4 | Post-backoff stabilization |
-| `AURAIO_PHASE_CONVERGED` | 5 | Optimal depth found |
+| `AURA_PHASE_BASELINE` | 0 | Collecting baseline latency samples |
+| `AURA_PHASE_PROBING` | 1 | Additive increase -- testing higher depth |
+| `AURA_PHASE_STEADY` | 2 | Throughput plateau -- holding position |
+| `AURA_PHASE_BACKOFF` | 3 | Multiplicative decrease -- P99 exceeded target |
+| `AURA_PHASE_SETTLING` | 4 | Post-backoff stabilization |
+| `AURA_PHASE_CONVERGED` | 5 | Optimal depth found |
 
 #### Histogram Constants
 
 | Macro | Value | Description |
 |-------|-------|-------------|
-| `AURAIO_HISTOGRAM_BUCKETS` | 200 | Number of histogram buckets |
-| `AURAIO_HISTOGRAM_BUCKET_WIDTH_US` | 50 | Bucket width in microseconds |
+| `AURA_HISTOGRAM_BUCKETS` | 200 | Number of histogram buckets |
+| `AURA_HISTOGRAM_BUCKET_WIDTH_US` | 50 | Bucket width in microseconds |
 
 Histogram range: 0 to 10,000 us (10 ms). Operations exceeding 10 ms are counted in `overflow`.
 
@@ -249,26 +249,26 @@ Histogram range: 0 to 10,000 us (10 ms). Operations exceeding 10 ms are counted 
 
 #### Configuration
 
-##### `auraio_options_init`
+##### `aura_options_init`
 
 ```c
-void auraio_options_init(auraio_options_t *options);
+void aura_options_init(aura_options_t *options);
 ```
 
 Initialize an options struct with default values. Always call before modifying individual fields.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `options` | `auraio_options_t *` | Options struct to initialize |
+| `options` | `aura_options_t *` | Options struct to initialize |
 
 ---
 
 #### Lifecycle
 
-##### `auraio_create`
+##### `aura_create`
 
 ```c
-auraio_engine_t *auraio_create(void);
+aura_engine_t *aura_create(void);
 ```
 
 Create a new engine with default options. Detects CPU cores, creates one io_uring ring per core, and initializes AIMD controllers.
@@ -277,26 +277,26 @@ Create a new engine with default options. Detects CPU cores, creates one io_urin
 
 ---
 
-##### `auraio_create_with_options`
+##### `aura_create_with_options`
 
 ```c
-auraio_engine_t *auraio_create_with_options(const auraio_options_t *options);
+aura_engine_t *aura_create_with_options(const aura_options_t *options);
 ```
 
 Create a new engine with custom options.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `options` | `const auraio_options_t *` | Configuration (must be initialized with `auraio_options_init` first) |
+| `options` | `const aura_options_t *` | Configuration (must be initialized with `aura_options_init` first) |
 
 **Returns:** Engine handle, or `NULL` on failure (errno set).
 
 ---
 
-##### `auraio_destroy`
+##### `aura_destroy`
 
 ```c
-void auraio_destroy(auraio_engine_t *engine);
+void aura_destroy(aura_engine_t *engine);
 ```
 
 Destroy the engine. Signals shutdown (new submissions fail with `ESHUTDOWN`), waits for all pending operations to complete, then frees resources. Safe to call from any thread. `NULL` is a no-op.
@@ -305,11 +305,11 @@ The caller must ensure all worker threads have stopped submitting I/O and comple
 
 1. Signal worker threads to stop
 2. Join/wait for all worker threads
-3. Call `auraio_destroy()`
+3. Call `aura_destroy()`
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine to destroy (may be `NULL`) |
+| `engine` | `aura_engine_t *` | Engine to destroy (may be `NULL`) |
 
 ---
 
@@ -321,50 +321,50 @@ Buffers must remain valid until the callback fires. The callback may be `NULL` f
 
 ---
 
-##### `auraio_read`
+##### `aura_read`
 
 ```c
-auraio_request_t *auraio_read(auraio_engine_t *engine, int fd, auraio_buf_t buf,
+aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf,
                               size_t len, off_t offset,
-                              auraio_callback_t callback, void *user_data);
+                              aura_callback_t callback, void *user_data);
 ```
 
 Submit an async read. Supports regular and registered buffers.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `fd` | `int` | Open file descriptor |
-| `buf` | `auraio_buf_t` | Buffer descriptor (use `auraio_buf()` or `auraio_buf_fixed()`) |
+| `buf` | `aura_buf_t` | Buffer descriptor (use `aura_buf()` or `aura_buf_fixed()`) |
 | `len` | `size_t` | Bytes to read |
 | `offset` | `off_t` | File offset |
-| `callback` | `auraio_callback_t` | Completion callback (may be `NULL`) |
+| `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
 **Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOENT`, `EOVERFLOW`, `ENOMEM`
 
 ---
 
-##### `auraio_write`
+##### `aura_write`
 
 ```c
-auraio_request_t *auraio_write(auraio_engine_t *engine, int fd, auraio_buf_t buf,
+aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf,
                                size_t len, off_t offset,
-                               auraio_callback_t callback, void *user_data);
+                               aura_callback_t callback, void *user_data);
 ```
 
-Submit an async write. Same parameters as `auraio_read`.
+Submit an async write. Same parameters as `aura_read`.
 
 **Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOENT`, `EOVERFLOW`, `ENOMEM`
 
 ---
 
-##### `auraio_readv`
+##### `aura_readv`
 
 ```c
-auraio_request_t *auraio_readv(auraio_engine_t *engine, int fd,
+aura_request_t *aura_readv(aura_engine_t *engine, int fd,
                                const struct iovec *iov, int iovcnt,
-                               off_t offset, auraio_callback_t callback,
+                               off_t offset, aura_callback_t callback,
                                void *user_data);
 ```
 
@@ -372,49 +372,49 @@ Submit an async scatter read into multiple buffers. The iovec array and all buff
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `fd` | `int` | Open file descriptor |
 | `iov` | `const struct iovec *` | Array of iovec structures |
 | `iovcnt` | `int` | Number of elements in `iov` |
 | `offset` | `off_t` | File offset |
-| `callback` | `auraio_callback_t` | Completion callback (may be `NULL`) |
+| `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
 **Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOMEM`
 
 ---
 
-##### `auraio_writev`
+##### `aura_writev`
 
 ```c
-auraio_request_t *auraio_writev(auraio_engine_t *engine, int fd,
+aura_request_t *aura_writev(aura_engine_t *engine, int fd,
                                 const struct iovec *iov, int iovcnt,
-                                off_t offset, auraio_callback_t callback,
+                                off_t offset, aura_callback_t callback,
                                 void *user_data);
 ```
 
-Submit an async gather write from multiple buffers. Same parameters as `auraio_readv`.
+Submit an async gather write from multiple buffers. Same parameters as `aura_readv`.
 
 **Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOMEM`
 
 ---
 
-##### `auraio_fsync`
+##### `aura_fsync`
 
 ```c
-auraio_request_t *auraio_fsync(auraio_engine_t *engine, int fd,
-                               auraio_fsync_flags_t flags,
-                               auraio_callback_t callback, void *user_data);
+aura_request_t *aura_fsync(aura_engine_t *engine, int fd,
+                               aura_fsync_flags_t flags,
+                               aura_callback_t callback, void *user_data);
 ```
 
-Submit an async fsync. Pass `AURAIO_FSYNC_DEFAULT` for a full fsync (metadata + data) or `AURAIO_FSYNC_DATASYNC` for fdatasync behavior (data only, skip metadata if possible).
+Submit an async fsync. Pass `AURA_FSYNC_DEFAULT` for a full fsync (metadata + data) or `AURA_FSYNC_DATASYNC` for fdatasync behavior (data only, skip metadata if possible).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `fd` | `int` | Open file descriptor |
-| `flags` | `auraio_fsync_flags_t` | `AURAIO_FSYNC_DEFAULT` (0) or `AURAIO_FSYNC_DATASYNC` (1) |
-| `callback` | `auraio_callback_t` | Completion callback (may be `NULL`) |
+| `flags` | `aura_fsync_flags_t` | `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1) |
+| `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
 **Errors:** `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOMEM`
@@ -423,18 +423,18 @@ Submit an async fsync. Pass `AURAIO_FSYNC_DEFAULT` for a full fsync (metadata + 
 
 #### Request Management
 
-##### `auraio_cancel`
+##### `aura_cancel`
 
 ```c
-int auraio_cancel(auraio_engine_t *engine, auraio_request_t *req);
+int aura_cancel(aura_engine_t *engine, aura_request_t *req);
 ```
 
 Cancel a pending I/O operation (best-effort). If cancelled, the callback receives `result = -ECANCELED`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
-| `req` | `auraio_request_t *` | Request to cancel (must belong to this engine) |
+| `engine` | `aura_engine_t *` | Engine handle |
+| `req` | `aura_request_t *` | Request to cancel (must belong to this engine) |
 
 **Returns:** 0 if cancellation submitted, -1 on error. A return of 0 does not guarantee the operation will actually be cancelled.
 
@@ -442,10 +442,10 @@ Cancel a pending I/O operation (best-effort). If cancelled, the callback receive
 
 ---
 
-##### `auraio_request_pending`
+##### `aura_request_pending`
 
 ```c
-bool auraio_request_pending(const auraio_request_t *req);
+bool aura_request_pending(const aura_request_t *req);
 ```
 
 Check if a request is still in-flight.
@@ -454,10 +454,10 @@ Check if a request is still in-flight.
 
 ---
 
-##### `auraio_request_fd`
+##### `aura_request_fd`
 
 ```c
-int auraio_request_fd(const auraio_request_t *req);
+int aura_request_fd(const aura_request_t *req);
 ```
 
 Get the file descriptor associated with a request.
@@ -466,10 +466,10 @@ Get the file descriptor associated with a request.
 
 ---
 
-##### `auraio_request_user_data`
+##### `aura_request_user_data`
 
 ```c
-void *auraio_request_user_data(const auraio_request_t *req);
+void *aura_request_user_data(const aura_request_t *req);
 ```
 
 Get the user data pointer associated with a request.
@@ -480,10 +480,10 @@ Get the user data pointer associated with a request.
 
 #### Event Processing
 
-##### `auraio_get_poll_fd`
+##### `aura_get_poll_fd`
 
 ```c
-int auraio_get_poll_fd(const auraio_engine_t *engine);
+int aura_get_poll_fd(const aura_engine_t *engine);
 ```
 
 Get a pollable file descriptor for event loop integration. Becomes readable when completions are available. Uses level-triggered semantics: remains readable as long as unprocessed completions exist. Compatible with epoll (`EPOLLIN`), poll (`POLLIN`), and select.
@@ -492,10 +492,10 @@ Get a pollable file descriptor for event loop integration. Becomes readable when
 
 ---
 
-##### `auraio_poll`
+##### `aura_poll`
 
 ```c
-int auraio_poll(auraio_engine_t *engine);
+int aura_poll(aura_engine_t *engine);
 ```
 
 Process completed operations without blocking. Invokes callbacks for any finished operations.
@@ -504,47 +504,47 @@ Process completed operations without blocking. Invokes callbacks for any finishe
 
 ---
 
-##### `auraio_wait`
+##### `aura_wait`
 
 ```c
-int auraio_wait(auraio_engine_t *engine, int timeout_ms);
+int aura_wait(aura_engine_t *engine, int timeout_ms);
 ```
 
 Block until at least one operation completes or timeout expires.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `timeout_ms` | `int` | Max wait: -1 = forever, 0 = non-blocking |
 
 **Returns:** Number of completions processed, or -1 on error.
 
 ---
 
-##### `auraio_run`
+##### `aura_run`
 
 ```c
-void auraio_run(auraio_engine_t *engine);
+void aura_run(aura_engine_t *engine);
 ```
 
-Run the event loop until `auraio_stop()` is called. Blocks the calling thread. Useful for dedicating a thread to I/O processing.
+Run the event loop until `aura_stop()` is called. Blocks the calling thread. Useful for dedicating a thread to I/O processing.
 
 ---
 
-##### `auraio_stop`
+##### `aura_stop`
 
 ```c
-void auraio_stop(auraio_engine_t *engine);
+void aura_stop(aura_engine_t *engine);
 ```
 
-Signal the event loop to stop. Thread-safe -- can be called from any thread or from within a callback. `auraio_run()` returns after processing current completions.
+Signal the event loop to stop. Thread-safe -- can be called from any thread or from within a callback. `aura_run()` returns after processing current completions.
 
 ---
 
-##### `auraio_drain`
+##### `aura_drain`
 
 ```c
-int auraio_drain(auraio_engine_t *engine, int timeout_ms);
+int aura_drain(aura_engine_t *engine, int timeout_ms);
 ```
 
 Wait until all in-flight operations across all rings have completed. Useful for graceful shutdown or synchronization points.
@@ -553,7 +553,7 @@ New submissions are **not** blocked during drain; if other threads submit concur
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `timeout_ms` | `int` | Max wait: -1 = forever, 0 = non-blocking poll |
 
 **Returns:** Total completions processed, or -1 on error/timeout.
@@ -564,34 +564,34 @@ New submissions are **not** blocked during drain; if other threads submit concur
 
 #### Buffer Management
 
-##### `auraio_buffer_alloc`
+##### `aura_buffer_alloc`
 
 ```c
-void *auraio_buffer_alloc(auraio_engine_t *engine, size_t size);
+void *aura_buffer_alloc(aura_engine_t *engine, size_t size);
 ```
 
 Allocate a page-aligned buffer from the engine's pool. Suitable for `O_DIRECT` I/O. Thread-safe; uses per-thread caching for fast allocation. A buffer allocated by one thread may be freed by another.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `size` | `size_t` | Buffer size in bytes |
 
 **Returns:** Aligned buffer pointer, or `NULL` on failure.
 
 ---
 
-##### `auraio_buffer_free`
+##### `aura_buffer_free`
 
 ```c
-void auraio_buffer_free(auraio_engine_t *engine, void *buf, size_t size);
+void aura_buffer_free(aura_engine_t *engine, void *buf, size_t size);
 ```
 
 Return a buffer to the engine's pool. Thread-safe.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `buf` | `void *` | Buffer to free (may be `NULL`) |
 | `size` | `size_t` | **Must** match the original allocation size exactly; passing a different size causes undefined behavior |
 
@@ -599,21 +599,21 @@ Return a buffer to the engine's pool. Thread-safe.
 
 #### Registered Buffers
 
-Registered buffers eliminate kernel mapping overhead for small, frequent I/O. After registration, use `auraio_buf_fixed()` with the standard `auraio_read`/`auraio_write`. Best for buffers reused across many I/O operations (1000+) and high-frequency small I/O (< 16KB).
+Registered buffers eliminate kernel mapping overhead for small, frequent I/O. After registration, use `aura_buf_fixed()` with the standard `aura_read`/`aura_write`. Best for buffers reused across many I/O operations (1000+) and high-frequency small I/O (< 16KB).
 
-##### `auraio_register_buffers`
+##### `aura_register_buffers`
 
 ```c
-int auraio_register_buffers(auraio_engine_t *engine, const struct iovec *iovs, int count);
+int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int count);
 ```
 
-Pre-register buffers with the kernel for zero-copy I/O. Call once at startup. After registration, use `auraio_buf_fixed()` to reference buffers by index in read/write calls.
+Pre-register buffers with the kernel for zero-copy I/O. Call once at startup. After registration, use `aura_buf_fixed()` to reference buffers by index in read/write calls.
 
 Fixed-buffer submissions fail with `EBUSY` while a deferred unregister is draining.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `iovs` | `const struct iovec *` | Array of buffer descriptors |
 | `count` | `int` | Number of buffers |
 
@@ -621,10 +621,10 @@ Fixed-buffer submissions fail with `EBUSY` while a deferred unregister is draini
 
 ---
 
-##### `auraio_request_unregister_buffers`
+##### `aura_request_unregister_buffers`
 
 ```c
-int auraio_request_unregister_buffers(auraio_engine_t *engine);
+int aura_request_unregister_buffers(aura_engine_t *engine);
 ```
 
 Request deferred unregister of registered buffers. Marks buffers as draining and returns immediately. New fixed-buffer submissions fail with `EBUSY` while draining. Final unregister completes lazily once in-flight fixed-buffer operations reach zero.
@@ -635,13 +635,13 @@ Request deferred unregister of registered buffers. Marks buffers as draining and
 
 ---
 
-##### `auraio_unregister_buffers`
+##### `aura_unregister_buffers`
 
 ```c
-int auraio_unregister_buffers(auraio_engine_t *engine);
+int aura_unregister_buffers(aura_engine_t *engine);
 ```
 
-Unregister previously registered buffers. For non-callback callers, waits until in-flight fixed-buffer operations drain and unregister completes. If called from within a callback, degrades to `auraio_request_unregister_buffers()` and returns immediately.
+Unregister previously registered buffers. For non-callback callers, waits until in-flight fixed-buffer operations drain and unregister completes. If called from within a callback, degrades to `aura_request_unregister_buffers()` and returns immediately.
 
 **Returns:** 0 on success, -1 on error.
 
@@ -649,17 +649,17 @@ Unregister previously registered buffers. For non-callback callers, waits until 
 
 #### File Registration
 
-##### `auraio_register_files`
+##### `aura_register_files`
 
 ```c
-int auraio_register_files(auraio_engine_t *engine, const int *fds, int count);
+int aura_register_files(aura_engine_t *engine, const int *fds, int count);
 ```
 
 Pre-register file descriptors with the kernel to eliminate lookup overhead.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `fds` | `const int *` | Array of file descriptors |
 | `count` | `int` | Number of file descriptors |
 
@@ -667,28 +667,28 @@ Pre-register file descriptors with the kernel to eliminate lookup overhead.
 
 ---
 
-##### `auraio_update_file`
+##### `aura_update_file`
 
 ```c
-int auraio_update_file(auraio_engine_t *engine, int index, int fd);
+int aura_update_file(aura_engine_t *engine, int index, int fd);
 ```
 
 Replace a registered fd at the given index. Pass -1 as `fd` to unregister a slot.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `auraio_engine_t *` | Engine handle |
+| `engine` | `aura_engine_t *` | Engine handle |
 | `index` | `int` | Index in registered file array |
 | `fd` | `int` | New fd, or -1 to unregister slot |
 
-**Returns:** 0 on success, -1 on error (errno set). On failure, ring state may be inconsistent -- call `auraio_unregister_files()` and re-register.
+**Returns:** 0 on success, -1 on error (errno set). On failure, ring state may be inconsistent -- call `aura_unregister_files()` and re-register.
 
 ---
 
-##### `auraio_request_unregister_files`
+##### `aura_request_unregister_files`
 
 ```c
-int auraio_request_unregister_files(auraio_engine_t *engine);
+int aura_request_unregister_files(aura_engine_t *engine);
 ```
 
 Request deferred unregister of registered files. Marks files for unregister and returns immediately.
@@ -699,13 +699,13 @@ Request deferred unregister of registered files. Marks files for unregister and 
 
 ---
 
-##### `auraio_unregister_files`
+##### `aura_unregister_files`
 
 ```c
-int auraio_unregister_files(auraio_engine_t *engine);
+int aura_unregister_files(aura_engine_t *engine);
 ```
 
-Unregister all previously registered files. For non-callback callers, waits until unregister completes. If called from within a callback, degrades to `auraio_request_unregister_files()` and returns immediately.
+Unregister all previously registered files. For non-callback callers, waits until unregister completes. If called from within a callback, degrades to `aura_request_unregister_files()` and returns immediately.
 
 **Returns:** 0 on success, -1 on error.
 
@@ -715,97 +715,97 @@ Unregister all previously registered files. For non-callback callers, waits unti
 
 All stats functions are thread-safe and safe to call during active I/O.
 
-##### `auraio_get_stats`
+##### `aura_get_stats`
 
 ```c
-void auraio_get_stats(const auraio_engine_t *engine, auraio_stats_t *stats);
+void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats);
 ```
 
 Get engine-wide aggregate statistics. If `engine` or `stats` is `NULL`, the call is a no-op (stats zeroed if only engine is `NULL`).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `const auraio_engine_t *` | Engine handle |
-| `stats` | `auraio_stats_t *` | Output struct |
+| `engine` | `const aura_engine_t *` | Engine handle |
+| `stats` | `aura_stats_t *` | Output struct |
 
 ---
 
-##### `auraio_get_ring_count`
+##### `aura_get_ring_count`
 
 ```c
-int auraio_get_ring_count(const auraio_engine_t *engine);
+int aura_get_ring_count(const aura_engine_t *engine);
 ```
 
 **Returns:** Number of io_uring rings, or 0 if engine is `NULL`.
 
 ---
 
-##### `auraio_get_ring_stats`
+##### `aura_get_ring_stats`
 
 ```c
-int auraio_get_ring_stats(const auraio_engine_t *engine, int ring_idx,
-                          auraio_ring_stats_t *stats);
+int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
+                          aura_ring_stats_t *stats);
 ```
 
 Get per-ring statistics.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `const auraio_engine_t *` | Engine handle |
-| `ring_idx` | `int` | Ring index (0 to `auraio_get_ring_count()-1`) |
-| `stats` | `auraio_ring_stats_t *` | Output struct |
+| `engine` | `const aura_engine_t *` | Engine handle |
+| `ring_idx` | `int` | Ring index (0 to `aura_get_ring_count()-1`) |
+| `stats` | `aura_ring_stats_t *` | Output struct |
 
 **Returns:** 0 on success. -1 if engine/stats is `NULL` or `ring_idx` is out of range (stats zeroed on invalid index).
 
 ---
 
-##### `auraio_get_histogram`
+##### `aura_get_histogram`
 
 ```c
-int auraio_get_histogram(const auraio_engine_t *engine, int ring_idx,
-                         auraio_histogram_t *hist);
+int aura_get_histogram(const aura_engine_t *engine, int ring_idx,
+                         aura_histogram_t *hist);
 ```
 
-Get a latency histogram snapshot for a ring. The snapshot is approximate -- see `auraio_histogram_t` documentation.
+Get a latency histogram snapshot for a ring. The snapshot is approximate -- see `aura_histogram_t` documentation.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `const auraio_engine_t *` | Engine handle |
-| `ring_idx` | `int` | Ring index (0 to `auraio_get_ring_count()-1`) |
-| `hist` | `auraio_histogram_t *` | Output struct |
+| `engine` | `const aura_engine_t *` | Engine handle |
+| `ring_idx` | `int` | Ring index (0 to `aura_get_ring_count()-1`) |
+| `hist` | `aura_histogram_t *` | Output struct |
 
 **Returns:** 0 on success. -1 if engine/hist is `NULL` or `ring_idx` is out of range (hist zeroed on invalid index).
 
 ---
 
-##### `auraio_get_buffer_stats`
+##### `aura_get_buffer_stats`
 
 ```c
-int auraio_get_buffer_stats(const auraio_engine_t *engine, auraio_buffer_stats_t *stats);
+int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats);
 ```
 
 Get buffer pool statistics. Lockless -- reads atomic counters.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `engine` | `const auraio_engine_t *` | Engine handle |
-| `stats` | `auraio_buffer_stats_t *` | Output struct |
+| `engine` | `const aura_engine_t *` | Engine handle |
+| `stats` | `aura_buffer_stats_t *` | Output struct |
 
 **Returns:** 0 on success, -1 if engine or stats is `NULL`.
 
 ---
 
-##### `auraio_phase_name`
+##### `aura_phase_name`
 
 ```c
-const char *auraio_phase_name(int phase);
+const char *aura_phase_name(int phase);
 ```
 
 Get a human-readable name for an AIMD phase value.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `phase` | `int` | Phase value (0-5) from `auraio_ring_stats_t.aimd_phase` |
+| `phase` | `int` | Phase value (0-5) from `aura_ring_stats_t.aimd_phase` |
 
 **Returns:** Static string: `"BASELINE"`, `"PROBING"`, `"STEADY"`, `"BACKOFF"`, `"SETTLING"`, `"CONVERGED"`, or `"UNKNOWN"` for out-of-range values.
 
@@ -813,20 +813,20 @@ Get a human-readable name for an AIMD phase value.
 
 #### Version
 
-##### `auraio_version`
+##### `aura_version`
 
 ```c
-const char *auraio_version(void);
+const char *aura_version(void);
 ```
 
 **Returns:** Version string (e.g., `"0.1.0"`).
 
 ---
 
-##### `auraio_version_int`
+##### `aura_version_int`
 
 ```c
-int auraio_version_int(void);
+int aura_version_int(void);
 ```
 
 **Returns:** Version as integer: `major * 10000 + minor * 100 + patch` (e.g., 100).
@@ -908,7 +908,7 @@ auraio::Engine engine(opts);
 
 **Getters** (all `[[nodiscard]] noexcept`): same names as setters, no arguments.
 
-`c_options()` returns `const auraio_options_t&` for access to the underlying C struct.
+`c_options()` returns `const aura_options_t&` for access to the underlying C struct.
 
 ---
 
@@ -1003,8 +1003,8 @@ Coroutine awaitables throw `Error` on negative results when resumed.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `handle() noexcept` | `auraio_engine_t*` | Underlying C handle |
-| `handle() const noexcept` | `const auraio_engine_t*` | Underlying C handle (const) |
+| `handle() noexcept` | `aura_engine_t*` | Underlying C handle |
+| `handle() const noexcept` | `const aura_engine_t*` | Underlying C handle (const) |
 | `operator bool() const noexcept` | `bool` | `true` if valid |
 
 ---
@@ -1017,8 +1017,8 @@ Defined in `<auraio/request.hpp>`. Non-owning reference to an in-flight request.
 |--------|---------|-------------|
 | `pending() const noexcept` | `bool` | `true` if still in-flight |
 | `fd() const noexcept` | `int` | Associated fd, or -1 |
-| `handle() noexcept` | `auraio_request_t*` | Underlying C handle |
-| `handle() const noexcept` | `const auraio_request_t*` | Underlying C handle (const) |
+| `handle() noexcept` | `aura_request_t*` | Underlying C handle |
+| `handle() const noexcept` | `const aura_request_t*` | Underlying C handle (const) |
 | `operator bool() const noexcept` | `bool` | `true` if handle is valid |
 
 ---
@@ -1036,7 +1036,7 @@ Defined in `<auraio/buffer.hpp>`. Lightweight buffer descriptor (value type, no 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `is_registered() const noexcept` | `bool` | `true` if registered buffer |
-| `c_buf() const noexcept` | `auraio_buf_t` | Underlying C descriptor |
+| `c_buf() const noexcept` | `aura_buf_t` | Underlying C descriptor |
 
 Free functions: `buf(void* ptr)`, `buf_fixed(int index, size_t offset = 0)`.
 
@@ -1083,7 +1083,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `optimal_in_flight()` | `int` | `optimal_in_flight` |
 | `optimal_batch_size()` | `int` | `optimal_batch_size` |
 | `adaptive_spills()` | `uint64_t` | `adaptive_spills` |
-| `c_stats()` | `const auraio_stats_t&` | Full C struct |
+| `c_stats()` | `const aura_stats_t&` | Full C struct |
 
 #### `auraio::RingStats`
 
@@ -1097,10 +1097,10 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `p99_latency_ms()` | `double` | `p99_latency_ms` |
 | `throughput_bps()` | `double` | `throughput_bps` |
 | `aimd_phase()` | `int` | `aimd_phase` |
-| `aimd_phase_name()` | `const char*` | via `auraio_phase_name()` |
+| `aimd_phase_name()` | `const char*` | via `aura_phase_name()` |
 | `queue_depth()` | `int` | `queue_depth` |
 | `ring_index()` | `int` | (set by Engine) |
-| `c_stats()` | `const auraio_ring_stats_t&` | Full C struct |
+| `c_stats()` | `const aura_ring_stats_t&` | Full C struct |
 
 #### `auraio::Histogram`
 
@@ -1121,7 +1121,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `max_tracked_us()` | `int` | Maximum tracked latency (us) |
 | `bucket_lower_us(int idx)` | `int` | Lower bound of bucket (us). 0 for out-of-range |
 | `bucket_upper_us(int idx)` | `int` | Upper bound of bucket (us). 0 for out-of-range |
-| `c_histogram()` | `const auraio_histogram_t&` | Full C struct |
+| `c_histogram()` | `const aura_histogram_t&` | Full C struct |
 
 #### `auraio::BufferStats`
 
@@ -1130,7 +1130,7 @@ All defined in `<auraio/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `total_allocated_bytes()` | `size_t` | `total_allocated_bytes` |
 | `total_buffers()` | `size_t` | `total_buffers` |
 | `shard_count()` | `int` | `shard_count` |
-| `c_stats()` | `const auraio_buffer_stats_t&` | Full C struct |
+| `c_stats()` | `const aura_buffer_stats_t&` | Full C struct |
 
 ---
 
@@ -1271,7 +1271,7 @@ let engine = Engine::new()?;
 let engine = Engine::with_options(&opts)?;
 ```
 
-`Engine` is `Send + Sync`. Multiple threads can submit I/O concurrently. Drop calls `auraio_destroy()` to wait for pending I/O and free resources.
+`Engine` is `Send + Sync`. Multiple threads can submit I/O concurrently. Drop calls `aura_destroy()` to wait for pending I/O and free resources.
 
 #### Lifecycle
 
@@ -1279,7 +1279,7 @@ let engine = Engine::with_options(&opts)?;
 |--------|---------|-------------|
 | `Engine::new()` | `Result<Engine>` | Create with default options |
 | `Engine::with_options(&Options)` | `Result<Engine>` | Create with custom options |
-| `as_ptr()` | `*mut auraio_engine_t` | Raw C handle |
+| `as_ptr()` | `*mut aura_engine_t` | Raw C handle |
 
 #### Buffer Management
 
@@ -1458,7 +1458,7 @@ Error codes used across the C, C++, and Rust APIs:
 |-------|-------|---------|----------|------|
 | `EINVAL` | errno set, returns `NULL`/-1 | throws `Error` (`.is_invalid()`) | `Error::Io` / `Error::InvalidArgument` | Invalid parameters (NULL engine, NULL buffer, invalid ring index) |
 | `EAGAIN` | errno set, returns `NULL` | throws `Error` (`.is_again()`) | `Error::Submission` | Ring is at capacity; retry later |
-| `ESHUTDOWN` | errno set, returns `NULL`/-1 | throws `Error` (`.is_shutdown()`) | `Error::Submission` | Engine is shutting down (after `auraio_destroy()` called) |
+| `ESHUTDOWN` | errno set, returns `NULL`/-1 | throws `Error` (`.is_shutdown()`) | `Error::Submission` | Engine is shutting down (after `aura_destroy()` called) |
 | `ENOENT` | errno set, returns `NULL` | throws `Error` (`.is_not_found()`) | `Error::Submission` | No ring available for the operation |
 | `EOVERFLOW` | errno set, returns `NULL` | throws `Error` | `Error::Submission` | Queue overflow |
 | `ENOMEM` | errno set, returns `NULL`/-1 | throws `Error` | `Error::Submission` / `Error::BufferAlloc` | Memory allocation failed |
@@ -1473,19 +1473,19 @@ Error codes used across the C, C++, and Rust APIs:
 
 AuraIO uses a **multi-submitter, single-poller** threading model:
 
-- **Submissions are thread-safe.** Any number of threads may call `auraio_read()`, `auraio_write()`, `auraio_fsync()`, etc. concurrently. Each ring has its own submission lock (`lock`) to protect the submission queue and request pool.
+- **Submissions are thread-safe.** Any number of threads may call `aura_read()`, `aura_write()`, `aura_fsync()`, etc. concurrently. Each ring has its own submission lock (`lock`) to protect the submission queue and request pool.
 
-- **Event processing is single-threaded.** `auraio_poll()`, `auraio_wait()`, and `auraio_run()` must not be called concurrently on the same engine. In the C++ and Rust bindings, this is enforced by an internal `Mutex` that serializes concurrent poll/wait/run calls (they block rather than race). In the C API, concurrent event processing is undefined behavior.
+- **Event processing is single-threaded.** `aura_poll()`, `aura_wait()`, and `aura_run()` must not be called concurrently on the same engine. In the C++ and Rust bindings, this is enforced by an internal `Mutex` that serializes concurrent poll/wait/run calls (they block rather than race). In the C API, concurrent event processing is undefined behavior.
 
-- **Statistics are thread-safe.** All stats functions (`auraio_get_stats()`, `auraio_get_ring_stats()`, etc.) are safe to call from any thread at any time.
+- **Statistics are thread-safe.** All stats functions (`aura_get_stats()`, `aura_get_ring_stats()`, etc.) are safe to call from any thread at any time.
 
-- **Callbacks execute in the polling thread.** Callbacks fire during `auraio_poll()` or `auraio_wait()`. A callback may fire on any thread that polls the engine, not necessarily the thread that submitted the I/O.
+- **Callbacks execute in the polling thread.** Callbacks fire during `aura_poll()` or `aura_wait()`. A callback may fire on any thread that polls the engine, not necessarily the thread that submitted the I/O.
 
-- **Buffer pool is thread-safe.** `auraio_buffer_alloc()` and `auraio_buffer_free()` can be called from any thread. The pool uses per-thread caching for performance.
+- **Buffer pool is thread-safe.** `aura_buffer_alloc()` and `aura_buffer_free()` can be called from any thread. The pool uses per-thread caching for performance.
 
-- **`auraio_stop()` is thread-safe.** Can be called from any thread or from within a callback.
+- **`aura_stop()` is thread-safe.** Can be called from any thread or from within a callback.
 
-- **`auraio_destroy()` should be called after joining worker threads.** While it handles in-flight I/O gracefully, the caller must ensure no other thread is actively submitting I/O or using the buffer pool.
+- **`aura_destroy()` should be called after joining worker threads.** While it handles in-flight I/O gracefully, the caller must ensure no other thread is actively submitting I/O or using the buffer pool.
 
 ---
 
@@ -1493,11 +1493,11 @@ AuraIO uses a **multi-submitter, single-poller** threading model:
 
 Rules that apply to completion callbacks across all API surfaces:
 
-1. **Callbacks may submit new I/O.** It is safe to call `auraio_read()`, `auraio_write()`, `auraio_fsync()`, etc. from within a callback.
+1. **Callbacks may submit new I/O.** It is safe to call `aura_read()`, `aura_write()`, `aura_fsync()`, etc. from within a callback.
 
-2. **Callbacks must not call `auraio_destroy()`.** This causes undefined behavior.
+2. **Callbacks must not call `aura_destroy()`.** This causes undefined behavior.
 
-3. **Callbacks must not call `auraio_poll()`/`auraio_wait()`/`auraio_run()`.** These are already running on the call stack and must not be re-entered. In C++ and Rust, attempting this would deadlock on the internal mutex.
+3. **Callbacks must not call `aura_poll()`/`aura_wait()`/`aura_run()`.** These are already running on the call stack and must not be re-entered. In C++ and Rust, attempting this would deadlock on the internal mutex.
 
 4. **Callbacks should complete quickly.** Long-running callbacks block other completions from being processed.
 
@@ -1505,7 +1505,7 @@ Rules that apply to completion callbacks across all API surfaces:
 
 6. **`user_data` and buffer memory must remain valid until callback fires.** The library does not copy buffers or user data.
 
-7. **Deferred unregister is safe from callbacks.** Use `auraio_request_unregister_buffers()` or `auraio_request_unregister_files()` instead of the synchronous variants when calling from within a callback. The synchronous variants (`auraio_unregister_buffers()`, `auraio_unregister_files()`) automatically degrade to the deferred behavior when called from a callback context.
+7. **Deferred unregister is safe from callbacks.** Use `aura_request_unregister_buffers()` or `aura_request_unregister_files()` instead of the synchronous variants when calling from within a callback. The synchronous variants (`aura_unregister_buffers()`, `aura_unregister_files()`) automatically degrade to the deferred behavior when called from a callback context.
 
 8. **C++ callbacks must not throw.** Exceptions from callbacks trigger `std::terminate()` because they cannot propagate through the C callback trampoline.
 

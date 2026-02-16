@@ -4,14 +4,14 @@ CC = gcc
 CXX = g++
 CFLAGS = -Wall -Wextra -Wpedantic -std=c11 -g -I../engine/include -I../engine/src
 CXXFLAGS = -Wall -Wextra -Wshadow -Wpedantic -std=c++20 -g -I../engine/include -fcoroutines
-LDFLAGS = -L../engine/lib -lauraio -luring -lpthread
+LDFLAGS = -L../engine/lib -laura -luring -lpthread
 RPATH = -Wl,-rpath,'$$ORIGIN/../engine/lib'
 
 # Sanitizer flags
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage
+TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage test_metadata_ops
 CPP_TESTS = test_cpp
 
 .PHONY: all build-tests
@@ -42,32 +42,35 @@ all:
 
 build-tests: $(TESTS) $(CPP_TESTS)
 
-test_engine: test_engine.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_engine: test_engine.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_buffer: test_buffer.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_buffer: test_buffer.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_ring: test_ring.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_ring: test_ring.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_stats: test_stats.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_stats: test_stats.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_concurrency_stress: test_concurrency_stress.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_concurrency_stress: test_concurrency_stress.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_otel: test_otel.c ../engine/lib/libauraio.a ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c
-	$(CC) $(CFLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_otel: test_otel.c ../engine/lib/libaura.a ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c
+	$(CC) $(CFLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
-test_coverage: test_coverage.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_coverage: test_coverage.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
+
+test_metadata_ops: test_metadata_ops.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 # ============================================================================
 # C++ Tests
 # ============================================================================
 
-test_cpp: test_cpp.cpp ../engine/lib/libauraio.so
+test_cpp: test_cpp.cpp ../engine/lib/libaura.so
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS) $(RPATH)
 
 cpp-test: test_cpp
@@ -77,8 +80,8 @@ cpp-test: test_cpp
 # Ring Selection Test Utility
 # ============================================================================
 
-test_ring_select: test_ring_select.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+test_ring_select: test_ring_select.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 ring-select: test_ring_select
 	./test_ring_select
@@ -87,7 +90,7 @@ ring-select: test_ring_select
 # Stress Test
 # ============================================================================
 
-stress_test: stress_test.cpp ../engine/lib/libauraio.so
+stress_test: stress_test.cpp ../engine/lib/libaura.so
 	$(CXX) $(CXXFLAGS) -O2 $< -o $@ $(LDFLAGS) $(RPATH)
 
 stress: stress_test
@@ -100,8 +103,8 @@ stress-full: stress_test
 # Performance Benchmark (for perf profiling)
 # ============================================================================
 
-perf_bench: perf_bench.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+perf_bench: perf_bench.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 bench: perf_bench
 	./perf_bench all 5
@@ -119,8 +122,8 @@ bench-scalability: perf_bench
 # Performance Regression Test (raw io_uring vs AuraIO overhead)
 # ============================================================================
 
-perf_regression: perf_regression.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+perf_regression: perf_regression.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 perf-regression: perf_regression
 	./perf_regression
@@ -129,8 +132,8 @@ perf-regression: perf_regression
 # Adaptive Value Benchmark (proves AIMD beats static depth tuning)
 # ============================================================================
 
-adaptive_value: adaptive_value.c ../engine/lib/libauraio.a
-	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libauraio.a $(LDFLAGS) $(RPATH)
+adaptive_value: adaptive_value.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 bench-adaptive: adaptive_value
 	./adaptive_value
@@ -172,7 +175,7 @@ perf-baseline:
 
 # Run AuraIO benchmark with perf profiling
 perf-profile: perf_bench
-	./run_perf_test.sh --auraio --with-perf
+	./run_perf_test.sh --aura --with-perf
 
 # ============================================================================
 # Performance Analysis (laptop-safe, with FIO comparison + report)
@@ -258,29 +261,29 @@ tsan: $(TSAN_TESTS)
 	echo ""; \
 	echo "All TSAN tests passed!"
 
-test_engine_tsan: test_engine.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_engine_tsan: test_engine.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_buffer_tsan: test_buffer.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_buffer_tsan: test_buffer.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_ring_tsan: test_ring.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_ring_tsan: test_ring.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_stats_tsan: test_stats.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_stats_tsan: test_stats.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_ring_select_tsan: test_ring_select.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) -O2 $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_ring_select_tsan: test_ring_select.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_concurrency_stress_tsan: test_concurrency_stress.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_concurrency_stress_tsan: test_concurrency_stress.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_otel_tsan: test_otel.c ../engine/lib/libauraio_tsan.a ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_otel_tsan: test_otel.c ../engine/lib/libaura_tsan.a ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
-test_coverage_tsan: test_coverage.c ../engine/lib/libauraio_tsan.a
-	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libauraio_tsan.a -luring -lpthread
+test_coverage_tsan: test_coverage.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
 # ============================================================================
 # AddressSanitizer tests (requires rebuild with ASAN)
@@ -297,29 +300,29 @@ asan: $(ASAN_TESTS)
 	@echo ""
 	@echo "All ASAN tests passed!"
 
-test_engine_asan: test_engine.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_engine_asan: test_engine.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_buffer_asan: test_buffer.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_buffer_asan: test_buffer.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_ring_asan: test_ring.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_ring_asan: test_ring.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_stats_asan: test_stats.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_stats_asan: test_stats.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_ring_select_asan: test_ring_select.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_ring_select_asan: test_ring_select.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_concurrency_stress_asan: test_concurrency_stress.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_concurrency_stress_asan: test_concurrency_stress.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_otel_asan: test_otel.c ../engine/lib/libauraio_asan.a ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/auraio_otel.c ../integrations/opentelemetry/C/auraio_otel_push.c -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_otel_asan: test_otel.c ../engine/lib/libaura_asan.a ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
-test_coverage_asan: test_coverage.c ../engine/lib/libauraio_asan.a
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libauraio_asan.a -luring -lpthread
+test_coverage_asan: test_coverage.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
 clean:
 	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value $(TSAN_TESTS) $(ASAN_TESTS)

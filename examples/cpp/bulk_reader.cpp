@@ -7,7 +7,7 @@
  * Usage: ./bulk_reader <directory>
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -29,14 +29,14 @@ constexpr size_t STATS_INTERVAL = 1000;   // Print stats every N completions
 
 // Context for tracking bulk read progress
 struct BulkContext {
-    auraio::Engine& engine;
+    aura::Engine& engine;
     std::atomic<int> files_pending{0};
     std::atomic<int> files_completed{0};
     std::atomic<long long> bytes_read{0};
     std::atomic<long long> errors{0};
     Clock::time_point start_time;
 
-    explicit BulkContext(auraio::Engine& eng)
+    explicit BulkContext(aura::Engine& eng)
         : engine(eng), start_time(Clock::now()) {}
 };
 
@@ -44,9 +44,9 @@ struct BulkContext {
 struct FileContext {
     BulkContext& bulk;
     int fd;
-    auraio::Buffer buffer;
+    aura::Buffer buffer;
 
-    FileContext(BulkContext& b, int f, auraio::Buffer buf)
+    FileContext(BulkContext& b, int f, aura::Buffer buf)
         : bulk(b), fd(f), buffer(std::move(buf)) {}
 
     ~FileContext() {
@@ -68,9 +68,9 @@ int main(int argc, char** argv) {
     const std::string dirname = argv[1];
 
     try {
-        // Create the auraio engine
+        // Create the aura engine
         std::cout << "Creating async I/O engine...\n";
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Initialize context
         BulkContext ctx(engine);
@@ -102,10 +102,10 @@ int main(int argc, char** argv) {
             if (fd < 0) continue;  // Skip files we can't open
 
             // Allocate buffer (RAII)
-            auraio::Buffer buffer;
+            aura::Buffer buffer;
             try {
                 buffer = engine.allocate_buffer(READ_SIZE);
-            } catch (const auraio::Error&) {
+            } catch (const aura::Error&) {
                 close(fd);
                 continue;
             }
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
             // Submit async read with lambda callback
             try {
                 (void)engine.read(fctx_ptr->fd, fctx_ptr->buffer, READ_SIZE, 0,
-                    [fctx_ptr, &ctx, &engine](auraio::Request&, ssize_t result) {
+                    [fctx_ptr, &ctx, &engine](aura::Request&, ssize_t result) {
                         if (result > 0) {
                             ctx.bytes_read += result;
                         } else if (result < 0) {
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
                 submitted++;
                 file_contexts.push_back(std::move(fctx));
 
-            } catch (const auraio::Error&) {
+            } catch (const aura::Error&) {
                 // Submission failed, fctx will be cleaned up
                 continue;
             }
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
         std::cout << "\nDone!\n";
         return 0;
 
-    } catch (const auraio::Error& e) {
+    } catch (const aura::Error& e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         return 1;
     } catch (const std::exception& e) {

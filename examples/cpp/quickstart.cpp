@@ -6,7 +6,7 @@
  * Run:   ./examples/cpp/quickstart
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <fstream>
@@ -17,7 +17,7 @@
 constexpr size_t BUF_SIZE = 4096;
 
 int main() {
-    const char* test_file = "/tmp/auraio_quickstart_cpp.tmp";
+    const char* test_file = "/tmp/aura_quickstart_cpp.tmp";
     const char* test_data = "Hello from AuraIO C++! This is async I/O.\n";
 
     try {
@@ -32,7 +32,7 @@ int main() {
         }
 
         // Create AuraIO engine (RAII - automatically cleaned up)
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Allocate aligned buffer (RAII - automatically returned to pool)
         auto buffer = engine.allocate_buffer(BUF_SIZE);
@@ -41,7 +41,7 @@ int main() {
         // Open file for reading
         int fd = open(test_file, O_RDONLY);
         if (fd < 0) {
-            throw auraio::Error(errno, "open");
+            throw aura::Error(errno, "open");
         }
 
         // Track completion with lambda capture
@@ -49,7 +49,7 @@ int main() {
         ssize_t bytes_read = 0;
 
         // Submit async read with lambda callback
-        (void)engine.read(fd, buffer, BUF_SIZE, 0, [&](auraio::Request&, ssize_t result) {
+        (void)engine.read(fd, buffer, BUF_SIZE, 0, [&](aura::Request&, ssize_t result) {
             std::cout << "Read completed: " << result << " bytes\n";
             bytes_read = result;
             done = true;
@@ -72,7 +72,7 @@ int main() {
         std::cout << "Success!\n";
         return 0;
 
-    } catch (const auraio::Error& e) {
+    } catch (const aura::Error& e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         unlink(test_file);
         return 1;

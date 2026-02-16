@@ -13,7 +13,7 @@
  */
 
 #define _POSIX_C_SOURCE 199309L
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +21,7 @@
 #include <unistd.h>
 #include <time.h>
 
-#define TEST_FILE "/tmp/auraio_reg_buf_test.dat"
+#define TEST_FILE "/tmp/aura_reg_buf_test.dat"
 #define FILE_SIZE (1 * 1024 * 1024) /* 1 MB */
 #define BUF_SIZE 4096
 #define NUM_BUFFERS 4
@@ -29,7 +29,7 @@
 
 static int completed = 0;
 
-void completion_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     if (result < 0) {
@@ -38,7 +38,7 @@ void completion_callback(auraio_request_t *req, ssize_t result, void *user_data)
     __sync_add_and_fetch(&completed, 1);
 }
 
-double run_benchmark(auraio_engine_t *engine, int fd, int use_registered, void *unreg_bufs[]) {
+double run_benchmark(aura_engine_t *engine, int fd, int use_registered, void *unreg_bufs[]) {
     struct timespec start, end;
 
     completed = 0;
@@ -54,30 +54,30 @@ double run_benchmark(auraio_engine_t *engine, int fd, int use_registered, void *
             int buf_idx = submitted % NUM_BUFFERS;
             off_t offset = (rand() % (FILE_SIZE / BUF_SIZE)) * BUF_SIZE;
 
-            auraio_request_t *req;
+            aura_request_t *req;
             if (use_registered) {
                 /* Use registered buffer by index */
-                req = auraio_read(engine, fd, auraio_buf_fixed(buf_idx, 0), BUF_SIZE, offset,
+                req = aura_read(engine, fd, aura_buf_fixed(buf_idx, 0), BUF_SIZE, offset,
                                   completion_callback, NULL);
             } else {
                 /* Use pre-allocated unregistered buffer */
-                req = auraio_read(engine, fd, auraio_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset,
+                req = aura_read(engine, fd, aura_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset,
                                   completion_callback, NULL);
             }
 
             if (!req) {
-                perror("auraio_read");
+                perror("aura_read");
                 break;
             }
             submitted++;
         }
 
         /* Poll for completions */
-        auraio_poll(engine);
+        aura_poll(engine);
 
         /* If we're done submitting, wait for remaining completions */
         if (submitted >= NUM_OPS && completed < NUM_OPS) {
-            auraio_wait(engine, 1);
+            aura_wait(engine, 1);
         }
     }
 
@@ -122,9 +122,9 @@ int main(void) {
     printf("\nPart 1: Baseline with unregistered buffers\n");
     printf("Running %d operations...\n", NUM_OPS);
 
-    auraio_engine_t *engine_unreg = auraio_create();
+    aura_engine_t *engine_unreg = aura_create();
     if (!engine_unreg) {
-        perror("auraio_create");
+        perror("aura_create");
         close(fd);
         unlink(TEST_FILE);
         return 1;
@@ -133,13 +133,13 @@ int main(void) {
     /* Pre-allocate buffers for unregistered benchmark */
     void *unreg_bufs[NUM_BUFFERS];
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        unreg_bufs[i] = auraio_buffer_alloc(engine_unreg, BUF_SIZE);
+        unreg_bufs[i] = aura_buffer_alloc(engine_unreg, BUF_SIZE);
         if (!unreg_bufs[i]) {
-            perror("auraio_buffer_alloc");
+            perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                auraio_buffer_free(engine_unreg, unreg_bufs[j], BUF_SIZE);
+                aura_buffer_free(engine_unreg, unreg_bufs[j], BUF_SIZE);
             }
-            auraio_destroy(engine_unreg);
+            aura_destroy(engine_unreg);
             close(fd);
             unlink(TEST_FILE);
             return 1;
@@ -148,17 +148,17 @@ int main(void) {
 
     double unreg_time = run_benchmark(engine_unreg, fd, 0, unreg_bufs);
 
-    auraio_stats_t unreg_stats;
-    auraio_get_stats(engine_unreg, &unreg_stats);
+    aura_stats_t unreg_stats;
+    aura_get_stats(engine_unreg, &unreg_stats);
 
     printf("  Time: %.2f ms\n", unreg_time);
     printf("  Throughput: %.2f MB/s\n", unreg_stats.current_throughput_bps / (1024.0 * 1024.0));
     printf("  P99 Latency: %.3f ms\n", unreg_stats.p99_latency_ms);
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        auraio_buffer_free(engine_unreg, unreg_bufs[i], BUF_SIZE);
+        aura_buffer_free(engine_unreg, unreg_bufs[i], BUF_SIZE);
     }
-    auraio_destroy(engine_unreg);
+    aura_destroy(engine_unreg);
 
     /* ===================================================================
      * Part 2: Registered Buffers (Zero-Copy)
@@ -166,9 +166,9 @@ int main(void) {
     printf("\nPart 2: Zero-copy with registered buffers\n");
     printf("Registering %d buffers of %d bytes each...\n", NUM_BUFFERS, BUF_SIZE);
 
-    auraio_engine_t *engine_reg = auraio_create();
+    aura_engine_t *engine_reg = aura_create();
     if (!engine_reg) {
-        perror("auraio_create");
+        perror("aura_create");
         close(fd);
         unlink(TEST_FILE);
         return 1;
@@ -179,13 +179,13 @@ int main(void) {
     struct iovec iovs[NUM_BUFFERS];
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        buffers[i] = auraio_buffer_alloc(engine_reg, BUF_SIZE);
+        buffers[i] = aura_buffer_alloc(engine_reg, BUF_SIZE);
         if (!buffers[i]) {
-            perror("auraio_buffer_alloc");
+            perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                auraio_buffer_free(engine_reg, buffers[j], BUF_SIZE);
+                aura_buffer_free(engine_reg, buffers[j], BUF_SIZE);
             }
-            auraio_destroy(engine_reg);
+            aura_destroy(engine_reg);
             close(fd);
             unlink(TEST_FILE);
             return 1;
@@ -195,12 +195,12 @@ int main(void) {
     }
 
     /* Register buffers with kernel */
-    if (auraio_register_buffers(engine_reg, iovs, NUM_BUFFERS) < 0) {
-        perror("auraio_register_buffers");
+    if (aura_register_buffers(engine_reg, iovs, NUM_BUFFERS) < 0) {
+        perror("aura_register_buffers");
         for (int i = 0; i < NUM_BUFFERS; i++) {
-            auraio_buffer_free(engine_reg, buffers[i], BUF_SIZE);
+            aura_buffer_free(engine_reg, buffers[i], BUF_SIZE);
         }
-        auraio_destroy(engine_reg);
+        aura_destroy(engine_reg);
         close(fd);
         unlink(TEST_FILE);
         return 1;
@@ -211,8 +211,8 @@ int main(void) {
 
     double reg_time = run_benchmark(engine_reg, fd, 1, NULL);
 
-    auraio_stats_t reg_stats;
-    auraio_get_stats(engine_reg, &reg_stats);
+    aura_stats_t reg_stats;
+    aura_get_stats(engine_reg, &reg_stats);
 
     printf("  Time: %.2f ms\n", reg_time);
     printf("  Throughput: %.2f MB/s\n", reg_stats.current_throughput_bps / (1024.0 * 1024.0));
@@ -235,24 +235,24 @@ int main(void) {
     printf("This pattern allows safe unregister from callback context...\n");
 
     /* Request deferred unregister (returns immediately) */
-    if (auraio_request_unregister_buffers(engine_reg) < 0) {
-        perror("auraio_request_unregister_buffers");
+    if (aura_request_unregister_buffers(engine_reg) < 0) {
+        perror("aura_request_unregister_buffers");
     } else {
         printf("  Unregister requested (will complete when in-flight ops drain)\n");
     }
 
     /* Wait a bit to ensure unregister completes */
-    auraio_wait(engine_reg, 100);
+    aura_wait(engine_reg, 100);
 
     printf("  Buffers unregistered.\n");
 
     /* Free buffer memory */
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        auraio_buffer_free(engine_reg, buffers[i], BUF_SIZE);
+        aura_buffer_free(engine_reg, buffers[i], BUF_SIZE);
     }
 
     /* Cleanup */
-    auraio_destroy(engine_reg);
+    aura_destroy(engine_reg);
     close(fd);
     unlink(TEST_FILE);
 

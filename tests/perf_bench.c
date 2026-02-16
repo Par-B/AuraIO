@@ -14,7 +14,7 @@
  */
 
 #define _GNU_SOURCE
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,7 +123,7 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
 // Test file management
 // ============================================================================
 
-#define DEFAULT_TEST_DIR "/tmp/auraio_perf"
+#define DEFAULT_TEST_DIR "/tmp/aura_perf"
 #define NUM_FILES 8
 #define FILE_SIZE (128 * 1024 * 1024) // 128MB per file
 
@@ -203,11 +203,11 @@ typedef struct {
     uint64_t submit_time;
     size_t size;
     void *buffer;
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
 } request_ctx_t;
 
 // Callback signature: (req, result, user_data)
-static void read_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void read_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     request_ctx_t *ctx = user_data;
 
@@ -224,7 +224,7 @@ static void read_callback(auraio_request_t *req, ssize_t result, void *user_data
     atomic_fetch_sub(&ctx->stats->inflight, 1);
 
     if (ctx->buffer && ctx->engine) {
-        auraio_buffer_free(ctx->engine, ctx->buffer, ctx->size);
+        aura_buffer_free(ctx->engine, ctx->buffer, ctx->size);
     }
     free(ctx);
 }
@@ -238,12 +238,12 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
     printf("Duration: %d sec, Max inflight: %d, Buffer: %zu KB\n", duration_sec, max_inflight,
            buf_size / 1024);
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = 1024;
     opts.ring_count = apples_mode ? 1 : 0;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
         return;
@@ -258,7 +258,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     // Submit initial batch
     while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
-        void *buf = auraio_buffer_alloc(engine, buf_size);
+        void *buf = aura_buffer_alloc(engine, buf_size);
         if (!buf) break;
 
         int fd_idx = fast_rand() % NUM_FILES;
@@ -274,10 +274,10 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
         atomic_fetch_add(&stats.inflight, 1);
 
-        if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset, read_callback,
+        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
                         ctx) == NULL) {
             atomic_fetch_sub(&stats.inflight, 1);
-            auraio_buffer_free(engine, buf, buf_size);
+            aura_buffer_free(engine, buf, buf_size);
             free(ctx);
         }
     }
@@ -291,11 +291,11 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
         }
 
         // Process completions
-        auraio_wait(engine, 1);
+        aura_wait(engine, 1);
 
         // Submit more if under limit and time remains
         while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
-            void *buf = auraio_buffer_alloc(engine, buf_size);
+            void *buf = aura_buffer_alloc(engine, buf_size);
             if (!buf) break;
 
             int fd_idx = fast_rand() % NUM_FILES;
@@ -311,10 +311,10 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
                             read_callback, ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
-                auraio_buffer_free(engine, buf, buf_size);
+                aura_buffer_free(engine, buf, buf_size);
                 free(ctx);
                 break;
             }
@@ -329,8 +329,8 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
     uint64_t failed = atomic_load(&stats.ops_failed);
 
     // Get engine stats
-    auraio_stats_t engine_stats;
-    auraio_get_stats(engine, &engine_stats);
+    aura_stats_t engine_stats;
+    aura_get_stats(engine, &engine_stats);
 
     printf("\nResults:\n");
     printf("  Operations:      %lu completed, %lu failed\n", ops, failed);
@@ -340,7 +340,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
     printf("  P99 latency:     %.2f ms (engine)\n", engine_stats.p99_latency_ms);
     printf("  Optimal depth:   %d (tuned by AIMD)\n", engine_stats.optimal_in_flight);
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 // ============================================================================
@@ -352,7 +352,7 @@ typedef struct {
     ssize_t *result;
 } latency_sync_ctx_t;
 
-static void latency_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void latency_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     latency_sync_ctx_t *ctx = user_data;
     *ctx->result = result;
@@ -363,12 +363,12 @@ static void bench_latency(int duration_sec, size_t buf_size) {
     printf("\n=== Latency Benchmark (Serial) ===\n");
     printf("Duration: %d sec, Buffer: %zu KB\n", duration_sec, buf_size / 1024);
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = 64;
     opts.ring_count = 1;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
         return;
@@ -377,9 +377,9 @@ static void bench_latency(int duration_sec, size_t buf_size) {
     bench_stats_t stats;
     stats_init(&stats);
 
-    void *buf = auraio_buffer_alloc(engine, buf_size);
+    void *buf = aura_buffer_alloc(engine, buf_size);
     if (!buf) {
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return;
     }
 
@@ -403,10 +403,10 @@ static void bench_latency(int duration_sec, size_t buf_size) {
 
         latency_sync_ctx_t sync_ctx = { &done, &result };
 
-        if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
                         latency_callback, &sync_ctx) != NULL) {
             while (!atomic_load(&done)) {
-                auraio_wait(engine, 1);
+                aura_wait(engine, 1);
             }
 
             uint64_t lat = now_ns() - op_start;
@@ -437,8 +437,8 @@ static void bench_latency(int duration_sec, size_t buf_size) {
     printf("  Max latency:     %.2f us\n", (double)max_lat / 1000.0);
     printf("  P99 latency:     %lu us\n", stats_p99_latency_us(&stats));
 
-    auraio_buffer_free(engine, buf, buf_size);
-    auraio_destroy(engine);
+    aura_buffer_free(engine, buf, buf_size);
+    aura_destroy(engine);
 }
 
 // ============================================================================
@@ -446,7 +446,7 @@ static void bench_latency(int duration_sec, size_t buf_size) {
 // ============================================================================
 
 typedef struct {
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
     _Atomic uint64_t *allocs;
     _Atomic uint64_t *frees;
     _Atomic int *running;
@@ -470,7 +470,7 @@ static void *buffer_thread_fn(void *arg) {
         // Allocate
         if (buf_count < 32) {
             size_t size = sizes[fast_rand() % num_sizes];
-            void *buf = auraio_buffer_alloc(td->engine, size);
+            void *buf = aura_buffer_alloc(td->engine, size);
             if (buf) {
                 buffers[buf_count].ptr = buf;
                 buffers[buf_count].size = size;
@@ -482,7 +482,7 @@ static void *buffer_thread_fn(void *arg) {
         // Free some (50% chance)
         if (buf_count > 0 && (fast_rand() % 2)) {
             buf_count--;
-            auraio_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
+            aura_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
             atomic_fetch_add(td->frees, 1);
         }
     }
@@ -490,7 +490,7 @@ static void *buffer_thread_fn(void *arg) {
     // Cleanup
     while (buf_count > 0) {
         buf_count--;
-        auraio_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
+        aura_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
         atomic_fetch_add(td->frees, 1);
     }
 
@@ -501,7 +501,7 @@ static void bench_buffer_pool(int duration_sec, int num_threads) {
     printf("\n=== Buffer Pool Benchmark ===\n");
     printf("Duration: %d sec, Threads: %d\n", duration_sec, num_threads);
 
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
         return;
@@ -544,7 +544,7 @@ static void bench_buffer_pool(int duration_sec, int num_threads) {
     printf("  Combined:        %.0f ops/sec\n", (allocs + frees) / elapsed_sec);
     printf("  Per-thread:      %.0f ops/sec\n", (allocs + frees) / elapsed_sec / num_threads);
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 // ============================================================================
@@ -566,12 +566,12 @@ static void bench_scalability(int duration_sec) {
         int depth = depths[d];
         fflush(stdout);
 
-        auraio_options_t opts;
-        auraio_options_init(&opts);
+        aura_options_t opts;
+        aura_options_init(&opts);
         opts.queue_depth = 512;
         opts.ring_count = 1;
 
-        auraio_engine_t *engine = auraio_create_with_options(&opts);
+        aura_engine_t *engine = aura_create_with_options(&opts);
         if (!engine) {
             printf("%-12d FAILED (engine create)\n", depth);
             continue;
@@ -594,7 +594,7 @@ static void bench_scalability(int duration_sec) {
 
             // Submit up to depth
             while (atomic_load(&stats.inflight) < depth && now_ns() < end_time) {
-                void *buf = auraio_buffer_alloc(engine, buf_size);
+                void *buf = aura_buffer_alloc(engine, buf_size);
                 if (!buf) break;
 
                 int fd_idx = fast_rand() % NUM_FILES;
@@ -610,16 +610,16 @@ static void bench_scalability(int duration_sec) {
 
                 atomic_fetch_add(&stats.inflight, 1);
 
-                if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
                                 read_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    auraio_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf, buf_size);
                     free(ctx);
                     break;
                 }
             }
 
-            auraio_wait(engine, 1);
+            aura_wait(engine, 1);
         }
 
         uint64_t elapsed = now_ns() - start;
@@ -630,7 +630,7 @@ static void bench_scalability(int duration_sec) {
         printf("%-12d %-12.0f %-12.2f %-12lu\n", depth, ops / elapsed_sec,
                (bytes / (1024.0 * 1024.0)) / elapsed_sec, stats_p99_latency_us(&stats));
 
-        auraio_destroy(engine);
+        aura_destroy(engine);
     }
 }
 
@@ -642,12 +642,12 @@ static void bench_syscall_batching(int duration_sec) {
     printf("\n=== Syscall Batching Efficiency ===\n");
     printf("Measuring operations per io_uring_enter syscall\n\n");
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = 512;
     opts.ring_count = 1;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
         return;
@@ -674,7 +674,7 @@ static void bench_syscall_batching(int duration_sec) {
         int submitted = 0;
         while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time &&
                submitted < 32) {
-            void *buf = auraio_buffer_alloc(engine, buf_size);
+            void *buf = aura_buffer_alloc(engine, buf_size);
             if (!buf) break;
 
             int fd_idx = fast_rand() % NUM_FILES;
@@ -690,24 +690,24 @@ static void bench_syscall_batching(int duration_sec) {
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
                             read_callback, ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
-                auraio_buffer_free(engine, buf, buf_size);
+                aura_buffer_free(engine, buf, buf_size);
                 free(ctx);
                 break;
             }
             submitted++;
         }
 
-        auraio_wait(engine, 1);
+        aura_wait(engine, 1);
     }
 
     uint64_t elapsed = now_ns() - start;
     double elapsed_sec = ns_to_sec(elapsed);
 
-    auraio_stats_t engine_stats;
-    auraio_get_stats(engine, &engine_stats);
+    aura_stats_t engine_stats;
+    aura_get_stats(engine, &engine_stats);
 
     uint64_t ops = atomic_load(&stats.ops_completed);
     uint64_t bytes = atomic_load(&stats.bytes_transferred);
@@ -720,14 +720,14 @@ static void bench_syscall_batching(int duration_sec) {
     printf("  Optimal depth:   %d\n", engine_stats.optimal_in_flight);
     printf("\nNote: Use 'strace -c' to see actual syscall counts\n");
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 // ============================================================================
 // Benchmark: Mixed Workload
 // ============================================================================
 
-static void mixed_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void mixed_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     request_ctx_t *ctx = user_data;
 
@@ -746,7 +746,7 @@ static void mixed_callback(auraio_request_t *req, ssize_t result, void *user_dat
     atomic_fetch_sub(&ctx->stats->inflight, 1);
 
     if (ctx->buffer && ctx->engine) {
-        auraio_buffer_free(ctx->engine, ctx->buffer, ctx->size);
+        aura_buffer_free(ctx->engine, ctx->buffer, ctx->size);
     }
     free(ctx);
 }
@@ -764,12 +764,12 @@ static void bench_mixed_workload(int duration_sec) {
         }
     }
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = 512;
     opts.ring_count = apples_mode ? 1 : 0;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create engine\n");
         return;
@@ -800,7 +800,7 @@ static void bench_mixed_workload(int duration_sec) {
 
             if (op < 70) {
                 // Read
-                void *buf = auraio_buffer_alloc(engine, buf_size);
+                void *buf = aura_buffer_alloc(engine, buf_size);
                 if (!buf) break;
 
                 off_t max_off = FILE_SIZE - buf_size;
@@ -816,16 +816,16 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 reads++;
 
-                if (auraio_read(engine, test_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
                                 mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    auraio_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf, buf_size);
                     free(ctx);
                     reads--;
                 }
             } else if (op < 95) {
                 // Write
-                void *buf = auraio_buffer_alloc(engine, buf_size);
+                void *buf = aura_buffer_alloc(engine, buf_size);
                 if (!buf) break;
 
                 memset(buf, 'W', buf_size);
@@ -842,10 +842,10 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 writes++;
 
-                if (auraio_write(engine, write_fds[fd_idx], auraio_buf(buf), buf_size, offset,
+                if (aura_write(engine, write_fds[fd_idx], aura_buf(buf), buf_size, offset,
                                  mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    auraio_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf, buf_size);
                     free(ctx);
                     writes--;
                 }
@@ -861,7 +861,7 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 fsyncs++;
 
-                if (auraio_fsync(engine, write_fds[fd_idx], AURAIO_FSYNC_DEFAULT, mixed_callback,
+                if (aura_fsync(engine, write_fds[fd_idx], AURA_FSYNC_DEFAULT, mixed_callback,
                                  ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     free(ctx);
@@ -870,14 +870,14 @@ static void bench_mixed_workload(int duration_sec) {
             }
         }
 
-        auraio_wait(engine, 1);
+        aura_wait(engine, 1);
     }
 
     uint64_t elapsed = now_ns() - start;
     double elapsed_sec = ns_to_sec(elapsed);
 
-    auraio_stats_t engine_stats;
-    auraio_get_stats(engine, &engine_stats);
+    aura_stats_t engine_stats;
+    aura_get_stats(engine, &engine_stats);
 
     uint64_t ops = atomic_load(&stats.ops_completed);
     uint64_t bytes = atomic_load(&stats.bytes_transferred);
@@ -894,7 +894,7 @@ static void bench_mixed_workload(int duration_sec) {
     for (int i = 0; i < NUM_FILES; i++) {
         close(write_fds[i]);
     }
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 // ============================================================================
@@ -934,10 +934,10 @@ int main(int argc, char **argv) {
         if (duration > 300) duration = 300;
     }
 
-    const char *env_dir = getenv("AURAIO_BENCH_DIR");
+    const char *env_dir = getenv("AURA_BENCH_DIR");
     if (env_dir && env_dir[0]) test_dir = env_dir;
 
-    const char *env_apples = getenv("AURAIO_BENCH_APPLES");
+    const char *env_apples = getenv("AURA_BENCH_APPLES");
     apples_mode = (env_apples && env_apples[0] == '1');
 
     printf("AuraIO Performance Benchmark\n");

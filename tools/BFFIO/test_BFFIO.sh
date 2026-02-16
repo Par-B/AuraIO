@@ -287,7 +287,7 @@ branding_test() {
         --directory="$TEST_DIR" --runtime="$RUNTIME" --time_based 2>&1 \
         | grep -q 'AuraIO'
 }
-test_case "output_contains_auraio" pass branding_test
+test_case "output_contains_aura" pass branding_test
 
 # --------------------------------------------------------------------------
 # Summary

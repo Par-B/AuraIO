@@ -9,11 +9,11 @@
 //!
 //! Usage: cargo run --example vectored_io --manifest-path examples/rust/Cargo.toml
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 
-const TEST_FILE: &str = "/tmp/auraio_vectored_test.dat";
+const TEST_FILE: &str = "/tmp/aura_vectored_test.dat";
 const HEADER_SIZE: usize = 64;
 const PAYLOAD_SIZE: usize = 1024;
 
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
         )
     };
     if wfd < 0 {
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // Submit vectored write
@@ -150,7 +150,7 @@ fn main() -> Result<()> {
     };
     if rfd < 0 {
         std::fs::remove_file(TEST_FILE).ok();
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // Submit vectored read

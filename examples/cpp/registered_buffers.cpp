@@ -12,7 +12,7 @@
  * Run:   ./examples/cpp/registered_buffers
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <sys/uio.h>
 
-constexpr const char *TEST_FILE = "/tmp/auraio_reg_buf_test.dat";
+constexpr const char *TEST_FILE = "/tmp/aura_reg_buf_test.dat";
 constexpr size_t FILE_SIZE = 1 * 1024 * 1024; // 1 MB
 constexpr size_t BUF_SIZE = 4096;
 constexpr int NUM_BUFFERS = 4;
@@ -32,15 +32,15 @@ constexpr int NUM_OPS = 50;
 
 static std::atomic<int> completed{0};
 
-void completion_callback(auraio::Request &, ssize_t result) {
+void completion_callback(aura::Request &, ssize_t result) {
     if (result < 0) {
         std::cerr << "I/O error: " << result << "\n";
     }
     completed.fetch_add(1, std::memory_order_relaxed);
 }
 
-double run_benchmark(auraio::Engine &engine, int fd, bool use_registered,
-                     std::vector<auraio::Buffer> &buffers) {
+double run_benchmark(aura::Engine &engine, int fd, bool use_registered,
+                     std::vector<aura::Buffer> &buffers) {
     completed.store(0, std::memory_order_relaxed);
     auto start = std::chrono::steady_clock::now();
 
@@ -58,14 +58,14 @@ double run_benchmark(auraio::Engine &engine, int fd, bool use_registered,
             try {
                 if (use_registered) {
                     // Use registered buffer by index
-                    (void)engine.read(fd, auraio::buf_fixed(buf_idx, 0), BUF_SIZE, offset,
+                    (void)engine.read(fd, aura::buf_fixed(buf_idx, 0), BUF_SIZE, offset,
                                       completion_callback);
                 } else {
                     // Use unregistered buffer
                     (void)engine.read(fd, buffers[buf_idx], BUF_SIZE, offset, completion_callback);
                 }
                 submitted++;
-            } catch (const auraio::Error &e) {
+            } catch (const aura::Error &e) {
                 std::cerr << "Read submission failed: " << e.what() << "\n";
                 break;
             }
@@ -93,14 +93,14 @@ int main() {
         std::cout << "Creating test file (" << FILE_SIZE / (1024 * 1024) << " MB)...\n";
         int wfd = open(TEST_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (wfd < 0) {
-            throw auraio::Error(errno, "create test file");
+            throw aura::Error(errno, "create test file");
         }
 
         std::vector<char> data(FILE_SIZE, 0);
         if (write(wfd, data.data(), FILE_SIZE) != static_cast<ssize_t>(FILE_SIZE)) {
             close(wfd);
             unlink(TEST_FILE);
-            throw auraio::Error(errno, "write test file");
+            throw aura::Error(errno, "write test file");
         }
         close(wfd);
 
@@ -108,7 +108,7 @@ int main() {
         int fd = open(TEST_FILE, O_RDONLY);
         if (fd < 0) {
             unlink(TEST_FILE);
-            throw auraio::Error(errno, "open test file");
+            throw aura::Error(errno, "open test file");
         }
 
         double unreg_time = 0;
@@ -120,10 +120,10 @@ int main() {
         std::cout << "Running " << NUM_OPS << " operations...\n";
 
         {
-            auraio::Engine engine_unreg;
+            aura::Engine engine_unreg;
 
             // Allocate buffers
-            std::vector<auraio::Buffer> unreg_buffers;
+            std::vector<aura::Buffer> unreg_buffers;
             unreg_buffers.reserve(NUM_BUFFERS);
             for (int i = 0; i < NUM_BUFFERS; i++) {
                 unreg_buffers.push_back(engine_unreg.allocate_buffer(BUF_SIZE));
@@ -149,10 +149,10 @@ int main() {
                   << " bytes each...\n";
 
         {
-            auraio::Engine engine_reg;
+            aura::Engine engine_reg;
 
             // Allocate buffers
-            std::vector<auraio::Buffer> reg_buffers;
+            std::vector<aura::Buffer> reg_buffers;
             reg_buffers.reserve(NUM_BUFFERS);
             for (int i = 0; i < NUM_BUFFERS; i++) {
                 reg_buffers.push_back(engine_reg.allocate_buffer(BUF_SIZE));
@@ -229,7 +229,7 @@ int main() {
 
         return 0;
 
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         unlink(TEST_FILE);
         return 1;

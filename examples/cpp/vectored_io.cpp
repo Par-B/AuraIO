@@ -13,7 +13,7 @@
  * Run:   ./examples/cpp/vectored_io
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <array>
@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <sys/uio.h>
 
-constexpr const char *TEST_FILE = "/tmp/auraio_vectored_test.dat";
+constexpr const char *TEST_FILE = "/tmp/aura_vectored_test.dat";
 constexpr size_t HEADER_SIZE = 64;
 constexpr size_t PAYLOAD_SIZE = 1024;
 
@@ -33,7 +33,7 @@ struct IoContext {
     ssize_t result = 0;
 };
 
-void write_completion(auraio::Request &, ssize_t result, IoContext *ctx) {
+void write_completion(aura::Request &, ssize_t result, IoContext *ctx) {
     ctx->result = result;
     ctx->done = true;
     if (result < 0) {
@@ -43,7 +43,7 @@ void write_completion(auraio::Request &, ssize_t result, IoContext *ctx) {
     }
 }
 
-void read_completion(auraio::Request &, ssize_t result, IoContext *ctx) {
+void read_completion(aura::Request &, ssize_t result, IoContext *ctx) {
     ctx->result = result;
     ctx->done = true;
     if (result < 0) {
@@ -58,7 +58,7 @@ int main() {
     std::cout << "==================================\n\n";
 
     try {
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // ===================================================================
         // Example 1: Vectored Write (Gather)
@@ -83,12 +83,12 @@ int main() {
         // Open file for writing
         int wfd = open(TEST_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (wfd < 0) {
-            throw auraio::Error(errno, "open for write");
+            throw aura::Error(errno, "open for write");
         }
 
         // Submit vectored write
         IoContext write_ctx;
-        (void)engine.writev(wfd, write_iov, 0, [&write_ctx](auraio::Request &req, ssize_t result) {
+        (void)engine.writev(wfd, write_iov, 0, [&write_ctx](aura::Request &req, ssize_t result) {
             write_completion(req, result, &write_ctx);
         });
 
@@ -123,12 +123,12 @@ int main() {
         int rfd = open(TEST_FILE, O_RDONLY);
         if (rfd < 0) {
             unlink(TEST_FILE);
-            throw auraio::Error(errno, "open for read");
+            throw aura::Error(errno, "open for read");
         }
 
         // Submit vectored read
         IoContext read_ctx;
-        (void)engine.readv(rfd, read_iov, 0, [&read_ctx](auraio::Request &req, ssize_t result) {
+        (void)engine.readv(rfd, read_iov, 0, [&read_ctx](aura::Request &req, ssize_t result) {
             read_completion(req, result, &read_ctx);
         });
 
@@ -171,7 +171,7 @@ int main() {
 
         return 0;
 
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         unlink(TEST_FILE);
         return 1;

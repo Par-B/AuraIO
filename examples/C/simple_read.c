@@ -15,7 +15,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include <auraio.h>
+#include <aura.h>
 
 #define READ_SIZE (1024 * 1024) /* 1MB */
 
@@ -28,7 +28,7 @@ typedef struct {
 /**
  * Callback invoked when read completes.
  */
-void on_read_done(auraio_request_t *req, ssize_t result, void *user_data) {
+void on_read_done(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     read_state_t *state = user_data;
 
@@ -51,11 +51,11 @@ int main(int argc, char **argv) {
 
     const char *filename = argv[1];
 
-    /* Create the auraio engine */
+    /* Create the aura engine */
     printf("Creating async I/O engine...\n");
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
-        fprintf(stderr, "Failed to create auraio engine: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to create aura engine: %s\n", strerror(errno));
         return 1;
     }
 
@@ -68,16 +68,16 @@ int main(int argc, char **argv) {
     }
     if (fd < 0) {
         fprintf(stderr, "Failed to open '%s': %s\n", filename, strerror(errno));
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
     /* Allocate aligned buffer from engine's pool */
-    void *buf = auraio_buffer_alloc(engine, READ_SIZE);
+    void *buf = aura_buffer_alloc(engine, READ_SIZE);
     if (!buf) {
         fprintf(stderr, "Failed to allocate buffer: %s\n", strerror(errno));
         close(fd);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
@@ -86,13 +86,13 @@ int main(int argc, char **argv) {
 
     /* Submit async read */
     printf("Submitting async read of %d bytes...\n", READ_SIZE);
-    auraio_request_t *req =
-        auraio_read(engine, fd, auraio_buf(buf), READ_SIZE, 0, on_read_done, &state);
+    aura_request_t *req =
+        aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read_done, &state);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
-        auraio_buffer_free(engine, buf, READ_SIZE);
+        aura_buffer_free(engine, buf, READ_SIZE);
         close(fd);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
     (void)req; /* Request handle can be used for cancellation if needed */
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     /* Wait for completion */
     printf("Waiting for completion...\n");
     while (!state.done) {
-        auraio_wait(engine, 100); /* 100ms timeout */
+        aura_wait(engine, 100); /* 100ms timeout */
     }
 
     /* Show first few bytes of data */
@@ -118,8 +118,8 @@ int main(int argc, char **argv) {
     }
 
     /* Get aggregate statistics */
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
     printf("\nEngine statistics:\n");
     printf("  Ops completed:     %lld\n", (long long)stats.ops_completed);
     printf("  Bytes transferred: %lld\n", (long long)stats.bytes_transferred);
@@ -128,20 +128,20 @@ int main(int argc, char **argv) {
     printf("  Optimal in-flight: %d\n", stats.optimal_in_flight);
     printf("  Optimal batch:     %d\n", stats.optimal_batch_size);
 
-    /* Per-ring statistics (demonstrates auraio_get_ring_stats) */
-    int rings = auraio_get_ring_count(engine);
+    /* Per-ring statistics (demonstrates aura_get_ring_stats) */
+    int rings = aura_get_ring_count(engine);
     for (int i = 0; i < rings; i++) {
-        auraio_ring_stats_t rs;
-        if (auraio_get_ring_stats(engine, i, &rs) == 0) {
-            printf("  Ring %d: phase=%s depth=%d/%d\n", i, auraio_phase_name(rs.aimd_phase),
+        aura_ring_stats_t rs;
+        if (aura_get_ring_stats(engine, i, &rs) == 0) {
+            printf("  Ring %d: phase=%s depth=%d/%d\n", i, aura_phase_name(rs.aimd_phase),
                    rs.pending_count, rs.in_flight_limit);
         }
     }
 
-    /* Latency histogram (demonstrates auraio_get_histogram) */
+    /* Latency histogram (demonstrates aura_get_histogram) */
     if (rings > 0) {
-        auraio_histogram_t hist;
-        if (auraio_get_histogram(engine, 0, &hist) == 0 && hist.total_count > 0) {
+        aura_histogram_t hist;
+        if (aura_get_histogram(engine, 0, &hist) == 0 && hist.total_count > 0) {
             printf("\nLatency Histogram (Ring 0):\n");
             printf("  Total samples: %u\n", hist.total_count);
             printf("  Bucket width:  %d μs\n", hist.bucket_width_us);
@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
             uint32_t p999_threshold = (hist.total_count * 999) / 1000;
             int p50 = -1, p90 = -1, p99 = -1, p999 = -1;
 
-            for (int i = 0; i < AURAIO_HISTOGRAM_BUCKETS; i++) {
+            for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
                 cumulative += hist.buckets[i];
                 if (p50 == -1 && cumulative >= p50_threshold) p50 = i;
                 if (p90 == -1 && cumulative >= p90_threshold) p90 = i;
@@ -178,9 +178,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Buffer pool statistics (demonstrates auraio_get_buffer_stats) */
-    auraio_buffer_stats_t buf_stats;
-    if (auraio_get_buffer_stats(engine, &buf_stats) == 0) {
+    /* Buffer pool statistics (demonstrates aura_get_buffer_stats) */
+    aura_buffer_stats_t buf_stats;
+    if (aura_get_buffer_stats(engine, &buf_stats) == 0) {
         printf("\nBuffer Pool Statistics:\n");
         printf("  Total allocated:  %zu bytes\n", buf_stats.total_allocated_bytes);
         printf("  Buffer count:     %zu\n", buf_stats.total_buffers);
@@ -188,9 +188,9 @@ int main(int argc, char **argv) {
     }
 
     /* Cleanup */
-    auraio_buffer_free(engine, buf, READ_SIZE);
+    aura_buffer_free(engine, buf, READ_SIZE);
     close(fd);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 
     printf("\nDone!\n");
     return (state.result > 0) ? 0 : 1;

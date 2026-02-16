@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "auraio.h"
+#include "aura.h"
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
@@ -15,11 +15,11 @@
 
 #include <stdatomic.h>
 
-auraio_engine_t *engine;
+aura_engine_t *engine;
 int efd;
 volatile atomic_int running = 1;
 
-void on_done(auraio_request_t *req, ssize_t res, void *data) {
+void on_done(aura_request_t *req, ssize_t res, void *data) {
   (void)req;
   (void)res;
   (void)data;
@@ -40,9 +40,9 @@ void *worker(void *arg) {
 
   while (atomic_load(&running)) {
     // Submit write to eventfd
-    // We use auraio_buf(&buf) which is UNREGISTERED, so it copies the pointer
+    // We use aura_buf(&buf) which is UNREGISTERED, so it copies the pointer
     // eventfd writes are very fast, stressing the submission/completion path
-    auraio_request_t *req = auraio_write(engine, efd, auraio_buf(&buf),
+    aura_request_t *req = aura_write(engine, efd, aura_buf(&buf),
                                          sizeof(buf), 0, on_done, NULL);
     if (req) {
       count++;
@@ -61,7 +61,7 @@ void *worker(void *arg) {
 
 int main() {
   // Create engine with default options (1 ring per CPU)
-  engine = auraio_create();
+  engine = aura_create();
   if (!engine) {
     perror("create");
     return 1;
@@ -85,12 +85,12 @@ int main() {
   time_t start = time(NULL);
   while (time(NULL) - start < DURATION_SEC) {
     // aggressive polling
-    auraio_wait(engine, 10);
+    aura_wait(engine, 10);
 
     static int print_counter = 0;
     if (print_counter++ % 10 == 0) {
-      auraio_stats_t stats;
-      auraio_get_stats(engine, &stats);
+      aura_stats_t stats;
+      aura_get_stats(engine, &stats);
       printf("\rThroughput: %.2f M/s, P99: %.3f ms, In-flight: %d   ",
              stats.current_throughput_bps / 8.0 / 1000000.0, // 8 bytes per op
              stats.p99_latency_ms, stats.current_in_flight);
@@ -111,7 +111,7 @@ int main() {
   printf("Average Throughput: %.2f M/s\n",
          (double)total / DURATION_SEC / 1000000.0);
 
-  auraio_destroy(engine);
+  aura_destroy(engine);
   close(efd);
   return 0;
 }

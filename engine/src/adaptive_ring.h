@@ -14,38 +14,45 @@
 #include <stdatomic.h>
 #include <pthread.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <liburing.h>
 
 #include "adaptive_engine.h"
 
 /* Forward declarations */
-typedef struct auraio_request auraio_request_t;
-typedef void (*auraio_callback_t)(auraio_request_t *req, ssize_t result, void *user_data);
+typedef struct aura_request aura_request_t;
+typedef void (*aura_callback_t)(aura_request_t *req, ssize_t result, void *user_data);
 
 /**
  * Request operation type
  */
 typedef enum {
-    AURAIO_OP_READ,
-    AURAIO_OP_WRITE,
-    AURAIO_OP_READV,
-    AURAIO_OP_WRITEV,
-    AURAIO_OP_FSYNC,
-    AURAIO_OP_FDATASYNC,
-    AURAIO_OP_CANCEL,
-    AURAIO_OP_READ_FIXED, /**< Read using registered buffer */
-    AURAIO_OP_WRITE_FIXED /**< Write using registered buffer */
-} auraio_op_type_t;
+    AURA_OP_READ,
+    AURA_OP_WRITE,
+    AURA_OP_READV,
+    AURA_OP_WRITEV,
+    AURA_OP_FSYNC,
+    AURA_OP_FDATASYNC,
+    AURA_OP_CANCEL,
+    AURA_OP_READ_FIXED,     /**< Read using registered buffer */
+    AURA_OP_WRITE_FIXED,    /**< Write using registered buffer */
+    AURA_OP_OPENAT,         /**< Async openat */
+    AURA_OP_CLOSE,          /**< Async close */
+    AURA_OP_STATX,          /**< Async statx */
+    AURA_OP_FALLOCATE,      /**< Async fallocate */
+    AURA_OP_FTRUNCATE,      /**< Async ftruncate */
+    AURA_OP_SYNC_FILE_RANGE /**< Async sync_file_range */
+} aura_op_type_t;
 
 /**
  * Request context
  *
  * Tracks an in-flight I/O operation.
  */
-struct auraio_request {
+struct aura_request {
     /* Operation info */
-    auraio_op_type_t op_type; /**< Operation type */
+    aura_op_type_t op_type; /**< Operation type */
     int fd;                   /**< File descriptor */
     off_t offset;             /**< File offset */
 
@@ -60,7 +67,7 @@ struct auraio_request {
     const struct iovec *iov; /**< iovec array for readv/writev */
 
     /* Callback */
-    auraio_callback_t callback; /**< Completion callback */
+    aura_callback_t callback; /**< Completion callback */
     void *user_data;            /**< User data for callback */
 
     /* Internal tracking */
@@ -73,13 +80,31 @@ struct auraio_request {
     /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending; /**< True if still in-flight */
 
+    /* Metadata operation parameters (union to avoid bloating the struct).
+     * close uses fd; ftruncate uses len; others use op-specific fields. */
+    union {
+        struct {
+            const char *pathname;
+            int flags;
+            mode_t mode;
+        } open;
+        struct {
+            const char *pathname;
+            struct statx *buf;
+            int flags;
+            unsigned mask;
+        } statx;
+        struct {
+            int mode;
+        } fallocate;
+        struct {
+            unsigned flags;
+        } sync_range;
+    } meta;
+
     /* Pad to 128 bytes (2 full cache lines) so that adjacent requests in
-     * the request array never share a cache line.  Without this padding
-     * the struct is 96 bytes: requests[N].pending at offset 90 and
-     * requests[N+1].op_type at offset 96 land on the same 64-byte line,
-     * causing every completion write to invalidate the next request's
-     * submission-path data.  See cache_analysis_report.md §3, H1. */
-    char _cacheline_pad[128 - 91];
+     * the request array never share a cache line. */
+    char _cacheline_pad[128 - 120];
 };
 
 /**
@@ -107,7 +132,7 @@ typedef struct {
     pthread_mutex_t cq_lock; /**< Protects completion queue access */
 
     /* Request tracking */
-    auraio_request_t *requests; /**< Request array */
+    aura_request_t *requests; /**< Request array */
     int *free_request_stack;    /**< Free request indices */
     int free_request_count;     /**< Number of free request slots */
     int max_requests;           /**< Queue depth */
@@ -179,7 +204,7 @@ void ring_destroy(ring_ctx_t *ctx);
  * @param op_idx Output: index of allocated slot
  * @return Request pointer, or NULL if none available
  */
-auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx);
+aura_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx);
 
 /**
  * Return a request slot
@@ -198,7 +223,7 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx);
  * @param req Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit a write operation
@@ -207,7 +232,7 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit a vectored read operation
@@ -216,7 +241,7 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit a vectored write operation
@@ -225,7 +250,7 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit an fsync operation
@@ -234,7 +259,7 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit an fdatasync operation
@@ -243,7 +268,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req   Request to submit
  * @return 0 on success, -1 on error
  */
-int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit a cancel operation
@@ -253,7 +278,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req);
  * @param target The request to cancel
  * @return 0 on success, -1 on error
  */
-int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t *target);
+int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target);
 
 /**
  * Submit a read using a registered buffer
@@ -262,7 +287,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
  * @param req Request to submit (buf_index, buf_offset, len, offset must be set)
  * @return 0 on success, -1 on error
  */
-int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Submit a write using a registered buffer
@@ -271,7 +296,15 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req);
  * @param req Request to submit (buf_index, buf_offset, len, offset must be set)
  * @return 0 on success, -1 on error
  */
-int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req);
+int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req);
+
+/* Lifecycle metadata operations (skip AIMD sampling) */
+int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req);
+int ring_submit_close(ring_ctx_t *ctx, aura_request_t *req);
+int ring_submit_statx(ring_ctx_t *ctx, aura_request_t *req);
+int ring_submit_fallocate(ring_ctx_t *ctx, aura_request_t *req);
+int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req);
+int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req);
 
 /**
  * Flush queued submissions to kernel
@@ -333,7 +366,7 @@ bool ring_should_flush(ring_ctx_t *ctx);
 int ring_get_fd(ring_ctx_t *ctx);
 
 /* ============================================================================
- * Conditional Locking (inline for hot-path use in adaptive_ring.c + auraio.c)
+ * Conditional Locking (inline for hot-path use in adaptive_ring.c + aura.c)
  *
  * When single_thread is set, all mutex ops are skipped. The flag is const
  * after init, so branch prediction eliminates overhead after warmup.

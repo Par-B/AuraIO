@@ -12,24 +12,24 @@ PKG_CONFIG ?= pkg-config
 # Base compiler flags
 CXXFLAGS = -Wall -Wextra -Wpedantic -std=c++20 -O2 -fcoroutines
 
-# Detect if libauraio is installed (unless USE_LOCAL=1)
+# Detect if libaura is installed (unless USE_LOCAL=1)
 ifndef USE_LOCAL
-    HAS_AURAIO := $(shell $(PKG_CONFIG) --exists libauraio 2>/dev/null && echo yes)
+    HAS_AURAIO := $(shell $(PKG_CONFIG) --exists libaura 2>/dev/null && echo yes)
 else
     HAS_AURAIO := no
 endif
 
 # Configure flags based on installation status
 ifeq ($(HAS_AURAIO),yes)
-    $(info Building with installed libauraio (pkg-config))
-    CXXFLAGS += $(shell $(PKG_CONFIG) --cflags libauraio)
-    LDFLAGS = $(shell $(PKG_CONFIG) --libs libauraio)
+    $(info Building with installed libaura (pkg-config))
+    CXXFLAGS += $(shell $(PKG_CONFIG) --cflags libaura)
+    LDFLAGS = $(shell $(PKG_CONFIG) --libs libaura)
     DEPS =
 else
-    $(info Building with local libauraio (../../engine/lib))
+    $(info Building with local libaura (../../engine/lib))
     CXXFLAGS += -I../../engine/include
-    LDFLAGS = -L../../engine/lib -lauraio -luring -lpthread -Wl,-rpath,'$$ORIGIN/../../engine/lib'
-    DEPS = ../../engine/lib/libauraio.so
+    LDFLAGS = -L../../engine/lib -laura -luring -lpthread -Wl,-rpath,'$$ORIGIN/../../engine/lib'
+    DEPS = ../../engine/lib/libaura.so
 endif
 
 # All C++ examples

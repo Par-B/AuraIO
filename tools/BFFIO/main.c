@@ -1,9 +1,9 @@
 /**
  * @file main.c
- * @brief BFFIO - Better Faster FIO (powered by AuraIO)
+ * @brief BFFIO - Better Faster FIO (powered by Aura)
  *
  * CLI entry point that ties together job parsing, workload execution,
- * stats computation, and output rendering.  One fresh AuraIO engine
+ * stats computation, and output rendering.  One fresh Aura engine
  * is created per job for clean AIMD convergence.
  */
 
@@ -12,7 +12,7 @@
 #include "stats.h"
 #include "output.h"
 
-#include <auraio.h>
+#include <aura.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@
 /* -------------------------------------------------------------------------- */
 
 static void print_usage(void) {
-    printf("BFFIO - Better Faster FIO (powered by AuraIO)\n"
+    printf("BFFIO - Better Faster FIO (powered by Aura)\n"
            "\n"
            "Usage:\n"
            "  BFFIO [options]                    Run with CLI parameters\n"
@@ -44,7 +44,7 @@ static void print_usage(void) {
            "  --time_based           Run for fixed time (requires --runtime)\n"
            "  --ramp_time=SECONDS    Warmup period (stats discarded)\n"
            "  --numjobs=N            Number of worker threads (default: 1)\n"
-           "  --iodepth=N            Max queue depth cap (default: 256, AuraIO auto-tunes below "
+           "  --iodepth=N            Max queue depth cap (default: 256, Aura auto-tunes below "
            "this)\n"
            "  --nrfiles=N            Number of files per job (default: 1, directory mode only)\n"
            "  --filesize=SIZE        Per-file size (default: size/nrfiles). Suffixes: K, M, G\n"
@@ -57,7 +57,7 @@ static void print_usage(void) {
            "                         Examples: 2ms, 500us, 1.5ms, 0.01s\n"
            "  --ring-select=MODE     Ring selection: adaptive, cpu_local, round_robin (default: "
            "adaptive)\n"
-           "  --ioengine=ENGINE      Accepted but always uses AuraIO\n"
+           "  --ioengine=ENGINE      Accepted but always uses Aura\n"
            "  --output-format=FMT    Output format: normal, json (default: normal)\n");
 }
 
@@ -162,9 +162,9 @@ int main(int argc, char *argv[]) {
             job->ramp_time_sec = 5;
         }
 
-        /* Create fresh AuraIO engine per job */
-        auraio_options_t opts;
-        auraio_options_init(&opts);
+        /* Create fresh Aura engine per job */
+        aura_options_t opts;
+        aura_options_init(&opts);
         /* Engine capacity must exceed BFFIO's submission depth so AIMD
          * has headroom to set its inflight limit below what we submit. */
         int engine_depth = job->iodepth * 2;
@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
         opts.ring_count =
             (job->numjobs <= 1) ? 1 : 0; /* 1 ring for single-thread, auto for multi */
         opts.single_thread = (job->numjobs <= 1); /* Skip mutexes for single-thread */
-        opts.ring_select = (auraio_ring_select_t)job->ring_select;
+        opts.ring_select = (aura_ring_select_t)job->ring_select;
 
         /* Pass user's P99 latency target to AIMD controller */
         if (job->target_p99_ms > 0.0) {
@@ -184,9 +184,9 @@ int main(int argc, char *argv[]) {
             opts.initial_in_flight = engine_depth;
         }
 
-        auraio_engine_t *engine = auraio_create_with_options(&opts);
+        aura_engine_t *engine = aura_create_with_options(&opts);
         if (!engine) {
-            fprintf(stderr, "Error: failed to create AuraIO engine for job '%s'\n", job->name);
+            fprintf(stderr, "Error: failed to create Aura engine for job '%s'\n", job->name);
             free(results);
             bench_config_free(&bench);
             return 1;
@@ -197,7 +197,7 @@ int main(int argc, char *argv[]) {
          * so every ring sees real I/O and converges to the right depth.
          * The sum of per-ring depths = total device concurrency. */
         if (job->target_p99_ms > 0.0 && job->numjobs == 1) {
-            int ring_count = auraio_get_ring_count(engine);
+            int ring_count = aura_get_ring_count(engine);
             if (ring_count > 1) {
                 job->numjobs = ring_count;
                 job->group_reporting = 1;
@@ -208,7 +208,7 @@ int main(int argc, char *argv[]) {
         thread_stats_t *thread_stats = calloc((size_t)job->numjobs, sizeof(thread_stats_t));
         if (!thread_stats) {
             fprintf(stderr, "Error: out of memory for thread stats\n");
-            auraio_destroy(engine);
+            aura_destroy(engine);
             free(results);
             bench_config_free(&bench);
             return 1;
@@ -245,7 +245,7 @@ int main(int argc, char *argv[]) {
 
         /* Cleanup per-job resources */
         free(thread_stats);
-        auraio_destroy(engine);
+        aura_destroy(engine);
     }
 
     /* JSON mode: output all jobs at once at the end */

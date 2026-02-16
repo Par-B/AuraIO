@@ -3,7 +3,7 @@
 
 #include "job_parser.h"
 #include "stats.h"
-#include <auraio.h>
+#include <aura.h>
 #include <pthread.h>
 
 /* I/O callback context - pre-allocated pool, zero malloc on hot path */
@@ -12,7 +12,7 @@ typedef struct {
     uint64_t submit_time_ns;
     size_t io_size;
     void *buffer; /* pre-allocated, reused across I/Os */
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
     int is_write;
     _Atomic int *ramping;  /* skip stats during warmup */
     void *pool;            /* owning io_ctx_pool_t* (for callback) */
@@ -46,7 +46,7 @@ void io_ctx_pool_put(io_ctx_pool_t *pool, io_ctx_t *ctx);
 typedef struct {
     int thread_id;
     const job_config_t *config;
-    auraio_engine_t *engine;
+    aura_engine_t *engine;
     int *fds; /* file descriptors array */
     int fd_count;
     thread_stats_t *stats;
@@ -87,12 +87,12 @@ typedef struct {
  * configured duration, collects stats, and cleans up.
  *
  * @param job     Job configuration
- * @param engine  AuraIO engine (shared across threads)
+ * @param engine  Aura engine (shared across threads)
  * @param stats   Array of thread_stats_t[numjobs] (pre-allocated by caller)
  * @param runtime_ms  Output: actual measurement runtime in ms (excluding ramp)
  * @return 0 on success, -1 on error
  */
-int workload_run(const job_config_t *job, auraio_engine_t *engine, thread_stats_t *stats,
+int workload_run(const job_config_t *job, aura_engine_t *engine, thread_stats_t *stats,
                  uint64_t *runtime_ms);
 
 #endif /* BFFIO_WORKLOAD_H */

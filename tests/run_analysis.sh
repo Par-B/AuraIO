@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RESULTS_DIR="${SCRIPT_DIR}/bench_results"
 REPORT_FILE="${RESULTS_DIR}/analysis_report.txt"
-TEST_DIR="/tmp/auraio_bench"
+TEST_DIR="/tmp/aura_bench"
 
 # Defaults (laptop-safe)
 DURATION=5
@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Export so perf_bench picks it up
-export AURAIO_BENCH_DIR="$TEST_DIR"
+export AURA_BENCH_DIR="$TEST_DIR"
 
 # Colors
 GREEN='\033[0;32m'
@@ -162,15 +162,15 @@ if wio > 0:
 # ============================================================================
 # AuraIO benchmarks (run individually to avoid the all-mode hang)
 # ============================================================================
-run_auraio_tests() {
+run_aura_tests() {
     echo ""
     echo "============================================"
     echo "AuraIO Benchmarks (${DURATION}s each)"
     echo "============================================"
 
     local perf_bench="$SCRIPT_DIR/perf_bench"
-    local auraio_out="$RESULTS_DIR/auraio_full.txt"
-    > "$auraio_out"
+    local aura_out="$RESULTS_DIR/aura_full.txt"
+    > "$aura_out"
 
     local perf_prefix=""
     if [ "$RUN_PERF" = true ] && command -v perf &>/dev/null; then
@@ -203,13 +203,13 @@ run_auraio_tests() {
         # deadlocks under ptrace/perf on modern kernels (6.5+).
         # Use || true to prevent set -e from killing the script on timeout.
         if [ "$RUN_PERF" = true ] && [ -n "$perf_prefix" ] && [ "$bench" != "syscall" ]; then
-            timeout "$bench_timeout" $perf_prefix "$perf_bench" "$bench" "$bench_dur" 2>&1 | tee -a "$auraio_out" || true
+            timeout "$bench_timeout" $perf_prefix "$perf_bench" "$bench" "$bench_dur" 2>&1 | tee -a "$aura_out" || true
         else
-            timeout "$bench_timeout" "$perf_bench" "$bench" "$bench_dur" 2>&1 | tee -a "$auraio_out" || true
+            timeout "$bench_timeout" "$perf_bench" "$bench" "$bench_dur" 2>&1 | tee -a "$aura_out" || true
         fi
         local rc=${PIPESTATUS[0]}
         if [ $rc -eq 124 ]; then
-            echo "  [warn] $bench timed out after ${bench_timeout}s (killed)" | tee -a "$auraio_out"
+            echo "  [warn] $bench timed out after ${bench_timeout}s (killed)" | tee -a "$aura_out"
         fi
     done
 
@@ -221,17 +221,17 @@ run_auraio_tests() {
 # ============================================================================
 # AuraIO apples-to-apples run (ring_count=1 for FIO-comparable results)
 # ============================================================================
-run_auraio_apples() {
+run_aura_apples() {
     echo ""
     echo "============================================"
     echo "AuraIO Apples-to-Apples (single ring, ${DURATION}s each)"
     echo "============================================"
 
     local perf_bench="$SCRIPT_DIR/perf_bench"
-    local apples_out="$RESULTS_DIR/auraio_apples.txt"
+    local apples_out="$RESULTS_DIR/aura_apples.txt"
     > "$apples_out"
 
-    export AURAIO_BENCH_APPLES=1
+    export AURA_BENCH_APPLES=1
 
     # Only run FIO-compared benchmarks (throughput, latency, mixed)
     for bench in throughput latency mixed; do
@@ -248,7 +248,7 @@ run_auraio_apples() {
         fi
     done
 
-    unset AURAIO_BENCH_APPLES
+    unset AURA_BENCH_APPLES
 }
 
 # ============================================================================
@@ -260,14 +260,14 @@ generate_report() {
     echo "Generating Analysis Report"
     echo "============================================"
 
-    local auraio_out="$RESULTS_DIR/auraio_full.txt"
-    local auraio_apples_out="$RESULTS_DIR/auraio_apples.txt"
+    local aura_out="$RESULTS_DIR/aura_full.txt"
+    local aura_apples_out="$RESULTS_DIR/aura_apples.txt"
     local fio_summary="$RESULTS_DIR/fio_summary.txt"
 
-    python3 - "$auraio_out" "$fio_summary" "$RESULTS_DIR/system_info.txt" "$REPORT_FILE" "$DURATION" "$LABEL" "$auraio_apples_out" << 'PYEOF'
+    python3 - "$aura_out" "$fio_summary" "$RESULTS_DIR/system_info.txt" "$REPORT_FILE" "$DURATION" "$LABEL" "$aura_apples_out" << 'PYEOF'
 import re, sys, os
 
-auraio_file = sys.argv[1]
+aura_file = sys.argv[1]
 fio_file = sys.argv[2]
 sysinfo_file = sys.argv[3]
 report_file = sys.argv[4]
@@ -275,13 +275,13 @@ duration = sys.argv[5]
 label = sys.argv[6]
 apples_file = sys.argv[7] if len(sys.argv) > 7 else ""
 
-lines = open(auraio_file).read() if os.path.exists(auraio_file) else ""
+lines = open(aura_file).read() if os.path.exists(aura_file) else ""
 apples_lines = open(apples_file).read() if apples_file and os.path.exists(apples_file) else ""
 fio_lines = open(fio_file).readlines() if os.path.exists(fio_file) else []
 sysinfo = open(sysinfo_file).read() if os.path.exists(sysinfo_file) else ""
 
 # --- Helper: parse AuraIO output into a dict of matches ---
-def parse_auraio(text):
+def parse_aura(text):
     d = {}
     d['tp'] = re.search(
         r'Throughput Benchmark.*?Throughput:\s+([\d.]+)\s+MB/s.*?IOPS:\s+([\d.]+).*?P99 latency:\s+(\d+)\s+us.*?Optimal depth:\s+(\d+)',
@@ -301,8 +301,8 @@ def parse_auraio(text):
     d['scale'] = re.findall(r'^(\d+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s*$', text, re.MULTILINE)
     return d
 
-auto = parse_auraio(lines)
-apples = parse_auraio(apples_lines) if apples_lines else {}
+auto = parse_aura(lines)
+apples = parse_aura(apples_lines) if apples_lines else {}
 
 # Parse FIO data
 fio_data = {}
@@ -379,25 +379,25 @@ if buf:
     report.append(f"    Per-thread:    {int(float(buf.group(3))):,} ops/sec")
 
 # --- Helper: build comparison rows ---
-def build_comparison_rows(fio, auraio_data):
+def build_comparison_rows(fio, aura_data):
     """Build (name, f_iops, f_mbps, a_iops, a_mbps, pct) rows."""
     rows = []
     f = fio.get('randread_64k')
-    t = auraio_data.get('tp')
+    t = aura_data.get('tp')
     if t and f:
         a_iops = int(float(t.group(2)))
         a_mbps = float(t.group(1))
         pct = ((a_mbps - f['mbps']) / f['mbps'] * 100) if f['mbps'] > 0 else 0
         rows.append(('64K randread', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
     f = fio.get('latency_4k')
-    l = auraio_data.get('lat')
+    l = aura_data.get('lat')
     if l and f:
         a_iops = int(float(l.group(1)))
         a_mbps = a_iops * 4 / 1024
         pct = ((a_iops - f['iops']) / f['iops'] * 100) if f['iops'] > 0 else 0
         rows.append(('4K serial read', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
     f = fio.get('mixed_rw_32k')
-    m = auraio_data.get('mix')
+    m = aura_data.get('mix')
     if m and f:
         a_iops = int(float(m.group(6)))
         a_mbps = float(m.group(5))
@@ -405,10 +405,10 @@ def build_comparison_rows(fio, auraio_data):
         rows.append(('Mixed R/W (32K)', int(f['iops']), f['mbps'], a_iops, a_mbps, pct))
     return rows
 
-def build_latency_rows(fio, auraio_data):
+def build_latency_rows(fio, aura_data):
     """Build latency comparison rows."""
     f = fio.get('latency_4k')
-    l = auraio_data.get('lat')
+    l = aura_data.get('lat')
     if not (l and f):
         return None
     return {
@@ -416,7 +416,7 @@ def build_latency_rows(fio, auraio_data):
         'f_avg': f['avg'], 'f_p99': f['p99']
     }
 
-def emit_comparison_table(report, title, subtitle, fio_label, auraio_label, rows, latency):
+def emit_comparison_table(report, title, subtitle, fio_label, aura_label, rows, latency):
     report.append("")
     report.append("-" * 70)
     report.append(title)
@@ -424,7 +424,7 @@ def emit_comparison_table(report, title, subtitle, fio_label, auraio_label, rows
         report.append(f"  {subtitle}")
     report.append("-" * 70)
     report.append("")
-    report.append(f"  {'Test':<22} {fio_label:^21}   {auraio_label:^21}   {'Delta':>7}")
+    report.append(f"  {'Test':<22} {fio_label:^21}   {aura_label:^21}   {'Delta':>7}")
     report.append(f"  {'':<22} {'IOPS':>9} {'MB/s':>10}   {'IOPS':>9} {'MB/s':>10}   {'':>7}")
     report.append(f"  {'-'*22} {'-'*9} {'-'*10}   {'-'*9} {'-'*10}   {'-'*7}")
     for name, f_iops, f_mbps, a_iops, a_mbps, pct in rows:
@@ -432,7 +432,7 @@ def emit_comparison_table(report, title, subtitle, fio_label, auraio_label, rows
     if latency:
         d = latency
         report.append("")
-        report.append(f"  {'Latency (4K, depth=1)':<22} {fio_label:^13}   {auraio_label:^13}   {'Delta':>7}")
+        report.append(f"  {'Latency (4K, depth=1)':<22} {fio_label:^13}   {aura_label:^13}   {'Delta':>7}")
         report.append(f"  {'-'*22} {'-'*13}   {'-'*13}   {'-'*7}")
         avg_pct = ((d['a_avg'] - d['f_avg']) / d['f_avg'] * 100) if d['f_avg'] > 0 else 0
         p99_pct = ((d['a_p99'] - d['f_p99']) / d['f_p99'] * 100) if d['f_p99'] > 0 else 0
@@ -561,11 +561,11 @@ elif [ "$RUN_FIO" = true ]; then
     RUN_FIO=false
 fi
 
-run_auraio_tests
+run_aura_tests
 
 # Run apples-to-apples (ring_count=1) if FIO comparison is enabled
 if [ "$RUN_FIO" = true ]; then
-    run_auraio_apples
+    run_aura_apples
 fi
 
 generate_report

@@ -7,12 +7,12 @@ AuraIO is built on the principle of **Hardware-Aware I/O**. It does not treat th
 ## 1. Zero-Copy & Kernel Bypass
 
 ### Registered Buffers
-Standard `read/write` syscalls involve copying data between kernel space and user space. AuraIO mitigates this overhead through **Registered Buffers** (`auraio_register_buffers`).
+Standard `read/write` syscalls involve copying data between kernel space and user space. AuraIO mitigates this overhead through **Registered Buffers** (`aura_register_buffers`).
 - **Mechanism**: Buffers are pinned in memory and mapped into the kernel's address space once at startup.
-- **Benefit**: I/O operations using these buffers (`AURAIO_BUF_REGISTERED`) bypass the page mapping overhead entirely, essential for high-frequency small I/O (< 16KB).
+- **Benefit**: I/O operations using these buffers (`AURA_BUF_REGISTERED`) bypass the page mapping overhead entirely, essential for high-frequency small I/O (< 16KB).
 
 ### Registered Files
-Every unregistered I/O operation forces the kernel to look up the internal `struct file` via an atomic reference count (`fget`/`fput`). AuraIO allows pre-registering file descriptors (`auraio_register_files`) to pin these references at startup.
+Every unregistered I/O operation forces the kernel to look up the internal `struct file` via an atomic reference count (`fget`/`fput`). AuraIO allows pre-registering file descriptors (`aura_register_files`) to pin these references at startup.
 - **Mechanism**: File references are resolved once and stored in the ring's fixed file table. Subsequent I/O operations skip the per-op `fget`/`fput` atomic.
 - **Benefit**: Eliminates cross-core cache-line contention on the file's reference count, which becomes a bottleneck at millions of IOPS on many-core systems.
 
@@ -32,11 +32,11 @@ All buffers are automatically aligned to 4096 bytes (or custom alignment) to ens
 ### Ring Selection Modes
 AuraIO provides three ring selection modes to balance cache locality against throughput scaling:
 
-- **ADAPTIVE** (default, `AURAIO_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load exceeds 2x the global average, the thread is an outlier (most rings are idle) and stays local. Otherwise, system-wide pressure is detected and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `auraio_stats_t.adaptive_spills`.
+- **ADAPTIVE** (default, `AURA_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load exceeds 2x the global average, the thread is an outlier (most rings are idle) and stays local. Otherwise, system-wide pressure is detected and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `aura_stats_t.adaptive_spills`.
 
-- **CPU_LOCAL** (`AURAIO_SELECT_CPU_LOCAL`): Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring's capacity.
+- **CPU_LOCAL** (`AURA_SELECT_CPU_LOCAL`): Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring's capacity.
 
-- **ROUND_ROBIN** (`AURAIO_SELECT_ROUND_ROBIN`): Always distributes via atomic round-robin across all rings. Best for single-thread event loops that need to saturate multiple rings, or for benchmarks measuring peak aggregate throughput.
+- **ROUND_ROBIN** (`AURA_SELECT_ROUND_ROBIN`): Always distributes via atomic round-robin across all rings. Best for single-thread event loops that need to saturate multiple rings, or for benchmarks measuring peak aggregate throughput.
 
 **When to use each mode:**
 - Many threads, each doing moderate I/O → **ADAPTIVE** (default)
@@ -73,42 +73,42 @@ To fully leverage this architecture:
 1.  **Pin Your Threads**: Use `pthread_setaffinity_np` in your worker threads. AuraIO routes I/O to per-core rings via `sched_getcpu()`. Pinning ensures stable core affinity, keeping ring data and CQE memory hot in L1/L2 cache.
 2.  **Use `O_DIRECT`**: This bypasses the kernel page cache, allowing AuraIO's adaptive controller to see the *true* device latency and tune accurately.
 3.  **Pre-register Memory**: For long-running applications, register your buffer pool at startup to shave off microseconds from every operation.
-4.  **Pre-allocate Buffers**: Call `auraio_buffer_alloc()` once per slot at startup and reuse the same buffers across I/O operations. Calling alloc/free on every I/O adds significant overhead — the buffer pool's thread-local cache is fast, but skipping it entirely is faster. For write workloads, overwrite the buffer content in place before each submission.
+4.  **Pre-allocate Buffers**: Call `aura_buffer_alloc()` once per slot at startup and reuse the same buffers across I/O operations. Calling alloc/free on every I/O adds significant overhead — the buffer pool's thread-local cache is fast, but skipping it entirely is faster. For write workloads, overwrite the buffer content in place before each submission.
 
     ```c
     // At startup: pre-allocate one buffer per in-flight slot
     void *bufs[DEPTH];
     for (int i = 0; i < DEPTH; i++)
-        bufs[i] = auraio_buffer_alloc(engine, BUF_SIZE);
+        bufs[i] = aura_buffer_alloc(engine, BUF_SIZE);
 
     // Hot loop: reuse buffers, no alloc/free
     void *buf = bufs[slot];
-    auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, offset, cb, data);
+    aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, cb, data);
 
     // At shutdown: free once
     for (int i = 0; i < DEPTH; i++)
-        auraio_buffer_free(engine, bufs[i], BUF_SIZE);
+        aura_buffer_free(engine, bufs[i], BUF_SIZE);
     ```
 
-5.  **Use `auraio_poll()` in Hot Loops**: Prefer the non-blocking `auraio_poll()` over `auraio_wait(engine, timeout_ms)` when your thread is actively submitting I/O. `auraio_wait()` with even a 1ms timeout can stall the pipeline on fast media (tmpfs, Optane, NVMe) where completions arrive in microseconds. Use `auraio_wait()` only when you need to block (drain loops, idle event loops).
+5.  **Use `aura_poll()` in Hot Loops**: Prefer the non-blocking `aura_poll()` over `aura_wait(engine, timeout_ms)` when your thread is actively submitting I/O. `aura_wait()` with even a 1ms timeout can stall the pipeline on fast media (tmpfs, Optane, NVMe) where completions arrive in microseconds. Use `aura_wait()` only when you need to block (drain loops, idle event loops).
 
     ```c
     // Hot loop: submit then poll without blocking
     while (running) {
         submit_batch(engine, ...);
-        auraio_poll(engine);  // non-blocking, processes whatever is ready
+        aura_poll(engine);  // non-blocking, processes whatever is ready
     }
 
     // Drain loop: blocking is fine here
     while (inflight > 0)
-        auraio_wait(engine, 100);
+        aura_wait(engine, 100);
     ```
 
 6.  **Set `initial_in_flight` to Match Your Workload**: The AIMD controller defaults to starting at `queue_depth / 4` and ramping up over ~1 second. This is the right default for latency-sensitive production workloads, but it means the first second of I/O runs at reduced concurrency. If your workload has a short ramp time, needs to reach peak throughput immediately, or is a benchmark without latency constraints, set `initial_in_flight` to your target depth at engine creation.
 
     ```c
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = 512;
 
     // Benchmark / throughput-only: start at full depth
@@ -140,16 +140,16 @@ AuraIO is designed to scale linearly on large-core servers with high-bandwidth s
 ```c
 // At startup: register all file descriptors
 int fds[] = { fd1, fd2, fd3, /* ... */ };
-auraio_register_files(engine, fds, count);
+aura_register_files(engine, fds, count);
 
 // I/O operations automatically use registered files when available.
-// No change needed to auraio_read/auraio_write calls.
+// No change needed to aura_read/aura_write calls.
 
 // To replace a file descriptor (e.g., log rotation):
-auraio_update_file(engine, index, new_fd);
+aura_update_file(engine, index, new_fd);
 
 // At shutdown:
-auraio_unregister_files(engine);
+aura_unregister_files(engine);
 ```
 
 **How to use (C++)**:
@@ -171,7 +171,7 @@ engine.unregister_files();
 **Guidelines**:
 - Register all file descriptors that will be used for high-frequency I/O at engine startup.
 - Registration is applied to all rings and requires a brief lock per ring — do it once, not per-request.
-- The `auraio_update_file()` function allows replacing individual file descriptors without unregistering the entire set (useful for log rotation or connection recycling).
+- The `aura_update_file()` function allows replacing individual file descriptors without unregistering the entire set (useful for log rotation or connection recycling).
 - There is no AuraIO-imposed limit on registered file count; the limit comes from the kernel (typically 64K+ on modern kernels).
 
 ### Registered Buffers — Zero-Copy I/O
@@ -193,16 +193,16 @@ for (int i = 0; i < NUM_BUFFERS; i++) {
     bufs[i] = aligned_alloc(4096, BUF_SIZE);
     iovs[i] = (struct iovec){ .iov_base = bufs[i], .iov_len = BUF_SIZE };
 }
-auraio_register_buffers(engine, iovs, NUM_BUFFERS);
+aura_register_buffers(engine, iovs, NUM_BUFFERS);
 
 // Use registered buffers by index:
-auraio_read(engine, fd, auraio_buf_fixed(0, 0), BUF_SIZE, offset, cb, data);
+aura_read(engine, fd, aura_buf_fixed(0, 0), BUF_SIZE, offset, cb, data);
 
 // For sub-buffer offsets (reading into the middle of a registered buffer):
-auraio_read(engine, fd, auraio_buf_fixed(0, 2048), 2048, offset, cb, data);
+aura_read(engine, fd, aura_buf_fixed(0, 2048), 2048, offset, cb, data);
 
 // At shutdown:
-auraio_unregister_buffers(engine);
+aura_unregister_buffers(engine);
 for (int i = 0; i < NUM_BUFFERS; i++) free(bufs[i]);
 ```
 
@@ -228,7 +228,7 @@ engine.unregister_buffers();
 - Register buffers for your hottest I/O paths (metadata reads, index lookups, small random I/O).
 - Registered buffers must remain valid and at the same address for the lifetime of the registration.
 - No in-flight operations may reference registered buffers when calling `unregister_buffers`.
-- You can mix registered and unregistered buffers freely — use `auraio_buf()` for regular buffers and `auraio_buf_fixed()` for registered ones.
+- You can mix registered and unregistered buffers freely — use `aura_buf()` for regular buffers and `aura_buf_fixed()` for registered ones.
 
 ### SQPOLL — Kernel-Side Submission Polling
 
@@ -239,11 +239,11 @@ engine.unregister_buffers();
 **How to use (C)**:
 
 ```c
-auraio_options_t opts;
-auraio_options_init(&opts);
+aura_options_t opts;
+aura_options_init(&opts);
 opts.enable_sqpoll = true;
 opts.sqpoll_idle_ms = 2000;  // Kernel thread sleeps after 2s idle
-auraio_engine_t *engine = auraio_create_with_options(&opts);
+aura_engine_t *engine = aura_create_with_options(&opts);
 ```
 
 **How to use (C++)**:
@@ -267,8 +267,8 @@ For production deployments targeting high IOPS on large-core systems:
 
 | Step | API | Impact |
 |------|-----|--------|
-| 1. Register file descriptors | `auraio_register_files()` | Eliminates kernel `fget`/`fput` atomic contention per-op |
-| 2. Register I/O buffers | `auraio_register_buffers()` | Eliminates kernel page-pinning per-op |
+| 1. Register file descriptors | `aura_register_files()` | Eliminates kernel `fget`/`fput` atomic contention per-op |
+| 2. Register I/O buffers | `aura_register_buffers()` | Eliminates kernel page-pinning per-op |
 | 3. Enable SQPOLL (if latency-critical) | `opts.enable_sqpoll = true` | Eliminates `io_uring_enter` syscall on submission |
 | 4. Use `O_DIRECT` | `open(..., O_DIRECT)` | Bypasses page cache; AIMD sees true device latency |
 | 5. Pin worker threads | `pthread_setaffinity_np()` | Keeps I/O data hot in L1/L2 cache |
@@ -368,7 +368,7 @@ Each test phase runs for a configurable duration (default 5s measurement + 1s wa
 make perf-regression
 
 # Against a real device (best for stable numbers)
-AURAIO_PERF_FILE=/dev/nvme0n1 make perf-regression
+AURA_PERF_FILE=/dev/nvme0n1 make perf-regression
 
 # Quick smoke test (2s per test, 1s warmup)
 cd tests && ./perf_regression --duration 2 --warmup 1 --depths 32,64
@@ -379,7 +379,7 @@ cd tests && ./perf_regression --duration 2 --warmup 1 --depths 32,64
 
 ### Interpreting Results
 
-The test reports IOPS overhead as a percentage: `(raw_IOPS - auraio_IOPS) / raw_IOPS * 100`. The exit code is 0 (PASS) if overhead is below the threshold (default 10%), 1 (FAIL) if above.
+The test reports IOPS overhead as a percentage: `(raw_IOPS - aura_IOPS) / raw_IOPS * 100`. The exit code is 0 (PASS) if overhead is below the threshold (default 10%), 1 (FAIL) if above.
 
 **Negative overhead** (AuraIO faster than raw) is common and expected — AuraIO's batch flush logic often achieves better syscall amortization than the fixed-batch raw loop. This is a feature: the adaptive controller's batch optimizer is doing its job.
 

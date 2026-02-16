@@ -114,11 +114,11 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
      * Cache-line aligned so requests[0] starts on a 64-byte boundary.
      * Combined with the 128-byte struct size this guarantees each request
      * occupies exactly 2 cache lines with no neighbor sharing. */
-    ctx->requests = aligned_alloc(64, (size_t)queue_depth * sizeof(auraio_request_t));
+    ctx->requests = aligned_alloc(64, (size_t)queue_depth * sizeof(aura_request_t));
     if (!ctx->requests) {
         goto cleanup_ring;
     }
-    memset(ctx->requests, 0, (size_t)queue_depth * sizeof(auraio_request_t));
+    memset(ctx->requests, 0, (size_t)queue_depth * sizeof(aura_request_t));
 
     ctx->free_request_stack = malloc(queue_depth * sizeof(int));
     if (!ctx->free_request_stack) {
@@ -193,7 +193,7 @@ void ring_destroy(ring_ctx_t *ctx) {
     }
 
     if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0) {
-        auraio_log(AURAIO_LOG_WARN, "ring_destroy timed out with %d ops still pending",
+        aura_log(AURA_LOG_WARN, "ring_destroy timed out with %d ops still pending",
                    (int)atomic_load_explicit(&ctx->pending_count, memory_order_relaxed));
     }
 
@@ -219,13 +219,13 @@ void ring_destroy(ring_ctx_t *ctx) {
  * Request Management
  * ============================================================================ */
 
-auraio_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
+aura_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     if (!ctx || ctx->free_request_count == 0) {
         return NULL;
     }
 
     int idx = ctx->free_request_stack[--ctx->free_request_count];
-    auraio_request_t *req = &ctx->requests[idx];
+    aura_request_t *req = &ctx->requests[idx];
 
     /* Zero only the variant fields that differ between operation types.
      * Fields always set by callers (fd, callback, user_data, ring_idx,
@@ -256,7 +256,7 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
 
     /* Guard against double-free: if stack is already full, something is wrong */
     if (ctx->free_request_count >= ctx->max_requests) {
-        auraio_log(AURAIO_LOG_ERR,
+        aura_log(AURA_LOG_ERR,
                    "BUG: ring_put_request double-free detected (op_idx=%d, ring=%p)", op_idx,
                    (void *)ctx);
         return;
@@ -269,13 +269,13 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
  * Submission Operations
  * ============================================================================ */
 
-static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const auraio_request_t *req) {
+static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const aura_request_t *req) {
     if (req->uses_registered_file) {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
 }
 
-int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -295,7 +295,7 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_READ;
+    req->op_type = AURA_OP_READ;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -308,7 +308,7 @@ int ring_submit_read(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -328,7 +328,7 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_WRITE;
+    req->op_type = AURA_OP_WRITE;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -341,7 +341,7 @@ int ring_submit_write(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !req->iov || req->iovcnt <= 0 || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -357,7 +357,7 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_READV;
+    req->op_type = AURA_OP_READV;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -370,7 +370,7 @@ int ring_submit_readv(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !req->iov || req->iovcnt <= 0 || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -386,7 +386,7 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_WRITEV;
+    req->op_type = AURA_OP_WRITEV;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -399,7 +399,7 @@ int ring_submit_writev(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -415,7 +415,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_FSYNC;
+    req->op_type = AURA_OP_FSYNC;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -427,7 +427,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -444,7 +444,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_FDATASYNC;
+    req->op_type = AURA_OP_FDATASYNC;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -456,7 +456,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t *target) {
+int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target) {
     if (!ctx || !req || !target || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -472,7 +472,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
     io_uring_prep_cancel(sqe, target, 0);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_CANCEL;
+    req->op_type = AURA_OP_CANCEL;
     req->submit_time_ns = 0; /* Cancel ops skip latency tracking */
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
@@ -483,7 +483,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, auraio_request_t *req, auraio_request_t 
     return (0);
 }
 
-int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -502,7 +502,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_READ_FIXED;
+    req->op_type = AURA_OP_READ_FIXED;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -515,7 +515,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     return (0);
 }
 
-int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
+int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
@@ -531,7 +531,7 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     sqe_apply_fixed_file(sqe, req);
     io_uring_sqe_set_data(sqe, req);
 
-    req->op_type = AURAIO_OP_WRITE_FIXED;
+    req->op_type = AURA_OP_WRITE_FIXED;
     req->submit_time_ns =
         (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
@@ -541,6 +541,105 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, auraio_request_t *req) {
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
+    return (0);
+}
+
+/* ============================================================================
+ * Lifecycle Metadata Operations
+ *
+ * These skip AIMD latency sampling (submit_time_ns = 0) and don't update
+ * bytes_submitted — metadata ops are not throughput-sensitive.
+ * ============================================================================ */
+
+/** Common preamble for metadata submission: validate + get SQE. */
+static struct io_uring_sqe *meta_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
+    if (!ctx || !req || !ctx->ring_initialized) {
+        errno = EINVAL;
+        return NULL;
+    }
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
+    if (!sqe) {
+        errno = EBUSY;
+        return NULL;
+    }
+    return sqe;
+}
+
+/** Common postamble for metadata submission. */
+static void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
+    req->op_type = op;
+    req->submit_time_ns = 0; /* Skip AIMD sampling */
+    atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
+    ctx->queued_sqes++;
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
+}
+
+int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_openat(sqe, req->fd, req->meta.open.pathname, req->meta.open.flags,
+                         req->meta.open.mode);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_OPENAT);
+    return (0);
+}
+
+int ring_submit_close(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_close(sqe, req->fd);
+    /* No sqe_apply_fixed_file: close always uses the raw fd.
+     * IOSQE_FIXED_FILE on close means "unregister slot", not "close fd". */
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_CLOSE);
+    return (0);
+}
+
+int ring_submit_statx(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_statx(sqe, req->fd, req->meta.statx.pathname, req->meta.statx.flags,
+                        req->meta.statx.mask, req->meta.statx.buf);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_STATX);
+    return (0);
+}
+
+int ring_submit_fallocate(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_fallocate(sqe, req->fd, req->meta.fallocate.mode, req->offset, (off_t)req->len);
+    sqe_apply_fixed_file(sqe, req);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_FALLOCATE);
+    return (0);
+}
+
+int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_ftruncate(sqe, req->fd, (loff_t)req->len);
+    sqe_apply_fixed_file(sqe, req);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_FTRUNCATE);
+    return (0);
+}
+
+int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
+    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+
+    io_uring_prep_sync_file_range(sqe, req->fd, (unsigned)req->len, req->offset,
+                                  req->meta.sync_range.flags);
+    sqe_apply_fixed_file(sqe, req);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_SYNC_FILE_RANGE);
     return (0);
 }
 
@@ -584,7 +683,7 @@ int ring_flush(ring_ctx_t *ctx) {
 typedef struct {
     int op_idx;
     ssize_t result;
-    auraio_op_type_t op_type;
+    aura_op_type_t op_type;
 } retire_entry_t;
 
 /**
@@ -594,8 +693,8 @@ typedef struct {
  * Returns the retirement info needed for deferred counter updates.
  * Must be called before ring_retire_batch().
  */
-static retire_entry_t process_completion(ring_ctx_t *ctx, auraio_request_t *req, ssize_t result) {
-    retire_entry_t retire = { .op_idx = -1, .result = result, .op_type = AURAIO_OP_CANCEL };
+static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, ssize_t result) {
+    retire_entry_t retire = { .op_idx = -1, .result = result, .op_type = AURA_OP_CANCEL };
 
     if (!req) {
         return retire;
@@ -606,7 +705,7 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, auraio_request_t *req,
      * so we must capture everything we need before potential reuse. */
     retire.op_idx = req->op_idx;
     retire.op_type = req->op_type;
-    auraio_callback_t callback = req->callback;
+    aura_callback_t callback = req->callback;
     void *user_data = req->user_data;
 
     /* Record completion for adaptive controller BEFORE callback.
@@ -621,18 +720,18 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, auraio_request_t *req,
     }
 
     /* Mark as no longer pending just before callback invocation.
-     * This ensures auraio_request_pending() returns false only when
+     * This ensures aura_request_pending() returns false only when
      * the callback is about to fire (not earlier). */
     atomic_store_explicit(&req->pending, false, memory_order_release);
 
     /* Invoke callback WITHOUT holding lock to prevent deadlock.
-     * If the callback calls auraio_read/write, it will try to acquire
+     * If the callback calls aura_read/write, it will try to acquire
      * the lock, which would deadlock with non-recursive mutexes.
      * The req pointer remains valid because ring_put_request hasn't
      * been called yet. */
     if (callback) {
         callback_context_depth++;
-        callback((auraio_request_t *)req, result, user_data);
+        callback((aura_request_t *)req, result, user_data);
         callback_context_depth--;
     }
 
@@ -668,7 +767,7 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
         }
         /* Don't count cancel operations in ops_completed — they are
          * internal bookkeeping, not user I/O operations. */
-        if (entries[i].op_type != AURAIO_OP_CANCEL) {
+        if (entries[i].op_type != AURA_OP_CANCEL) {
             ctx->ops_completed++;
             if (entries[i].result > 0) {
                 ctx->bytes_completed += entries[i].result;
@@ -702,7 +801,7 @@ int ring_poll(ring_ctx_t *ctx) {
      * request slots in a single lock hold. This amortizes mutex overhead
      * from O(completions) to O(completions / RING_POLL_BATCH). */
     struct {
-        auraio_request_t *req;
+        aura_request_t *req;
         ssize_t result;
     } batch[RING_POLL_BATCH];
     retire_entry_t retire[RING_POLL_BATCH];
@@ -753,7 +852,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
 
     /* Batch buffers shared by all paths. */
     struct {
-        auraio_request_t *req;
+        aura_request_t *req;
         ssize_t result;
     } batch[RING_POLL_BATCH];
     retire_entry_t retire[RING_POLL_BATCH];

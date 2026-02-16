@@ -8,12 +8,12 @@
 //!
 //! Usage: cargo run --example registered_buffers --manifest-path examples/rust/Cargo.toml
 
-use auraio::{BufferRef, Engine, Result};
+use aura::{BufferRef, Engine, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-const TEST_FILE: &str = "/tmp/auraio_reg_buf_test.dat";
+const TEST_FILE: &str = "/tmp/aura_reg_buf_test.dat";
 const FILE_SIZE: usize = 1 * 1024 * 1024; // 1 MB
 const BUF_SIZE: usize = 4096;
 const NUM_BUFFERS: usize = 4;
@@ -23,7 +23,7 @@ fn run_benchmark(
     engine: &Engine,
     fd: i32,
     use_registered: bool,
-    buffers: &[auraio::Buffer],
+    buffers: &[aura::Buffer],
 ) -> Result<f64> {
     let completed = Arc::new(AtomicUsize::new(0));
     let start = Instant::now();
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
         )
     };
     if wfd < 0 {
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     let data = vec![0u8; FILE_SIZE];
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     }
     if written != FILE_SIZE as isize {
         std::fs::remove_file(TEST_FILE).ok();
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // Open for reading
@@ -108,7 +108,7 @@ fn main() -> Result<()> {
     };
     if fd < 0 {
         std::fs::remove_file(TEST_FILE).ok();
-        return Err(auraio::Error::Io(std::io::Error::last_os_error()));
+        return Err(aura::Error::Io(std::io::Error::last_os_error()));
     }
 
     // ===================================================================

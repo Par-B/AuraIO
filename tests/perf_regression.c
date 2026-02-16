@@ -23,11 +23,11 @@
  *   --verbose          Show per-depth sweep results
  *
  * Environment:
- *   AURAIO_PERF_FILE   Same as --file (CLI takes precedence)
+ *   AURA_PERF_FILE   Same as --file (CLI takes precedence)
  */
 
 #define _GNU_SOURCE
-#include <auraio.h>
+#include <aura.h>
 #include <liburing.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -157,7 +157,7 @@ typedef struct {
 // ============================================================================
 
 static int create_temp_file(perf_config_t *cfg) {
-    char path[] = "/tmp/auraio_perf_XXXXXX";
+    char path[] = "/tmp/aura_perf_XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) {
         perror("mkstemp");
@@ -524,15 +524,15 @@ static perf_result_t run_raw_uring(int fd, const perf_config_t *cfg, int depth,
 // AuraIO benchmark (time-bound)
 // ============================================================================
 
-typedef struct aura_ctx aura_ctx_t;
+typedef struct perf_ctx perf_ctx_t;
 
 typedef struct {
-    aura_ctx_t *ctx;
+    perf_ctx_t *ctx;
     uint64_t submit_ns;
     int slot_idx;
-} aura_slot_t;
+} perf_slot_t;
 
-struct aura_ctx {
+struct perf_ctx {
     latency_hist_t hist;
     int completed;
     int measured_ops;
@@ -546,11 +546,11 @@ struct aura_ctx {
     int free_top;
 };
 
-static void aura_callback(auraio_request_t *req, ssize_t res, void *user_data) {
+static void aura_callback(aura_request_t *req, ssize_t res, void *user_data) {
     (void)req;
     (void)res;
-    aura_slot_t *slot = user_data;
-    aura_ctx_t *ctx = slot->ctx;
+    perf_slot_t *slot = user_data;
+    perf_ctx_t *ctx = slot->ctx;
 
     ctx->completed++;
 
@@ -577,27 +577,27 @@ static void aura_callback(auraio_request_t *req, ssize_t res, void *user_data) {
     }
 }
 
-static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, bool adaptive,
+static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool adaptive,
                                 const off_t *offsets, int warmup_sec) {
     perf_result_t result = { 0 };
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = depth;
     opts.ring_count = 1;
     opts.single_thread = true;
     opts.disable_adaptive = !adaptive;
     if (!adaptive) opts.initial_in_flight = depth;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
-        fprintf(stderr, "auraio_create_with_options failed: %s\n", strerror(errno));
+        fprintf(stderr, "aura_create_with_options failed: %s\n", strerror(errno));
         return result;
     }
 
     int num_bufs = depth;
     void **bufs = malloc((size_t)num_bufs * sizeof(void *));
-    aura_slot_t *slots = calloc((size_t)num_bufs, sizeof(aura_slot_t));
+    perf_slot_t *slots = calloc((size_t)num_bufs, sizeof(perf_slot_t));
     for (int i = 0; i < num_bufs; i++) bufs[i] = aligned_alloc(4096, (size_t)cfg->block_size);
 
     // Free-slot stack to prevent buffer aliasing on OOO completions
@@ -609,7 +609,7 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
     uint64_t measure_ns = (uint64_t)cfg->duration_sec * 1000000000ULL;
     uint64_t start = now_ns();
 
-    aura_ctx_t ctx = { 0 };
+    perf_ctx_t ctx = { 0 };
     hist_reset(&ctx.hist);
     ctx.warming_up = true;
     ctx.warmup_deadline = start + warmup_ns;
@@ -633,7 +633,7 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
         if (!ctx.warming_up && now >= ctx.measure_deadline) {
             if (inflight == 0) break;
             // Drain remaining
-            auraio_wait(engine, 1);
+            aura_wait(engine, 1);
             inflight = submitted - ctx.completed;
             continue;
         }
@@ -648,13 +648,13 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
             else slots[slot].submit_ns = 0;
             sample_counter++;
 
-            auraio_request_t *req =
-                auraio_read(engine, fd, auraio_buf(bufs[slot]), (size_t)cfg->block_size,
+            aura_request_t *req =
+                aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cfg->block_size,
                             offsets[submitted % OFFSET_TABLE_SIZE], aura_callback, &slots[slot]);
             if (!req) {
                 // Engine full, return slot and drain some completions
                 ctx.free_stack[ctx.free_top++] = slot;
-                auraio_wait(engine, 1);
+                aura_wait(engine, 1);
                 inflight = submitted - ctx.completed;
                 continue;
             }
@@ -663,8 +663,8 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
         }
 
         // Drain completions
-        int n = auraio_poll(engine);
-        if (n == 0 && inflight > 0) auraio_wait(engine, 1);
+        int n = aura_poll(engine);
+        if (n == 0 && inflight > 0) aura_wait(engine, 1);
         inflight = submitted - ctx.completed;
     }
 
@@ -678,15 +678,15 @@ static perf_result_t run_auraio(int fd, const perf_config_t *cfg, int depth, boo
 
     // Get AIMD converged depth
     if (adaptive) {
-        auraio_ring_stats_t rstats;
-        if (auraio_get_ring_stats(engine, 0, &rstats) == 0)
+        aura_ring_stats_t rstats;
+        if (aura_get_ring_stats(engine, 0, &rstats) == 0)
             result.depth_used = rstats.in_flight_limit;
         else result.depth_used = depth;
     } else {
         result.depth_used = depth;
     }
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
     for (int i = 0; i < num_bufs; i++) free(bufs[i]);
     free(bufs);
     free(slots);
@@ -757,7 +757,7 @@ static void usage(const char *prog) {
             "  --verbose          Show all sweep results\n"
             "\n"
             "Environment:\n"
-            "  AURAIO_PERF_FILE   Same as --file (CLI takes precedence)\n",
+            "  AURA_PERF_FILE   Same as --file (CLI takes precedence)\n",
             prog, DEFAULT_DURATION_SEC, DEFAULT_WARMUP_SEC, DEFAULT_BLOCK_SIZE, DEFAULT_BATCH_SIZE,
             DEFAULT_THRESHOLD);
 }
@@ -812,7 +812,7 @@ int main(int argc, char **argv) {
 
     // File: CLI > env > temp
     if (!cfg.file_path) {
-        const char *env = getenv("AURAIO_PERF_FILE");
+        const char *env = getenv("AURA_PERF_FILE");
         if (env && env[0]) cfg.file_path = env;
     }
 
@@ -928,7 +928,7 @@ int main(int argc, char **argv) {
 
     // ---- AuraIO static (matching raw-optimal depth) ----
     printf("--- AuraIO (static, 1 ring, depth=%d) ---\n", best_depth);
-    perf_result_t aura_static = run_auraio(fd, &cfg, best_depth, false, offsets, cfg.warmup_sec);
+    perf_result_t aura_static = run_aura(fd, &cfg, best_depth, false, offsets, cfg.warmup_sec);
     print_result("", &aura_static, false);
     printf("\n");
 
@@ -938,7 +938,7 @@ int main(int argc, char **argv) {
     printf("--- AuraIO (adaptive, 1 ring, depth=%d) ---\n", adaptive_depth);
 
     perf_result_t aura_adaptive =
-        run_auraio(fd, &cfg, adaptive_depth, true, offsets, adaptive_warmup);
+        run_aura(fd, &cfg, adaptive_depth, true, offsets, adaptive_warmup);
     print_result("", &aura_adaptive, false);
     printf("  (AIMD converged depth: %d)\n", aura_adaptive.depth_used);
     printf("\n");

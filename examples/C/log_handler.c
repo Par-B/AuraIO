@@ -5,14 +5,14 @@
  * Shows how to install a custom log callback that formats library
  * messages with timestamps and severity levels, and how to emit
  * application-level messages through the same pipeline using
- * auraio_log_emit().
+ * aura_log_emit().
  *
  * Build: make examples
  * Run:   ./examples/C/log_handler
  */
 
 #define _POSIX_C_SOURCE 200112L
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +22,7 @@
 #include <stdatomic.h>
 #include <time.h>
 
-#define TEST_FILE "/tmp/auraio_log_test.dat"
+#define TEST_FILE "/tmp/aura_log_test.dat"
 #define FILE_SIZE (64 * 1024) /* 64 KB */
 #define BUF_SIZE 4096
 
@@ -44,15 +44,15 @@ typedef struct {
 
 static const char *level_name(int level) {
     switch (level) {
-    case AURAIO_LOG_ERR:
+    case AURA_LOG_ERR:
         return "ERR";
-    case AURAIO_LOG_WARN:
+    case AURA_LOG_WARN:
         return "WARN";
-    case AURAIO_LOG_NOTICE:
+    case AURA_LOG_NOTICE:
         return "NOTICE";
-    case AURAIO_LOG_INFO:
+    case AURA_LOG_INFO:
         return "INFO";
-    case AURAIO_LOG_DEBUG:
+    case AURA_LOG_DEBUG:
         return "DEBUG";
     default:
         return "???";
@@ -84,10 +84,10 @@ static void my_log_handler(int level, const char *msg, void *userdata) {
 /* Simple I/O completion tracking */
 static atomic_int io_completed = 0;
 
-static void on_complete(auraio_request_t *req, ssize_t result, void *user_data) {
+static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
-    if (result < 0) auraio_log_emit(AURAIO_LOG_ERR, "I/O error: %zd", result);
+    if (result < 0) aura_log_emit(AURA_LOG_ERR, "I/O error: %zd", result);
     io_completed++;
 }
 
@@ -99,37 +99,37 @@ int main(void) {
     log_context_t log_ctx = {
         .output = stderr,
         .prefix = "myapp",
-        .max_level = AURAIO_LOG_DEBUG, /* Show all levels */
+        .max_level = AURA_LOG_DEBUG, /* Show all levels */
     };
 
     /* Install handler BEFORE creating the engine so we capture any
      * startup diagnostics. */
-    auraio_set_log_handler(my_log_handler, &log_ctx);
+    aura_set_log_handler(my_log_handler, &log_ctx);
 
     /* --- Step 2: Emit application-level messages ----------------------- */
-    auraio_log_emit(AURAIO_LOG_INFO, "log handler installed, creating engine");
+    aura_log_emit(AURA_LOG_INFO, "log handler installed, creating engine");
 
     /* --- Step 3: Create engine and do I/O ------------------------------ */
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.ring_count = 1;
     opts.queue_depth = 64;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
-        auraio_log_emit(AURAIO_LOG_ERR, "failed to create engine: %s", strerror(errno));
-        auraio_set_log_handler(NULL, NULL);
+        aura_log_emit(AURA_LOG_ERR, "failed to create engine: %s", strerror(errno));
+        aura_set_log_handler(NULL, NULL);
         return 1;
     }
 
-    auraio_log_emit(AURAIO_LOG_NOTICE, "engine created (1 ring, depth 64)");
+    aura_log_emit(AURA_LOG_NOTICE, "engine created (1 ring, depth 64)");
 
     /* Create test file */
     int wfd = open(TEST_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (wfd < 0) {
         perror("create test file");
-        auraio_destroy(engine);
-        auraio_set_log_handler(NULL, NULL);
+        aura_destroy(engine);
+        aura_set_log_handler(NULL, NULL);
         return 1;
     }
 
@@ -139,8 +139,8 @@ int main(void) {
         perror("write test file");
         close(wfd);
         unlink(TEST_FILE);
-        auraio_destroy(engine);
-        auraio_set_log_handler(NULL, NULL);
+        aura_destroy(engine);
+        aura_set_log_handler(NULL, NULL);
         return 1;
     }
     close(wfd);
@@ -150,53 +150,53 @@ int main(void) {
     if (fd < 0) {
         perror("open test file");
         unlink(TEST_FILE);
-        auraio_destroy(engine);
-        auraio_set_log_handler(NULL, NULL);
+        aura_destroy(engine);
+        aura_set_log_handler(NULL, NULL);
         return 1;
     }
 
-    void *buf = auraio_buffer_alloc(engine, BUF_SIZE);
+    void *buf = aura_buffer_alloc(engine, BUF_SIZE);
     if (!buf) {
-        perror("auraio_buffer_alloc");
+        perror("aura_buffer_alloc");
         close(fd);
         unlink(TEST_FILE);
-        auraio_destroy(engine);
-        auraio_set_log_handler(NULL, NULL);
+        aura_destroy(engine);
+        aura_set_log_handler(NULL, NULL);
         return 1;
     }
 
-    auraio_log_emit(AURAIO_LOG_DEBUG, "submitting read: fd=%d offset=0 size=%d", fd, BUF_SIZE);
+    aura_log_emit(AURA_LOG_DEBUG, "submitting read: fd=%d offset=0 size=%d", fd, BUF_SIZE);
 
     io_completed = 0;
-    auraio_request_t *req =
-        auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, 0, on_complete, NULL);
+    aura_request_t *req =
+        aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_complete, NULL);
     if (!req) {
-        auraio_log_emit(AURAIO_LOG_ERR, "auraio_read failed: %s", strerror(errno));
+        aura_log_emit(AURA_LOG_ERR, "aura_read failed: %s", strerror(errno));
     } else {
-        while (!io_completed) auraio_wait(engine, 100);
-        auraio_log_emit(AURAIO_LOG_INFO, "read completed successfully");
+        while (!io_completed) aura_wait(engine, 100);
+        aura_log_emit(AURA_LOG_INFO, "read completed successfully");
     }
 
     /* --- Step 4: Show stats -------------------------------------------- */
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
     printf("\nEngine stats:\n");
     printf("  Operations completed: %lld\n", (long long)stats.ops_completed);
     printf("  P99 latency: %.3f ms\n", stats.p99_latency_ms);
 
     /* --- Step 5: Clean up ---------------------------------------------- */
-    auraio_buffer_free(engine, buf, BUF_SIZE);
+    aura_buffer_free(engine, buf, BUF_SIZE);
     close(fd);
     unlink(TEST_FILE);
 
-    auraio_log_emit(AURAIO_LOG_NOTICE, "shutting down");
+    aura_log_emit(AURA_LOG_NOTICE, "shutting down");
 
     /* Destroy engine while handler is still installed so we capture any
      * shutdown diagnostics (e.g. timeout with pending ops). */
-    auraio_destroy(engine);
+    aura_destroy(engine);
 
     /* Handler no longer needed after engine is gone. */
-    auraio_set_log_handler(NULL, NULL);
+    aura_set_log_handler(NULL, NULL);
 
     printf("\n--- Summary ---\n");
     printf("The log handler captured all library and application messages\n");

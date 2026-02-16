@@ -1,12 +1,12 @@
 [package]
-name = "auraio-examples"
+name = "aura-examples"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-auraio = { path = "../../bindings/rust/auraio", features = ["async"] }
-auraio-sys = { path = "../../bindings/rust/auraio-sys" }
+aura = { path = "../../bindings/rust/aura", features = ["async"] }
+aura-sys = { path = "../../bindings/rust/aura-sys" }
 libc = "0.2"
 rand = "0.8"
 

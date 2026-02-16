@@ -43,14 +43,14 @@ For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 ## Code Style
 
 - C11, 4-space indent, snake_case
-- Prefixes: `auraio_` (public), `ring_`/`adaptive_`/`buffer_` (internal)
+- Prefixes: `aura_` (public), `ring_`/`adaptive_`/`buffer_` (internal)
 - Public API in `engine/include/auraio.h`, implementation in `engine/src/auraio.c`
 - Tuning constants at top of `engine/src/adaptive_engine.h`
 
 ## Development Workflow
 
 - **CHANGELOG.md**: Update before committing major changes (new features, breaking changes, significant refactors). Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
-- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/auraio.h` (AURAIO_VERSION_*) together with CHANGELOG.md.
+- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/auraio.h` (AURA_VERSION_*) together with CHANGELOG.md.
 
 ## Non-Obvious Patterns
 

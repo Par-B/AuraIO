@@ -4,8 +4,8 @@ This page clarifies AuraIO's asynchronous operation lifecycle for external users
 
 ## Two Error Phases
 
-1. **Submission phase**: `auraio_read/write/...` returns immediately.
-   - Success: non-NULL `auraio_request_t*`
+1. **Submission phase**: `aura_read/write/...` returns immediately.
+   - Success: non-NULL `aura_request_t*`
    - Failure: `NULL`, with `errno` set (see [Error Codes](#submission-error-codes))
 
 2. **Completion phase**: callback receives final operation result.
@@ -28,7 +28,7 @@ Submission success does not guarantee I/O success; final outcome is delivered at
 
 ## Request Handle Lifetime
 
-`auraio_request_t*` is valid only from submission until callback start.
+`aura_request_t*` is valid only from submission until callback start.
 
 ```
 submit() ──────> [handle valid] ──────> callback starts ──────> [INVALID]
@@ -38,7 +38,7 @@ submit() ──────> [handle valid] ──────> callback starts 
                  └─ request_fd()        └─ slot may be reused
 ```
 
-1. Valid for `auraio_cancel()` / `auraio_request_pending()` while pending.
+1. Valid for `aura_cancel()` / `aura_request_pending()` while pending.
 2. Invalid once callback begins — the request slot may be reused immediately.
 3. Must not be stored beyond the callback.
 
@@ -46,14 +46,14 @@ submit() ──────> [handle valid] ──────> callback starts 
 
 | Function | Blocking | Returns |
 |----------|----------|---------|
-| `auraio_poll(engine)` | No | Completions processed |
-| `auraio_wait(engine, timeout_ms)` | Yes (up to timeout) | Completions processed, or -1 on error |
-| `auraio_drain(engine, timeout_ms)` | Yes (until all complete) | Total completions, or -1 on timeout/error |
-| `auraio_run(engine)` | Yes (until stop) | — |
+| `aura_poll(engine)` | No | Completions processed |
+| `aura_wait(engine, timeout_ms)` | Yes (up to timeout) | Completions processed, or -1 on error |
+| `aura_drain(engine, timeout_ms)` | Yes (until all complete) | Total completions, or -1 on timeout/error |
+| `aura_run(engine)` | Yes (until stop) | — |
 
 - `poll`, `wait`, and `run` must NOT be called concurrently on the same engine.
 - Multiple threads may submit I/O concurrently while one thread polls/waits.
-- `auraio_stop()` is safe to call from any thread, including callbacks.
+- `aura_stop()` is safe to call from any thread, including callbacks.
 
 ## Registered Buffer Lifecycle
 
@@ -63,10 +63,10 @@ Registered buffers enable zero-copy I/O by pinning memory in the kernel.
 
 ```c
 struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
-auraio_register_buffers(engine, iovs, 2);
+aura_register_buffers(engine, iovs, 2);
 
 // Use registered buffers by index
-auraio_read(engine, fd, auraio_buf_fixed(0, 0), 4096, offset, cb, ud);
+aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
 ```
 
 ### Deferred Unregister (callback-safe)
@@ -75,7 +75,7 @@ Unregistering buffers while I/O is in-flight requires the deferred pattern:
 
 ```c
 // From a callback or any context:
-auraio_request_unregister_buffers(engine);
+aura_request_unregister_buffers(engine);
 // Returns immediately. New fixed-buffer submissions fail with EBUSY.
 // Actual unregister happens when all in-flight fixed-buffer ops complete.
 // After finalization, fixed-buffer submissions fail with ENOENT.
@@ -85,7 +85,7 @@ auraio_request_unregister_buffers(engine);
 
 ```c
 // From a non-callback context:
-auraio_unregister_buffers(engine);
+aura_unregister_buffers(engine);
 // Blocks until all in-flight fixed-buffer ops complete and unregister finishes.
 // If called from a callback, degrades to deferred mode automatically.
 ```
@@ -98,18 +98,18 @@ UNREGISTERED ──register──> REGISTERED ──request_unregister──> DR
 ```
 
 During DRAINING:
-- New `auraio_buf_fixed()` submissions fail with `EBUSY`
+- New `aura_buf_fixed()` submissions fail with `EBUSY`
 - In-flight fixed-buffer operations complete normally
 - Regular (non-fixed) I/O is unaffected
 
 ## Registered File Lifecycle
 
-File descriptor registration follows the same pattern as buffer registration, with `auraio_register_files()`, `auraio_request_unregister_files()`, and `auraio_unregister_files()`.
+File descriptor registration follows the same pattern as buffer registration, with `aura_register_files()`, `aura_request_unregister_files()`, and `aura_unregister_files()`.
 
 ## Recommended Pattern
 
 1. Submit operations and handle immediate errors (NULL return + errno).
 2. Use `poll`/`wait` loop to process completions.
 3. Treat callback result as source of truth for operation success/failure.
-4. For shutdown: `auraio_drain(engine, -1)` ensures all pending I/O completes.
+4. For shutdown: `aura_drain(engine, -1)` ensures all pending I/O completes.
 5. For registered buffers: use deferred unregister from callbacks, synchronous from main thread.

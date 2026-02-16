@@ -21,7 +21,7 @@ void output_normal(const job_result_t *results, int num_jobs,
  *
  * Matches the structure in tests/bench_results/fio_randread_4k.json.
  * Includes slat_ns/clat_ns (zeroed) for parser compatibility.
- * Adds "AuraIO" section with adaptive tuning info.
+ * Adds "Aura" section with adaptive tuning info.
  *
  * @param results  Array of job results
  * @param num_jobs Number of results

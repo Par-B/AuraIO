@@ -21,7 +21,7 @@
  *   --max-inflight <n>     Max concurrent I/O (default: 256)
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -49,7 +49,7 @@ struct Config {
     int num_files = 16;
     int max_inflight = 256;
     size_t file_size = 64 * 1024 * 1024;  // 64MB per file
-    std::string test_dir = "/tmp/auraio_stress";
+    std::string test_dir = "/tmp/aura_stress";
 };
 
 // =============================================================================
@@ -155,7 +155,7 @@ private:
 // Stress Test: High Concurrency Reads
 // =============================================================================
 
-void test_high_concurrency_reads(auraio::Engine& engine, const TestFiles& files,
+void test_high_concurrency_reads(aura::Engine& engine, const TestFiles& files,
                                   Stats& stats, int max_inflight, int duration_sec)
 {
     std::cout << "\n--- Test: High Concurrency Reads ---\n";
@@ -194,7 +194,7 @@ void test_high_concurrency_reads(auraio::Engine& engine, const TestFiles& files,
             if (done) break;
 
             try {
-                auto buffer = std::make_shared<auraio::Buffer>(engine.allocate_buffer(buf_size));
+                auto buffer = std::make_shared<aura::Buffer>(engine.allocate_buffer(buf_size));
                 stats.buffers_allocated++;
 
                 int fd = fds[fd_dist(gen)];
@@ -206,7 +206,7 @@ void test_high_concurrency_reads(auraio::Engine& engine, const TestFiles& files,
                 stats.ops_submitted++;
 
                 engine.read(fd, *buffer, buf_size, offset,
-                    [&stats, &inflight, buffer](auraio::Request&, ssize_t result) {
+                    [&stats, &inflight, buffer](aura::Request&, ssize_t result) {
                         inflight--;
                         if (result > 0) {
                             stats.bytes_read += result;
@@ -242,7 +242,7 @@ void test_high_concurrency_reads(auraio::Engine& engine, const TestFiles& files,
 // Stress Test: Mixed Read/Write Operations
 // =============================================================================
 
-void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
+void test_mixed_operations(aura::Engine& engine, const TestFiles& files,
                            Stats& stats, int max_inflight, int duration_sec)
 {
     std::cout << "\n--- Test: Mixed Read/Write/Fsync Operations ---\n";
@@ -280,7 +280,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
 
                 if (op < 60) {
                     // 60% reads
-                    auto buffer = std::make_shared<auraio::Buffer>(engine.allocate_buffer(buf_size));
+                    auto buffer = std::make_shared<aura::Buffer>(engine.allocate_buffer(buf_size));
                     stats.buffers_allocated++;
                     off_t offset = (off_dist(gen) / 4096) * 4096;
 
@@ -288,7 +288,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
                     stats.ops_submitted++;
 
                     engine.read(fd, *buffer, buf_size, offset,
-                        [&stats, &inflight, buffer](auraio::Request&, ssize_t result) {
+                        [&stats, &inflight, buffer](aura::Request&, ssize_t result) {
                             inflight--;
                             if (result > 0) {
                                 stats.bytes_read += result;
@@ -300,7 +300,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
                         });
                 } else if (op < 95) {
                     // 35% writes
-                    auto buffer = std::make_shared<auraio::Buffer>(engine.allocate_buffer(buf_size));
+                    auto buffer = std::make_shared<aura::Buffer>(engine.allocate_buffer(buf_size));
                     stats.buffers_allocated++;
                     std::memset(buffer->data(), 'W', buf_size);
                     off_t offset = (off_dist(gen) / 4096) * 4096;
@@ -309,7 +309,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
                     stats.ops_submitted++;
 
                     engine.write(fd, *buffer, buf_size, offset,
-                        [&stats, &inflight, buffer](auraio::Request&, ssize_t result) {
+                        [&stats, &inflight, buffer](aura::Request&, ssize_t result) {
                             inflight--;
                             if (result > 0) {
                                 stats.bytes_written += result;
@@ -324,7 +324,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
                     inflight++;
                     stats.ops_submitted++;
 
-                    engine.fsync(fd, [&stats, &inflight](auraio::Request&, ssize_t result) {
+                    engine.fsync(fd, [&stats, &inflight](aura::Request&, ssize_t result) {
                         inflight--;
                         if (result >= 0) {
                             stats.ops_completed++;
@@ -357,7 +357,7 @@ void test_mixed_operations(auraio::Engine& engine, const TestFiles& files,
 // Stress Test: Buffer Pool
 // =============================================================================
 
-void test_buffer_pool_stress(auraio::Engine& engine, Stats& stats, int duration_sec)
+void test_buffer_pool_stress(aura::Engine& engine, Stats& stats, int duration_sec)
 {
     std::cout << "\n--- Test: Buffer Pool Stress ---\n";
 
@@ -377,7 +377,7 @@ void test_buffer_pool_stress(auraio::Engine& engine, Stats& stats, int duration_
     for (int t = 0; t < 4; t++) {
         threads.emplace_back([&, seed = rd()]() {
             std::mt19937 local_gen(seed);
-            std::vector<auraio::Buffer> buffers;
+            std::vector<aura::Buffer> buffers;
             buffers.reserve(100);
 
             while (Clock::now() < end_time) {
@@ -421,7 +421,7 @@ void test_buffer_pool_stress(auraio::Engine& engine, Stats& stats, int duration_
 // Stress Test: Multi-threaded Submissions
 // =============================================================================
 
-void test_multithread_submissions(auraio::Engine& engine, const TestFiles& files,
+void test_multithread_submissions(aura::Engine& engine, const TestFiles& files,
                                    Stats& stats, int num_threads, int duration_sec)
 {
     std::cout << "\n--- Test: Multi-threaded Submissions (" << num_threads << " threads) ---\n";
@@ -455,7 +455,7 @@ void test_multithread_submissions(auraio::Engine& engine, const TestFiles& files
                 if (done) break;
 
                 try {
-                    auto buffer = std::make_shared<auraio::Buffer>(engine.allocate_buffer(buf_size));
+                    auto buffer = std::make_shared<aura::Buffer>(engine.allocate_buffer(buf_size));
                     stats.buffers_allocated++;
 
                     int fd = fds[fd_dist(gen)];
@@ -465,7 +465,7 @@ void test_multithread_submissions(auraio::Engine& engine, const TestFiles& files
                     stats.ops_submitted++;
 
                     engine.read(fd, *buffer, buf_size, offset,
-                        [&stats, &inflight, buffer](auraio::Request&, ssize_t result) {
+                        [&stats, &inflight, buffer](aura::Request&, ssize_t result) {
                             inflight--;
                             if (result > 0) {
                                 stats.bytes_read += result;
@@ -507,7 +507,7 @@ void test_multithread_submissions(auraio::Engine& engine, const TestFiles& files
 // Stress Test: Vectored I/O
 // =============================================================================
 
-void test_vectored_io(auraio::Engine& engine, const TestFiles& files,
+void test_vectored_io(aura::Engine& engine, const TestFiles& files,
                       Stats& stats, int duration_sec)
 {
     std::cout << "\n--- Test: Vectored I/O ---\n";
@@ -540,7 +540,7 @@ void test_vectored_io(auraio::Engine& engine, const TestFiles& files,
 
             try {
                 // Allocate buffers for scatter read
-                auto buffers = std::make_shared<std::vector<auraio::Buffer>>();
+                auto buffers = std::make_shared<std::vector<aura::Buffer>>();
                 auto iovecs = std::make_shared<std::vector<iovec>>();
 
                 for (int i = 0; i < num_chunks; i++) {
@@ -556,7 +556,7 @@ void test_vectored_io(auraio::Engine& engine, const TestFiles& files,
                 stats.ops_submitted++;
 
                 engine.readv(fd, std::span<const iovec>(*iovecs), offset,
-                    [&stats, &inflight, buffers, iovecs](auraio::Request&, ssize_t result) {
+                    [&stats, &inflight, buffers, iovecs](aura::Request&, ssize_t result) {
                         inflight--;
                         if (result > 0) {
                             stats.bytes_read += result;
@@ -591,7 +591,7 @@ void test_vectored_io(auraio::Engine& engine, const TestFiles& files,
 // Stress Test: Varying Buffer Sizes
 // =============================================================================
 
-void test_varying_buffer_sizes(auraio::Engine& engine, const TestFiles& files,
+void test_varying_buffer_sizes(aura::Engine& engine, const TestFiles& files,
                                 Stats& stats, int duration_sec)
 {
     std::cout << "\n--- Test: Varying Buffer Sizes ---\n";
@@ -625,7 +625,7 @@ void test_varying_buffer_sizes(auraio::Engine& engine, const TestFiles& files,
 
             try {
                 size_t buf_size = sizes[size_dist(gen)];
-                auto buffer = std::make_shared<auraio::Buffer>(engine.allocate_buffer(buf_size));
+                auto buffer = std::make_shared<aura::Buffer>(engine.allocate_buffer(buf_size));
                 stats.buffers_allocated++;
 
                 int fd = fds[fd_dist(gen)];
@@ -638,7 +638,7 @@ void test_varying_buffer_sizes(auraio::Engine& engine, const TestFiles& files,
                 stats.ops_submitted++;
 
                 engine.read(fd, *buffer, buf_size, offset,
-                    [&stats, &inflight, buffer](auraio::Request&, ssize_t result) {
+                    [&stats, &inflight, buffer](aura::Request&, ssize_t result) {
                         inflight--;
                         if (result > 0) {
                             stats.bytes_read += result;
@@ -724,11 +724,11 @@ int main(int argc, char** argv) {
         TestFiles files(config.test_dir, config.num_files, config.file_size);
 
         // Create engine
-        auraio::Options opts;
+        aura::Options opts;
         opts.queue_depth(512)
             .ring_count(0);  // Auto-detect
 
-        auraio::Engine engine(opts);
+        aura::Engine engine(opts);
         Stats stats;
 
         auto total_start = Clock::now();
@@ -761,7 +761,7 @@ int main(int argc, char** argv) {
         std::cout << "\n=== STRESS TEST PASSED ===\n";
         return 0;
 
-    } catch (const auraio::Error& e) {
+    } catch (const aura::Error& e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         return 1;
     } catch (const std::exception& e) {

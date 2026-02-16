@@ -11,7 +11,7 @@
  * Run:   ./examples/cpp/custom_config
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -23,7 +23,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-constexpr const char *TEST_FILE = "/tmp/auraio_config_test.dat";
+constexpr const char *TEST_FILE = "/tmp/aura_config_test.dat";
 constexpr size_t FILE_SIZE = 4 * 1024 * 1024; // 4 MB
 constexpr size_t BUF_SIZE = 4096;
 constexpr int NUM_OPS = 20;
@@ -31,14 +31,14 @@ constexpr int CONCURRENT_BUFS = 16;
 
 static std::atomic<int> completed{0};
 
-void completion_callback(auraio::Request &, ssize_t result) {
+void completion_callback(aura::Request &, ssize_t result) {
     if (result < 0) {
         std::cerr << "I/O error: " << result << "\n";
     }
     completed.fetch_add(1, std::memory_order_relaxed);
 }
 
-void print_stats(const std::string &config_name, auraio::Engine &engine, double elapsed_ms) {
+void print_stats(const std::string &config_name, aura::Engine &engine, double elapsed_ms) {
     auto stats = engine.get_stats();
 
     std::cout << "\n" << config_name << " Configuration:\n";
@@ -52,9 +52,9 @@ void print_stats(const std::string &config_name, auraio::Engine &engine, double 
     std::cout << "  Optimal batch size: " << stats.optimal_batch_size() << "\n";
 }
 
-void run_workload(auraio::Engine &engine, int fd, const std::string &config_name) {
+void run_workload(aura::Engine &engine, int fd, const std::string &config_name) {
     // Allocate buffers for concurrent operations
-    std::vector<auraio::Buffer> bufs;
+    std::vector<aura::Buffer> bufs;
     bufs.reserve(CONCURRENT_BUFS);
     for (int i = 0; i < CONCURRENT_BUFS; i++) {
         bufs.push_back(engine.allocate_buffer(BUF_SIZE));
@@ -75,7 +75,7 @@ void run_workload(auraio::Engine &engine, int fd, const std::string &config_name
             try {
                 (void)engine.read(fd, buf, BUF_SIZE, offset, completion_callback);
                 submitted++;
-            } catch (const auraio::Error &e) {
+            } catch (const aura::Error &e) {
                 std::cerr << "Read submission failed: " << e.what() << "\n";
                 break;
             }
@@ -104,14 +104,14 @@ int main() {
         // Create test file
         int wfd = open(TEST_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (wfd < 0) {
-            throw auraio::Error(errno, "create test file");
+            throw aura::Error(errno, "create test file");
         }
 
         std::vector<char> data(FILE_SIZE, 0);
         if (write(wfd, data.data(), FILE_SIZE) != static_cast<ssize_t>(FILE_SIZE)) {
             close(wfd);
             unlink(TEST_FILE);
-            throw auraio::Error(errno, "write test file");
+            throw aura::Error(errno, "write test file");
         }
         close(wfd);
 
@@ -119,7 +119,7 @@ int main() {
         int fd = open(TEST_FILE, O_RDONLY);
         if (fd < 0) {
             unlink(TEST_FILE);
-            throw auraio::Error(errno, "open test file");
+            throw aura::Error(errno, "open test file");
         }
 
         // ===================================================================
@@ -127,7 +127,7 @@ int main() {
         // ===================================================================
         std::cout << "Running with default configuration...\n";
         {
-            auraio::Engine engine_default;
+            aura::Engine engine_default;
             run_workload(engine_default, fd, "Default");
         }
 
@@ -139,13 +139,13 @@ int main() {
         // ===================================================================
         std::cout << "\nConfiguring for high throughput...\n";
         {
-            auraio::Options opts_throughput;
+            aura::Options opts_throughput;
             opts_throughput
                 .queue_depth(512)                             // Deeper queues for more pipelining
                 .initial_in_flight(128)                       // Start with high concurrency
-                .ring_select(auraio::RingSelect::RoundRobin); // Max single-thread scaling
+                .ring_select(aura::RingSelect::RoundRobin); // Max single-thread scaling
 
-            auraio::Engine engine_throughput(opts_throughput);
+            aura::Engine engine_throughput(opts_throughput);
             run_workload(engine_throughput, fd, "High Throughput");
         }
 
@@ -157,14 +157,14 @@ int main() {
         // ===================================================================
         std::cout << "\nConfiguring for low latency...\n";
         {
-            auraio::Options opts_latency;
+            aura::Options opts_latency;
             opts_latency
                 .max_p99_latency_ms(1.0)                    // Target 1ms P99
                 .initial_in_flight(8)                       // Start conservative
                 .min_in_flight(4)                           // Never go below 4
-                .ring_select(auraio::RingSelect::CpuLocal); // Best cache locality
+                .ring_select(aura::RingSelect::CpuLocal); // Best cache locality
 
-            auraio::Engine engine_latency(opts_latency);
+            aura::Engine engine_latency(opts_latency);
             run_workload(engine_latency, fd, "Low Latency");
         }
 
@@ -176,13 +176,13 @@ int main() {
         // ===================================================================
         std::cout << "\nConfiguring for adaptive tuning (production recommended)...\n";
         {
-            auraio::Options opts_adaptive;
+            aura::Options opts_adaptive;
             opts_adaptive
                 .queue_depth(256)                          // Balanced queue depth
-                .ring_select(auraio::RingSelect::Adaptive) // Power-of-two spilling
+                .ring_select(aura::RingSelect::Adaptive) // Power-of-two spilling
                 .max_p99_latency_ms(5.0);                  // Reasonable latency target
 
-            auraio::Engine engine_adaptive(opts_adaptive);
+            aura::Engine engine_adaptive(opts_adaptive);
             run_workload(engine_adaptive, fd, "Adaptive (Recommended)");
         }
 
@@ -192,12 +192,12 @@ int main() {
         // ===================================================================
         std::cout << "\nConfiguring with custom ring count...\n";
         {
-            auraio::Options opts_custom_rings;
+            aura::Options opts_custom_rings;
             opts_custom_rings
                 .ring_count(2) // Use only 2 rings (vs default per-CPU)
                 .queue_depth(256);
 
-            auraio::Engine engine_custom(opts_custom_rings);
+            aura::Engine engine_custom(opts_custom_rings);
             run_workload(engine_custom, fd, "Custom Ring Count (2)");
         }
 
@@ -216,7 +216,7 @@ int main() {
 
         return 0;
 
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         return 1;
     } catch (const std::exception &e) {

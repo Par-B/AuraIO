@@ -8,25 +8,25 @@ HARDEN_LDFLAGS = -Wl,-z,relro,-z,now
 LDFLAGS = $(HARDEN_LDFLAGS) -luring -lpthread
 CFLAGS += $(HARDEN_CFLAGS)
 
-# Version (keep in sync with engine/include/auraio.h)
+# Version (keep in sync with engine/include/aura.h)
 VERSION_MAJOR = 0
-VERSION_MINOR = 2
+VERSION_MINOR = 3
 VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
 # Source files
-SRC = engine/src/auraio.c engine/src/adaptive_engine.c engine/src/adaptive_ring.c engine/src/adaptive_buffer.c engine/src/log.c
+SRC = engine/src/aura.c engine/src/adaptive_engine.c engine/src/adaptive_ring.c engine/src/adaptive_buffer.c engine/src/log.c
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
 
-# Library names (SO versioning: libauraio.so -> libauraio.so.0 -> libauraio.so.0.1.0)
-LIB_SHARED = engine/lib/libauraio.so.$(VERSION)
-LIB_SONAME = libauraio.so.$(VERSION_MAJOR)
-LIB_LINKNAME = libauraio.so
-LIB_STATIC = engine/lib/libauraio.a
+# Library names (SO versioning: libaura.so -> libaura.so.0 -> libaura.so.0.1.0)
+LIB_SHARED = engine/lib/libaura.so.$(VERSION)
+LIB_SONAME = libaura.so.$(VERSION_MAJOR)
+LIB_LINKNAME = libaura.so
+LIB_STATIC = engine/lib/libaura.a
 
 # pkg-config file
-PKGCONFIG = engine/lib/libauraio.pc
+PKGCONFIG = engine/lib/libaura.pc
 
 # Installation paths
 PREFIX ?= /usr/local
@@ -44,14 +44,14 @@ engine/lib:
 	mkdir -p engine/lib
 
 # Generate pkg-config file
-$(PKGCONFIG): engine/pkg/libauraio.pc.in | engine/lib
+$(PKGCONFIG): engine/pkg/libaura.pc.in | engine/lib
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    $< > $@
 
 # Shared library (with soname for ABI versioning)
 $(LIB_SHARED): $(OBJ) | engine/lib
-	$(CC) -shared -Wl,-soname,$(LIB_SONAME) -DAURAIO_SHARED_BUILD -o $@ $^ $(LDFLAGS)
+	$(CC) -shared -Wl,-soname,$(LIB_SONAME) -DAURA_SHARED_BUILD -o $@ $^ $(LDFLAGS)
 	ln -sf $(notdir $(LIB_SHARED)) engine/lib/$(LIB_SONAME)
 	ln -sf $(LIB_SONAME) engine/lib/$(LIB_LINKNAME)
 
@@ -59,10 +59,10 @@ $(LIB_SHARED): $(OBJ) | engine/lib
 $(LIB_STATIC): $(OBJ) | engine/lib
 	ar rcs $@ $^
 
-# Object files (AURAIO_SHARED_BUILD exports public symbols via AURAIO_API)
+# Object files (AURA_SHARED_BUILD exports public symbols via AURA_API)
 # -MMD -MP generates .d dependency files for automatic header tracking
 engine/src/%.o: engine/src/%.c
-	$(CC) $(CFLAGS) -MMD -MP -DAURAIO_SHARED_BUILD -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -DAURA_SHARED_BUILD -c $< -o $@
 
 -include $(DEP)
 
@@ -154,17 +154,17 @@ test-all: engine
 # Build metrics integrations (Prometheus + OpenTelemetry)
 integrations: engine
 	$(CC) $(CFLAGS) -Iintegrations/prometheus/C \
-		integrations/prometheus/C/example.c integrations/prometheus/C/auraio_prometheus.c \
+		integrations/prometheus/C/example.c integrations/prometheus/C/aura_prometheus.c \
 		-o integrations/prometheus/C/prometheus_example \
-		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
+		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 	$(CC) $(CFLAGS) -Iintegrations/opentelemetry/C \
-		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/auraio_otel.c integrations/opentelemetry/C/auraio_otel_push.c \
+		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/aura_otel.c integrations/opentelemetry/C/aura_otel_push.c \
 		-o integrations/opentelemetry/C/otel_example \
-		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
+		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 	$(CC) $(CFLAGS) -Iintegrations/syslog/C \
-		integrations/syslog/C/example.c integrations/syslog/C/auraio_syslog.c \
+		integrations/syslog/C/example.c integrations/syslog/C/aura_syslog.c \
 		-o integrations/syslog/C/syslog_example \
-		-Lengine/lib -lauraio $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
+		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
 
 # Build BFFIO benchmark tool
 BFFIO: engine
@@ -251,30 +251,30 @@ install: engine
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	install -d $(DESTDIR)$(PREFIX)/include
-	install -d $(DESTDIR)$(PREFIX)/include/auraio
+	install -d $(DESTDIR)$(PREFIX)/include/aura
 	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
 	ln -sf $(notdir $(LIB_SHARED)) $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
 	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
 	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
 	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
-	install -m 644 engine/include/auraio.h $(DESTDIR)$(PREFIX)/include/
-	install -m 644 engine/include/auraio/*.hpp $(DESTDIR)$(PREFIX)/include/auraio/
-	install -d $(DESTDIR)$(PREFIX)/include/auraio/integrations
-	install -m 644 integrations/prometheus/C/auraio_prometheus.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
-	install -m 644 integrations/opentelemetry/C/auraio_otel.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
-	install -m 644 integrations/opentelemetry/C/auraio_otel_push.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
-	install -m 644 integrations/syslog/C/auraio_syslog.h $(DESTDIR)$(PREFIX)/include/auraio/integrations/
+	install -m 644 engine/include/aura.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 engine/include/aura/*.hpp $(DESTDIR)$(PREFIX)/include/aura/
+	install -d $(DESTDIR)$(PREFIX)/include/aura/integrations
+	install -m 644 integrations/prometheus/C/aura_prometheus.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/opentelemetry/C/aura_otel.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/opentelemetry/C/aura_otel_push.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/syslog/C/aura_syslog.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
 	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
 
 # Uninstall
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.so.$(VERSION)
+	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.so.$(VERSION)
 	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
 	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
-	rm -f $(DESTDIR)$(PREFIX)/lib/libauraio.a
-	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libauraio.pc
-	rm -f $(DESTDIR)$(PREFIX)/include/auraio.h
-	rm -rf $(DESTDIR)$(PREFIX)/include/auraio
+	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.a
+	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libaura.pc
+	rm -f $(DESTDIR)$(PREFIX)/include/aura.h
+	rm -rf $(DESTDIR)$(PREFIX)/include/aura
 
 # Clean
 clean: rust-clean
@@ -300,7 +300,7 @@ debug: engine
 # ThreadSanitizer build
 TSAN_CFLAGS = $(CFLAGS) -fsanitize=thread -fPIE -g
 TSAN_OBJ = $(SRC:.c=.tsan.o)
-LIB_TSAN = engine/lib/libauraio_tsan.a
+LIB_TSAN = engine/lib/libaura_tsan.a
 
 engine/src/%.tsan.o: engine/src/%.c
 	$(CC) $(TSAN_CFLAGS) -c $< -o $@
@@ -313,7 +313,7 @@ tsan: $(LIB_TSAN)
 # AddressSanitizer build
 ASAN_CFLAGS = $(CFLAGS) -fsanitize=address -fno-omit-frame-pointer -g
 ASAN_OBJ = $(SRC:.c=.asan.o)
-LIB_ASAN = engine/lib/libauraio_asan.a
+LIB_ASAN = engine/lib/libaura_asan.a
 
 engine/src/%.asan.o: engine/src/%.c
 	$(CC) $(ASAN_CFLAGS) -c $< -o $@
@@ -591,11 +591,11 @@ help:
 	@echo "  make bench-deps     Check benchmark dependencies"
 	@echo "  make bench-deep     Deep analysis (flamegraphs, cachegrind, pahole)"
 	@echo "  make bench-deep-quick Quick deep analysis (~10 min)"
-	@echo "  BENCH_DIR=/path     Override test file directory (default: /tmp/auraio_bench)"
+	@echo "  BENCH_DIR=/path     Override test file directory (default: /tmp/aura_bench)"
 	@echo ""
 	@echo "Regression testing:"
 	@echo "  make perf-regression  Raw io_uring vs AuraIO overhead test"
-	@echo "                        Set AURAIO_PERF_FILE=/path to test against a specific file/device"
+	@echo "                        Set AURA_PERF_FILE=/path to test against a specific file/device"
 	@echo "  make bench-adaptive   Adaptive AIMD vs static depth comparison"
 	@echo "                        Set ADAPTIVE_BENCH_ARGS='--quick' for short run"
 	@echo ""

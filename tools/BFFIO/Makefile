@@ -14,7 +14,7 @@ LDFLAGS = -lpthread -luring -lm
 SRC = main.c job_parser.c workload.c stats.c output.c
 OBJ = $(SRC:.c=.o)
 BIN = ../bin/BFFIO
-PARENT_LIB = ../../engine/lib/libauraio.a
+PARENT_LIB = ../../engine/lib/libaura.a
 
 all: $(BIN)
 

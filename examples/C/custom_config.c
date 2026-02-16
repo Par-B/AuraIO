@@ -12,7 +12,7 @@
  */
 
 #define _POSIX_C_SOURCE 199309L
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,14 +20,14 @@
 #include <unistd.h>
 #include <time.h>
 
-#define TEST_FILE "/tmp/auraio_config_test.dat"
+#define TEST_FILE "/tmp/aura_config_test.dat"
 #define FILE_SIZE (4 * 1024 * 1024) /* 4 MB */
 #define BUF_SIZE 4096
 #define NUM_OPS 20
 
 static int completed = 0;
 
-void completion_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     if (result < 0) {
@@ -36,9 +36,9 @@ void completion_callback(auraio_request_t *req, ssize_t result, void *user_data)
     __sync_add_and_fetch(&completed, 1);
 }
 
-void print_stats(const char *config_name, auraio_engine_t *engine, double elapsed_ms) {
-    auraio_stats_t stats;
-    auraio_get_stats(engine, &stats);
+void print_stats(const char *config_name, aura_engine_t *engine, double elapsed_ms) {
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats);
 
     printf("\n%s Configuration:\n", config_name);
     printf("  Elapsed time: %.2f ms\n", elapsed_ms);
@@ -49,18 +49,18 @@ void print_stats(const char *config_name, auraio_engine_t *engine, double elapse
     printf("  Optimal batch size: %d\n", stats.optimal_batch_size);
 }
 
-void run_workload(auraio_engine_t *engine, int fd, const char *config_name) {
+void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
     struct timespec start, end;
 
 /* Allocate 16 buffers for concurrent operations */
 #define CONCURRENT_BUFS 16
     void *bufs[CONCURRENT_BUFS];
     for (int i = 0; i < CONCURRENT_BUFS; i++) {
-        bufs[i] = auraio_buffer_alloc(engine, BUF_SIZE);
+        bufs[i] = aura_buffer_alloc(engine, BUF_SIZE);
         if (!bufs[i]) {
-            perror("auraio_buffer_alloc");
+            perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                auraio_buffer_free(engine, bufs[j], BUF_SIZE);
+                aura_buffer_free(engine, bufs[j], BUF_SIZE);
             }
             return;
         }
@@ -76,21 +76,21 @@ void run_workload(auraio_engine_t *engine, int fd, const char *config_name) {
         while (submitted < NUM_OPS && (submitted - completed) < CONCURRENT_BUFS / 2) {
             off_t offset = (rand() % (FILE_SIZE / BUF_SIZE)) * BUF_SIZE;
             void *buf = bufs[submitted % CONCURRENT_BUFS];
-            auraio_request_t *req = auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, offset,
+            aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset,
                                                 completion_callback, NULL);
             if (!req) {
-                perror("auraio_read");
+                perror("aura_read");
                 break;
             }
             submitted++;
         }
 
         /* Poll for completions */
-        auraio_poll(engine);
+        aura_poll(engine);
 
         /* If we're done submitting, wait for remaining completions */
         if (submitted >= NUM_OPS && completed < NUM_OPS) {
-            auraio_wait(engine, 1);
+            aura_wait(engine, 1);
         }
     }
 
@@ -101,7 +101,7 @@ void run_workload(auraio_engine_t *engine, int fd, const char *config_name) {
     print_stats(config_name, engine, elapsed);
 
     for (int i = 0; i < CONCURRENT_BUFS; i++) {
-        auraio_buffer_free(engine, bufs[i], BUF_SIZE);
+        aura_buffer_free(engine, bufs[i], BUF_SIZE);
     }
 }
 
@@ -139,10 +139,10 @@ int main(void) {
      * Example 1: Default Configuration
      * ================================================================ */
     printf("Running with default configuration...\n");
-    auraio_engine_t *engine_default = auraio_create();
+    aura_engine_t *engine_default = aura_create();
     if (engine_default) {
         run_workload(engine_default, fd, "Default");
-        auraio_destroy(engine_default);
+        aura_destroy(engine_default);
     }
 
     /* ===================================================================
@@ -152,17 +152,17 @@ int main(void) {
      * - Round-robin ring selection for single-thread scaling
      * ================================================================ */
     printf("\nConfiguring for high throughput...\n");
-    auraio_options_t opts_throughput;
-    auraio_options_init(&opts_throughput);
+    aura_options_t opts_throughput;
+    aura_options_init(&opts_throughput);
 
     opts_throughput.queue_depth = 512; /* Deeper queues for more pipelining */
     opts_throughput.initial_in_flight = 128; /* Start with high concurrency */
-    opts_throughput.ring_select = AURAIO_SELECT_ROUND_ROBIN; /* Max single-thread scaling */
+    opts_throughput.ring_select = AURA_SELECT_ROUND_ROBIN; /* Max single-thread scaling */
 
-    auraio_engine_t *engine_throughput = auraio_create_with_options(&opts_throughput);
+    aura_engine_t *engine_throughput = aura_create_with_options(&opts_throughput);
     if (engine_throughput) {
         run_workload(engine_throughput, fd, "High Throughput");
-        auraio_destroy(engine_throughput);
+        aura_destroy(engine_throughput);
     }
 
     /* ===================================================================
@@ -172,18 +172,18 @@ int main(void) {
      * - CPU-local ring selection for best cache locality
      * ================================================================ */
     printf("\nConfiguring for low latency...\n");
-    auraio_options_t opts_latency;
-    auraio_options_init(&opts_latency);
+    aura_options_t opts_latency;
+    aura_options_init(&opts_latency);
 
     opts_latency.max_p99_latency_ms = 1.0; /* Target 1ms P99 */
     opts_latency.initial_in_flight = 8; /* Start conservative */
     opts_latency.min_in_flight = 4; /* Never go below 4 */
-    opts_latency.ring_select = AURAIO_SELECT_CPU_LOCAL; /* Best cache locality */
+    opts_latency.ring_select = AURA_SELECT_CPU_LOCAL; /* Best cache locality */
 
-    auraio_engine_t *engine_latency = auraio_create_with_options(&opts_latency);
+    aura_engine_t *engine_latency = aura_create_with_options(&opts_latency);
     if (engine_latency) {
         run_workload(engine_latency, fd, "Low Latency");
-        auraio_destroy(engine_latency);
+        aura_destroy(engine_latency);
     }
 
     /* ===================================================================
@@ -193,17 +193,17 @@ int main(void) {
      * - Moderate queue depth for good balance
      * ================================================================ */
     printf("\nConfiguring for adaptive tuning (production recommended)...\n");
-    auraio_options_t opts_adaptive;
-    auraio_options_init(&opts_adaptive);
+    aura_options_t opts_adaptive;
+    aura_options_init(&opts_adaptive);
 
     opts_adaptive.queue_depth = 256; /* Balanced queue depth */
-    opts_adaptive.ring_select = AURAIO_SELECT_ADAPTIVE; /* Power-of-two spilling */
+    opts_adaptive.ring_select = AURA_SELECT_ADAPTIVE; /* Power-of-two spilling */
     opts_adaptive.max_p99_latency_ms = 5.0; /* Reasonable latency target */
 
-    auraio_engine_t *engine_adaptive = auraio_create_with_options(&opts_adaptive);
+    aura_engine_t *engine_adaptive = aura_create_with_options(&opts_adaptive);
     if (engine_adaptive) {
         run_workload(engine_adaptive, fd, "Adaptive (Recommended)");
-        auraio_destroy(engine_adaptive);
+        aura_destroy(engine_adaptive);
     }
 
     /* ===================================================================
@@ -211,16 +211,16 @@ int main(void) {
      * - Useful for NUMA systems or limiting resource usage
      * ================================================================ */
     printf("\nConfiguring with custom ring count...\n");
-    auraio_options_t opts_custom_rings;
-    auraio_options_init(&opts_custom_rings);
+    aura_options_t opts_custom_rings;
+    aura_options_init(&opts_custom_rings);
 
     opts_custom_rings.ring_count = 2; /* Use only 2 rings (vs default per-CPU) */
     opts_custom_rings.queue_depth = 256;
 
-    auraio_engine_t *engine_custom = auraio_create_with_options(&opts_custom_rings);
+    aura_engine_t *engine_custom = aura_create_with_options(&opts_custom_rings);
     if (engine_custom) {
         run_workload(engine_custom, fd, "Custom Ring Count (2)");
-        auraio_destroy(engine_custom);
+        aura_destroy(engine_custom);
     }
 
     /* Cleanup */

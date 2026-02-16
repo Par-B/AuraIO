@@ -6,8 +6,8 @@
  * Common utilities used across multiple internal modules.
  */
 
-#ifndef AURAIO_INTERNAL_H
-#define AURAIO_INTERNAL_H
+#ifndef AURA_INTERNAL_H
+#define AURA_INTERNAL_H
 
 #include <stdint.h>
 #include <time.h>
@@ -18,14 +18,14 @@
  * cannot observe. These annotations inform TSan of the happens-before
  * edge between submission and completion. */
 #if defined(__SANITIZE_THREAD__)
-#    define AURAIO_TSAN_ENABLED
+#    define AURA_TSAN_ENABLED
 #elif defined(__has_feature)
 #    if __has_feature(thread_sanitizer)
-#        define AURAIO_TSAN_ENABLED
+#        define AURA_TSAN_ENABLED
 #    endif
 #endif
 
-#ifdef AURAIO_TSAN_ENABLED
+#ifdef AURA_TSAN_ENABLED
 void __tsan_acquire(void *addr);
 void __tsan_release(void *addr);
 #    define TSAN_RELEASE(addr) __tsan_release(addr)
@@ -69,4 +69,4 @@ static inline size_t iovec_total_len(const struct iovec *iov, int iovcnt) {
     return total;
 }
 
-#endif /* AURAIO_INTERNAL_H */
+#endif /* AURA_INTERNAL_H */

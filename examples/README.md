@@ -75,8 +75,8 @@ cd examples/rust && cargo build --examples
 ### Basic Examples
 
 **[quickstart.c](C/quickstart.c)** - Minimal working example
-- Creates engine with `auraio_create()`
-- Allocates buffer with `auraio_buffer_alloc()`
+- Creates engine with `aura_create()`
+- Allocates buffer with `aura_buffer_alloc()`
 - Submits async read with callback
 - Waits for completion
 - **Start here** if you're new to AuraIO
@@ -91,7 +91,7 @@ cd examples/rust && cargo build --examples
 ### Advanced Features
 
 **[custom_config.c](C/custom_config.c)** ⭐ NEW - Configuration tuning
-- Shows `auraio_create_with_options()` for custom engine configuration
+- Shows `aura_create_with_options()` for custom engine configuration
 - Demonstrates 5 different configurations:
   - **Default**: Auto-configured for system
   - **High Throughput**: Large queues, round-robin selection, high concurrency
@@ -102,15 +102,15 @@ cd examples/rust && cargo build --examples
 - **When to use**: Production deployments, workload-specific tuning
 
 **[vectored_io.c](C/vectored_io.c)** ⭐ NEW - Scatter-gather I/O
-- Demonstrates `auraio_readv()` and `auraio_writev()`
+- Demonstrates `aura_readv()` and `aura_writev()`
 - Shows efficient multi-buffer operations in single syscall
 - Example use case: Database page operations (header + data in separate buffers)
 - **When to use**: Reading/writing structured file formats, log files with separate metadata/payload sections, reducing syscall overhead when accessing non-contiguous data regions
 
 **[registered_buffers.c](C/registered_buffers.c)** ⭐ NEW - Zero-copy optimization
-- Pre-registers buffers with `auraio_register_buffers()`
-- Uses `auraio_buf_fixed()` for zero-copy I/O
-- Demonstrates deferred unregister pattern (`auraio_request_unregister_buffers()`)
+- Pre-registers buffers with `aura_register_buffers()`
+- Uses `aura_buf_fixed()` for zero-copy I/O
+- Demonstrates deferred unregister pattern (`aura_request_unregister_buffers()`)
 - Includes performance comparison vs unregistered buffers
 - **When to use**:
   - ✓ Same buffers reused 1000+ times
@@ -122,14 +122,14 @@ cd examples/rust && cargo build --examples
 
 **[bulk_reader.c](C/bulk_reader.c)** - High-throughput concurrent reading
 - Reads multiple files concurrently (up to 10,000 files)
-- Uses `auraio_run()` blocking event loop
-- Demonstrates `auraio_stop()` to signal completion
+- Uses `aura_run()` blocking event loop
+- Demonstrates `aura_stop()` to signal completion
 - Per-operation context passing through `user_data`
 - Callback-based resource cleanup
 - **Usage**: `./C/bulk_reader <directory>`
 
 **[cancel_request.c](C/cancel_request.c)** - Operation cancellation
-- Demonstrates `auraio_cancel()` API
+- Demonstrates `aura_cancel()` API
 - Shows best-effort cancellation semantics
 - Callback receives `-ECANCELED` on successful cancellation
 - **Note**: Cancellation may not succeed if operation already completed
@@ -137,7 +137,7 @@ cd examples/rust && cargo build --examples
 **[file_copy.c](C/file_copy.c)** - Synchronous file copy
 - Read-then-write pattern for file copy
 - Uses blocking async operations with completion polling
-- `auraio_fsync()` with `AURAIO_FSYNC_DEFAULT` for data durability
+- `aura_fsync()` with `AURA_FSYNC_DEFAULT` for data durability
 - Progress indicator every 10MB
 - Chunk-based reading/writing loop
 - **Usage**: `./C/file_copy <source> <destination>`
@@ -145,9 +145,9 @@ cd examples/rust && cargo build --examples
 ### Diagnostics
 
 **[log_handler.c](C/log_handler.c)** - Custom log handler
-- Installs a custom log callback with `auraio_set_log_handler()`
+- Installs a custom log callback with `aura_set_log_handler()`
 - Formats messages with local-time timestamps and severity tags
-- Uses `auraio_log_emit()` to emit application-level messages through the same pipeline
+- Uses `aura_log_emit()` to emit application-level messages through the same pipeline
 - Shows `log_context_t` userdata pattern for configurable output, prefix, and severity filter
 - **When to use**: Integrating AuraIO diagnostics into your logging framework
 
@@ -362,7 +362,7 @@ cd examples/rust && cargo build --examples
 The **file copy** examples demonstrate each language's idiomatic approach to async I/O:
 
 - **C** ([file_copy.c](C/file_copy.c)): Synchronous blocking approach with completion polling
-  - Uses `auraio_wait()` to block until each operation completes
+  - Uses `aura_wait()` to block until each operation completes
   - Sequential read-then-write pattern
   - Best fit for C which lacks native async primitives
 
@@ -398,7 +398,7 @@ All examples automatically benefit from recent performance optimizations in Aura
 
 **Need to tune for production?**
 - See [custom_config.c](C/custom_config.c) for configuration options
-- Recommended: Use `AURAIO_SELECT_ADAPTIVE` ring selection with custom `max_p99_latency_ms`
+- Recommended: Use `AURA_SELECT_ADAPTIVE` ring selection with custom `max_p99_latency_ms`
 
 **Working with protocols or structured data?**
 - Use [vectored_io.c](C/vectored_io.c) for efficient multi-buffer operations
@@ -408,12 +408,12 @@ All examples automatically benefit from recent performance optimizations in Aura
 - Best for 1000+ operations on the same buffers
 
 **Building event-driven applications?**
-- See [bulk_reader.c](C/bulk_reader.c) for `auraio_run()` event loop pattern
-- Or integrate with existing event loops using `auraio_get_poll_fd()` + `auraio_poll()`
+- See [bulk_reader.c](C/bulk_reader.c) for `aura_run()` event loop pattern
+- Or integrate with existing event loops using `aura_get_poll_fd()` + `aura_poll()`
 
 **Need library diagnostics or custom logging?**
 - See [log_handler.c](C/log_handler.c) for installing a custom log handler
-- Use `auraio_log_emit()` to route your own messages through the same pipeline
+- Use `aura_log_emit()` to route your own messages through the same pipeline
 
 **Using modern C++ or Rust?**
 - See [coroutine_copy.cpp](cpp/coroutine_copy.cpp) for C++20 coroutines
@@ -427,20 +427,20 @@ All examples automatically benefit from recent performance optimizations in Aura
 
 1. **Fire-and-forget writes**:
    ```c
-   auraio_write(engine, fd, buf, len, offset, NULL, NULL);  /* NULL callback */
+   aura_write(engine, fd, buf, len, offset, NULL, NULL);  /* NULL callback */
    ```
 
 2. **Graceful shutdown**:
    ```c
-   auraio_drain(engine, -1);  /* Wait for all pending ops */
-   auraio_destroy(engine);
+   aura_drain(engine, -1);  /* Wait for all pending ops */
+   aura_destroy(engine);
    ```
 
 3. **Event loop integration**:
    ```c
-   int poll_fd = auraio_get_poll_fd(engine);
+   int poll_fd = aura_get_poll_fd(engine);
    /* Add poll_fd to epoll/kqueue */
-   /* When readable, call auraio_poll(engine) */
+   /* When readable, call aura_poll(engine) */
    ```
 
 4. **Per-operation contexts**:
@@ -451,15 +451,15 @@ All examples automatically benefit from recent performance optimizations in Aura
        size_t size;
    } my_context_t;
 
-   auraio_read(engine, fd, buf, len, offset, callback, &my_context);
+   aura_read(engine, fd, buf, len, offset, callback, &my_context);
    ```
 
 ### Safety Guidelines
 
-- **Never** call `auraio_destroy()` from a callback
+- **Never** call `aura_destroy()` from a callback
 - **Never** use request handle after callback starts
 - **Always** keep buffers valid until callback completes
-- **Prefer** `auraio_request_unregister_buffers()` over `auraio_unregister_buffers()` in callbacks
+- **Prefer** `aura_request_unregister_buffers()` over `aura_unregister_buffers()` in callbacks
 
 ---
 

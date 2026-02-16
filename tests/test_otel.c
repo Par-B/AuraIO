@@ -17,9 +17,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#include "../engine/include/auraio.h"
-#include "../integrations/opentelemetry/C/auraio_otel.h"
-#include "../integrations/opentelemetry/C/auraio_otel_push.h"
+#include "../engine/include/aura.h"
+#include "../integrations/opentelemetry/C/aura_otel.h"
+#include "../integrations/opentelemetry/C/aura_otel_push.h"
 
 static int test_count = 0;
 
@@ -75,7 +75,7 @@ static void io_teardown(void) {
 
 static _Atomic int callback_called;
 
-static void test_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void test_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     (void)result;
@@ -96,12 +96,12 @@ static int count_char(const char *str, char ch) {
     return n;
 }
 
-static auraio_engine_t *make_engine(int rings, int qdepth) {
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+static aura_engine_t *make_engine(int rings, int qdepth) {
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.ring_count = rings;
     opts.queue_depth = qdepth;
-    return auraio_create_with_options(&opts);
+    return aura_create_with_options(&opts);
 }
 
 struct push_server_ctx {
@@ -233,25 +233,25 @@ static void push_server_join(struct push_server_ctx *ctx) {
 
 TEST(null_engine) {
     char buf[64];
-    int rc = auraio_metrics_otel(NULL, buf, sizeof(buf));
+    int rc = aura_metrics_otel(NULL, buf, sizeof(buf));
     assert(rc == -1);
 }
 
 TEST(null_buffer) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
-    int rc = auraio_metrics_otel(engine, NULL, 1024);
+    int rc = aura_metrics_otel(engine, NULL, 1024);
     assert(rc == -1);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(zero_size_buffer) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[1];
-    int rc = auraio_metrics_otel(engine, buf, 0);
+    int rc = aura_metrics_otel(engine, buf, 0);
     assert(rc == -1);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -259,35 +259,35 @@ TEST(zero_size_buffer) {
  * ============================================================================ */
 
 TEST(tiny_buffer_returns_negative) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[64];
-    int rc = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int rc = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(rc < 0);
     assert(errno == ENOBUFS);
     /* abs(rc) should be a usable retry size */
     assert(-rc > (int)sizeof(buf));
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(retry_with_estimated_size) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     /* First call with tiny buffer */
     char small[64];
-    int rc = auraio_metrics_otel(engine, small, sizeof(small));
+    int rc = aura_metrics_otel(engine, small, sizeof(small));
     assert(rc < 0);
     size_t estimate = (size_t)(-rc);
 
     /* Retry with estimated size */
     char *big = malloc(estimate);
     assert(big);
-    rc = auraio_metrics_otel(engine, big, estimate);
+    rc = aura_metrics_otel(engine, big, estimate);
     assert(rc > 0);
 
     free(big);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -295,11 +295,11 @@ TEST(retry_with_estimated_size) {
  * ============================================================================ */
 
 TEST(valid_json_braces) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
@@ -311,15 +311,15 @@ TEST(valid_json_braces) {
     assert(buf[0] == '{');
     assert(buf[len - 1] == '}');
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_resource_metrics) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
@@ -327,41 +327,41 @@ TEST(contains_resource_metrics) {
     assert(contains(buf, "\"scopeMetrics\""));
     assert(contains(buf, "\"metrics\""));
     assert(contains(buf, "\"service.name\""));
-    assert(contains(buf, "\"auraio\""));
-    assert(contains(buf, "\"auraio.engine\""));
+    assert(contains(buf, "\"aura\""));
+    assert(contains(buf, "\"aura.engine\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_schema_version) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.schema.version\""));
-    assert(contains(buf, AURAIO_OTEL_SCHEMA_VERSION));
-    assert(contains(buf, "\"auraio.schema.stability\""));
-    assert(contains(buf, AURAIO_OTEL_SCHEMA_STABILITY));
+    assert(contains(buf, "\"aura.schema.version\""));
+    assert(contains(buf, AURA_OTEL_SCHEMA_VERSION));
+    assert(contains(buf, "\"aura.schema.stability\""));
+    assert(contains(buf, AURA_OTEL_SCHEMA_STABILITY));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_library_version) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, auraio_version()));
+    assert(contains(buf, aura_version()));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -369,96 +369,96 @@ TEST(contains_library_version) {
  * ============================================================================ */
 
 TEST(contains_aggregate_sums) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.ops.completed\""));
-    assert(contains(buf, "\"auraio.bytes.transferred\""));
-    assert(contains(buf, "\"auraio.adaptive.spills\""));
+    assert(contains(buf, "\"aura.ops.completed\""));
+    assert(contains(buf, "\"aura.bytes.transferred\""));
+    assert(contains(buf, "\"aura.adaptive.spills\""));
     /* Check sum type markers */
     assert(contains(buf, "\"isMonotonic\":true"));
     assert(contains(buf, "\"aggregationTemporality\":2"));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_aggregate_gauges) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.throughput\""));
-    assert(contains(buf, "\"auraio.p99_latency\""));
-    assert(contains(buf, "\"auraio.in_flight\""));
-    assert(contains(buf, "\"auraio.optimal_in_flight\""));
-    assert(contains(buf, "\"auraio.optimal_batch_size\""));
-    assert(contains(buf, "\"auraio.ring_count\""));
+    assert(contains(buf, "\"aura.throughput\""));
+    assert(contains(buf, "\"aura.p99_latency\""));
+    assert(contains(buf, "\"aura.in_flight\""));
+    assert(contains(buf, "\"aura.optimal_in_flight\""));
+    assert(contains(buf, "\"aura.optimal_batch_size\""));
+    assert(contains(buf, "\"aura.ring_count\""));
     assert(contains(buf, "\"gauge\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_buffer_pool_metrics) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.buffer_pool.allocated\""));
-    assert(contains(buf, "\"auraio.buffer_pool.buffers\""));
-    assert(contains(buf, "\"auraio.buffer_pool.shards\""));
+    assert(contains(buf, "\"aura.buffer_pool.allocated\""));
+    assert(contains(buf, "\"aura.buffer_pool.buffers\""));
+    assert(contains(buf, "\"aura.buffer_pool.shards\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_per_ring_metrics) {
-    auraio_engine_t *engine = make_engine(2, 32);
+    aura_engine_t *engine = make_engine(2, 32);
     assert(engine);
 
     char buf[262144];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.ring.ops.completed\""));
-    assert(contains(buf, "\"auraio.ring.bytes.transferred\""));
-    assert(contains(buf, "\"auraio.ring.in_flight\""));
-    assert(contains(buf, "\"auraio.ring.in_flight_limit\""));
-    assert(contains(buf, "\"auraio.ring.batch_threshold\""));
-    assert(contains(buf, "\"auraio.ring.queue_depth\""));
-    assert(contains(buf, "\"auraio.ring.p99_latency\""));
-    assert(contains(buf, "\"auraio.ring.throughput\""));
-    assert(contains(buf, "\"auraio.ring.aimd_phase\""));
+    assert(contains(buf, "\"aura.ring.ops.completed\""));
+    assert(contains(buf, "\"aura.ring.bytes.transferred\""));
+    assert(contains(buf, "\"aura.ring.in_flight\""));
+    assert(contains(buf, "\"aura.ring.in_flight_limit\""));
+    assert(contains(buf, "\"aura.ring.batch_threshold\""));
+    assert(contains(buf, "\"aura.ring.queue_depth\""));
+    assert(contains(buf, "\"aura.ring.p99_latency\""));
+    assert(contains(buf, "\"aura.ring.throughput\""));
+    assert(contains(buf, "\"aura.ring.aimd_phase\""));
 
     /* Ring attribute present for both rings */
     assert(contains(buf, "\"intValue\":\"0\""));
     assert(contains(buf, "\"intValue\":\"1\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_histogram) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
-    assert(contains(buf, "\"auraio.latency\""));
+    assert(contains(buf, "\"aura.latency\""));
     assert(contains(buf, "\"histogram\""));
     assert(contains(buf, "\"explicitBounds\""));
     assert(contains(buf, "\"bucketCounts\""));
@@ -467,15 +467,15 @@ TEST(contains_histogram) {
     assert(contains(buf, "\"min\""));
     assert(contains(buf, "\"max\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_timestamps) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
@@ -483,15 +483,15 @@ TEST(contains_timestamps) {
     /* Cumulative sums should have startTimeUnixNano */
     assert(contains(buf, "\"startTimeUnixNano\":\"0\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(contains_units) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
@@ -503,7 +503,7 @@ TEST(contains_units) {
     assert(contains(buf, "\"unit\":\"{buffer}\""));
     assert(contains(buf, "\"unit\":\"{shard}\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -511,50 +511,50 @@ TEST(contains_units) {
  * ============================================================================ */
 
 TEST(ring_count_matches) {
-    auraio_engine_t *engine = make_engine(3, 32);
+    aura_engine_t *engine = make_engine(3, 32);
     assert(engine);
 
     char buf[262144];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
     /* ring_count gauge should report 3 */
-    assert(contains(buf, "\"auraio.ring_count\""));
+    assert(contains(buf, "\"aura.ring_count\""));
     assert(contains(buf, "\"asInt\":\"3\""));
 
     /* Ring attribute "2" should be present (0-indexed) */
     assert(contains(buf, "\"intValue\":\"2\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 TEST(nonzero_counters_after_io) {
     io_setup();
-    auraio_engine_t *engine = make_engine(1, 64);
+    aura_engine_t *engine = make_engine(1, 64);
     assert(engine);
 
-    void *buf = auraio_buffer_alloc(engine, 4096);
+    void *buf = aura_buffer_alloc(engine, 4096);
     assert(buf);
 
     for (int i = 0; i < 8; i++) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
-        auraio_request_t *req =
-            auraio_read(engine, test_fd, auraio_buf(buf), 4096, 0, test_callback, NULL);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
         assert(req);
-        auraio_wait(engine, 1000);
+        aura_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
     char json[131072];
-    int len = auraio_metrics_otel(engine, json, sizeof(json));
+    int len = aura_metrics_otel(engine, json, sizeof(json));
     assert(len > 0);
     json[len] = '\0';
 
     /* ops_completed should not be "0" */
     /* Find the ops.completed datapoint and verify non-zero */
-    const char *ops = strstr(json, "\"auraio.ops.completed\"");
+    const char *ops = strstr(json, "\"aura.ops.completed\"");
     assert(ops);
     const char *asint = strstr(ops, "\"asInt\":\"");
     assert(asint);
@@ -563,29 +563,29 @@ TEST(nonzero_counters_after_io) {
     assert(!(asint[0] == '0' && asint[1] == '"'));
 
     /* bytes.transferred should be non-zero too */
-    const char *bytes = strstr(json, "\"auraio.bytes.transferred\"");
+    const char *bytes = strstr(json, "\"aura.bytes.transferred\"");
     assert(bytes);
     asint = strstr(bytes, "\"asInt\":\"");
     assert(asint);
     asint += strlen("\"asInt\":\"");
     assert(!(asint[0] == '0' && asint[1] == '"'));
 
-    auraio_buffer_free(engine, buf, 4096);
-    auraio_destroy(engine);
+    aura_buffer_free(engine, buf, 4096);
+    aura_destroy(engine);
     io_teardown();
 }
 
 TEST(optimal_inflight_positive) {
-    auraio_engine_t *engine = make_engine(1, 64);
+    aura_engine_t *engine = make_engine(1, 64);
     assert(engine);
 
     char buf[131072];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
     /* optimal_in_flight should be > 0 */
-    const char *oif = strstr(buf, "\"auraio.optimal_in_flight\"");
+    const char *oif = strstr(buf, "\"aura.optimal_in_flight\"");
     assert(oif);
     const char *asint = strstr(oif, "\"asInt\":\"");
     assert(asint);
@@ -593,7 +593,7 @@ TEST(optimal_inflight_positive) {
     int val = atoi(asint);
     assert(val > 0);
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -601,16 +601,16 @@ TEST(optimal_inflight_positive) {
  * ============================================================================ */
 
 TEST(multiple_rings_histogram) {
-    auraio_engine_t *engine = make_engine(2, 32);
+    aura_engine_t *engine = make_engine(2, 32);
     assert(engine);
 
     char buf[262144];
-    int len = auraio_metrics_otel(engine, buf, sizeof(buf));
+    int len = aura_metrics_otel(engine, buf, sizeof(buf));
     assert(len > 0);
     buf[len] = '\0';
 
     /* Should have histogram with dataPoints for both rings */
-    const char *hist = strstr(buf, "\"auraio.latency\"");
+    const char *hist = strstr(buf, "\"aura.latency\"");
     assert(hist);
 
     /* Both ring 0 and ring 1 should be in histogram dataPoints */
@@ -619,7 +619,7 @@ TEST(multiple_rings_histogram) {
     assert(strstr(dp, "\"intValue\":\"0\""));
     assert(strstr(dp, "\"intValue\":\"1\""));
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================
@@ -627,21 +627,21 @@ TEST(multiple_rings_histogram) {
  * ============================================================================ */
 
 TEST(push_null_args) {
-    assert(auraio_otel_push(NULL, "data", 4) == -1);
-    assert(auraio_otel_push("http://localhost:4318/v1/metrics", NULL, 4) == -1);
-    assert(auraio_otel_push("http://localhost:4318/v1/metrics", "data", 0) == -1);
+    assert(aura_otel_push(NULL, "data", 4) == -1);
+    assert(aura_otel_push("http://localhost:4318/v1/metrics", NULL, 4) == -1);
+    assert(aura_otel_push("http://localhost:4318/v1/metrics", "data", 0) == -1);
 }
 
 TEST(push_invalid_scheme) {
     /* https not supported */
-    assert(auraio_otel_push("https://localhost:4318/v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("https://localhost:4318/v1/metrics", "{}", 2) == -1);
     /* No scheme */
-    assert(auraio_otel_push("localhost:4318/v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("localhost:4318/v1/metrics", "{}", 2) == -1);
 }
 
 TEST(push_connection_refused) {
     /* Connect to a port that's (almost certainly) not listening */
-    int rc = auraio_otel_push("http://127.0.0.1:1/v1/metrics", "{}", 2);
+    int rc = aura_otel_push("http://127.0.0.1:1/v1/metrics", "{}", 2);
     assert(rc == -1);
 }
 
@@ -652,7 +652,7 @@ TEST(push_success_status_and_request_shape) {
     char endpoint[128];
     snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d/v1/metrics", srv.port);
 
-    int rc = auraio_otel_push(endpoint, "{}", 2);
+    int rc = aura_otel_push(endpoint, "{}", 2);
     assert(rc == 200);
 
     push_server_join(&srv);
@@ -670,7 +670,7 @@ TEST(push_status_passthrough) {
     char endpoint[128];
     snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d/v1/metrics", srv.port);
 
-    int rc = auraio_otel_push(endpoint, "{}", 2);
+    int rc = aura_otel_push(endpoint, "{}", 2);
     assert(rc == 503);
 
     push_server_join(&srv);
@@ -683,7 +683,7 @@ TEST(push_default_path_when_missing) {
     char endpoint[128];
     snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%d", srv.port);
 
-    int rc = auraio_otel_push(endpoint, "{}", 2);
+    int rc = aura_otel_push(endpoint, "{}", 2);
     assert(rc == 200);
 
     push_server_join(&srv);
@@ -692,13 +692,13 @@ TEST(push_default_path_when_missing) {
 
 TEST(push_invalid_authority_forms) {
     /* Empty host */
-    assert(auraio_otel_push("http:///v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("http:///v1/metrics", "{}", 2) == -1);
     /* Empty port */
-    assert(auraio_otel_push("http://localhost:/v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("http://localhost:/v1/metrics", "{}", 2) == -1);
     /* Invalid IPv6 authority (missing closing bracket) */
-    assert(auraio_otel_push("http://[::1/v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("http://[::1/v1/metrics", "{}", 2) == -1);
     /* Ambiguous unbracketed IPv6-like authority */
-    assert(auraio_otel_push("http://::1:4318/v1/metrics", "{}", 2) == -1);
+    assert(aura_otel_push("http://::1:4318/v1/metrics", "{}", 2) == -1);
 }
 
 /* ============================================================================
@@ -706,12 +706,12 @@ TEST(push_invalid_authority_forms) {
  * ============================================================================ */
 
 TEST(two_calls_consistent) {
-    auraio_engine_t *engine = make_engine(1, 32);
+    aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     char buf1[131072], buf2[131072];
-    int len1 = auraio_metrics_otel(engine, buf1, sizeof(buf1));
-    int len2 = auraio_metrics_otel(engine, buf2, sizeof(buf2));
+    int len1 = aura_metrics_otel(engine, buf1, sizeof(buf1));
+    int len2 = aura_metrics_otel(engine, buf2, sizeof(buf2));
     assert(len1 > 0);
     assert(len2 > 0);
 
@@ -721,7 +721,7 @@ TEST(two_calls_consistent) {
      * don't change length since nanosecond strings are same width). */
     assert(len1 == len2);
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 
 /* ============================================================================

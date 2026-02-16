@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RESULTS_DIR="${SCRIPT_DIR}/bench_results/deep"
 REPORT_FILE="${RESULTS_DIR}/deep_analysis_report.txt"
-TEST_DIR="/tmp/auraio_bench"
+TEST_DIR="/tmp/aura_bench"
 FLAMEGRAPH_DIR="/tmp/FlameGraph"
 
 # Defaults
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-export AURAIO_BENCH_DIR="$TEST_DIR"
+export AURA_BENCH_DIR="$TEST_DIR"
 
 # Colors
 GREEN='\033[0;32m'
@@ -287,7 +287,7 @@ phase_struct_layout() {
         return
     fi
 
-    local lib="$PROJECT_ROOT/engine/lib/libauraio.a"
+    local lib="$PROJECT_ROOT/engine/lib/libaura.a"
     if [ ! -f "$lib" ]; then
         warn "  $lib not found"
         return
@@ -296,14 +296,14 @@ phase_struct_layout() {
     # Extract a .o file for pahole (it needs ELF with DWARF, .a works too)
     local structs=(
         "ring_ctx"
-        "auraio_request"
+        "aura_request"
         "adaptive_controller_t"
         "adaptive_histogram_t"
         "adaptive_histogram_pair_t"
         "buffer_pool"
         "buffer_shard_t"
         "thread_cache"
-        "auraio_engine"
+        "aura_engine"
     )
 
     for s in "${structs[@]}"; do
@@ -437,7 +437,7 @@ for workload in ["throughput", "latency", "buffer"]:
         'ring_submit':        0,
         'ring_poll/complete':  0,
         'io_uring kernel':    0,
-        'auraio (other)':     0,
+        'aura (other)':     0,
         'malloc/free':        0,
         'benchmark overhead': 0,
         'rand()':             0,
@@ -465,8 +465,8 @@ for workload in ["throughput", "latency", "buffer"]:
         ('stack', 'ring_submit',          'ring_submit'),
         ('stack', 'submit_begin',         'ring_submit'),
         ('stack', 'submit_end',           'ring_submit'),
-        ('stack', 'auraio_read',          'ring_submit'),
-        ('stack', 'auraio_write',         'ring_submit'),
+        ('stack', 'aura_read',          'ring_submit'),
+        ('stack', 'aura_write',         'ring_submit'),
         # Mutex (leaf only - attribute to mutex itself, not caller)
         ('leaf',  'pthread_mutex',        'pthread_mutex'),
         ('leaf',  '__lll_lock',           'pthread_mutex'),
@@ -474,9 +474,9 @@ for workload in ["throughput", "latency", "buffer"]:
         # io_uring kernel path
         ('stack', 'io_uring',             'io_uring kernel'),
         # Other library code
-        ('stack', 'auraio_',              'auraio (other)'),
-        ('stack', 'ring_',                'auraio (other)'),
-        ('stack', 'adaptive_',            'auraio (other)'),
+        ('stack', 'aura_',              'aura (other)'),
+        ('stack', 'ring_',                'aura (other)'),
+        ('stack', 'adaptive_',            'aura (other)'),
         # malloc/free
         ('stack', 'malloc',               'malloc/free'),
         ('stack', '_int_malloc',          'malloc/free'),

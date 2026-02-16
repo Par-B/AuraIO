@@ -18,7 +18,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#include <auraio.h>
+#include <aura.h>
 
 #define CHUNK_SIZE (256 * 1024) /* 256KB chunks */
 
@@ -27,7 +27,7 @@ typedef struct {
     ssize_t result;
 } io_state_t;
 
-static void on_io_complete(auraio_request_t *req, ssize_t result, void *user_data) {
+static void on_io_complete(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_state_t *state = (io_state_t *)user_data;
     state->result = result;
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Create engine */
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
         fprintf(stderr, "Failed to create engine: %s\n", strerror(errno));
         close(src_fd);
@@ -86,10 +86,10 @@ int main(int argc, char *argv[]) {
     }
 
     /* Allocate buffer */
-    void *buf = auraio_buffer_alloc(engine, CHUNK_SIZE);
+    void *buf = aura_buffer_alloc(engine, CHUNK_SIZE);
     if (!buf) {
         fprintf(stderr, "Failed to allocate buffer\n");
-        auraio_destroy(engine);
+        aura_destroy(engine);
         close(src_fd);
         close(dst_fd);
         return 1;
@@ -110,7 +110,7 @@ int main(int argc, char *argv[]) {
 
         /* Read chunk from source */
         io_state_t read_state = { .done = 0, .result = 0 };
-        auraio_request_t *req = auraio_read(engine, src_fd, auraio_buf(buf), chunk, offset,
+        aura_request_t *req = aura_read(engine, src_fd, aura_buf(buf), chunk, offset,
                                             on_io_complete, &read_state);
         if (!req) {
             fprintf(stderr, "\nRead submission failed at offset %lld: %s\n", (long long)offset,
@@ -120,7 +120,7 @@ int main(int argc, char *argv[]) {
 
         /* Wait for read to complete */
         while (!read_state.done) {
-            auraio_wait(engine, 100);
+            aura_wait(engine, 100);
         }
 
         if (read_state.result <= 0) {
@@ -135,7 +135,7 @@ int main(int argc, char *argv[]) {
 
         /* Write chunk to destination */
         io_state_t write_state = { .done = 0, .result = 0 };
-        req = auraio_write(engine, dst_fd, auraio_buf(buf), bytes_read, offset, on_io_complete,
+        req = aura_write(engine, dst_fd, aura_buf(buf), bytes_read, offset, on_io_complete,
                            &write_state);
         if (!req) {
             fprintf(stderr, "\nWrite submission failed at offset %lld: %s\n", (long long)offset,
@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
 
         /* Wait for write to complete */
         while (!write_state.done) {
-            auraio_wait(engine, 100);
+            aura_wait(engine, 100);
         }
 
         if (write_state.result < 0) {
@@ -175,13 +175,13 @@ int main(int argc, char *argv[]) {
     if (total_copied == (size_t)file_size) {
         printf("\nFlushing to disk...\n");
         io_state_t fsync_state = { .done = 0, .result = 0 };
-        auraio_request_t *req =
-            auraio_fsync(engine, dst_fd, AURAIO_FSYNC_DEFAULT, on_io_complete, &fsync_state);
+        aura_request_t *req =
+            aura_fsync(engine, dst_fd, AURA_FSYNC_DEFAULT, on_io_complete, &fsync_state);
         if (!req) {
             fprintf(stderr, "fsync submission failed: %s\n", strerror(errno));
         } else {
             while (!fsync_state.done) {
-                auraio_wait(engine, 100);
+                aura_wait(engine, 100);
             }
             if (fsync_state.result < 0) {
                 fprintf(stderr, "fsync failed: %s\n", strerror(-(int)fsync_state.result));
@@ -203,8 +203,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
-    auraio_buffer_free(engine, buf, CHUNK_SIZE);
-    auraio_destroy(engine);
+    aura_buffer_free(engine, buf, CHUNK_SIZE);
+    aura_destroy(engine);
     close(src_fd);
     close(dst_fd);
 

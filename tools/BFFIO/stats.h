@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <auraio.h>
+#include <aura.h>
 
 /* Latency histogram: 200 buckets x 50us = 10ms max tracked */
 #define LAT_HIST_BUCKETS 200
@@ -97,12 +97,12 @@ typedef struct {
     direction_result_t write;
     int64_t job_runtime_ms;
 
-    /* AuraIO adaptive tuning info */
-    int auraio_final_depth;
-    int auraio_phase;
-    char auraio_phase_name[32];
-    double auraio_p99_ms;
-    double auraio_throughput_bps;
+    /* Aura adaptive tuning info */
+    int aura_final_depth;
+    int aura_phase;
+    char aura_phase_name[32];
+    double aura_p99_ms;
+    double aura_throughput_bps;
     double target_p99_ms;     /* User's P99 ceiling (0=not set) */
     uint64_t adaptive_spills; /* ADAPTIVE ring spill count */
 } job_result_t;
@@ -128,8 +128,8 @@ void stats_aggregate(const thread_stats_t *per_thread, int num_threads, thread_s
 /* Compute percentile from histogram (returns nanoseconds) */
 uint64_t stats_percentile(const thread_stats_t *s, double pct);
 
-/* Build final job result from raw stats + AuraIO engine state */
-void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, auraio_engine_t *engine,
+/* Build final job result from raw stats + Aura engine state */
+void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, aura_engine_t *engine,
                            const char *jobname, job_result_t *result);
 
 #endif /* BFFIO_STATS_H */

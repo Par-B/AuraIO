@@ -6,7 +6,7 @@
  * Run:   ./examples/quickstart
  */
 
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +18,7 @@
 static int done = 0;
 static ssize_t read_result = 0;
 
-void on_done(auraio_request_t *req, ssize_t result, void *user_data) {
+void on_done(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     (void)user_data;
     printf("Read completed: %zd bytes\n", result);
@@ -27,7 +27,7 @@ void on_done(auraio_request_t *req, ssize_t result, void *user_data) {
 }
 
 int main(void) {
-    const char *test_file = "/tmp/auraio_quickstart.tmp";
+    const char *test_file = "/tmp/aura_quickstart.tmp";
     const char *test_data = "Hello from AuraIO! This is async I/O.\n";
 
     /* Create a test file with known content */
@@ -44,18 +44,18 @@ int main(void) {
     close(wfd);
 
     /* Create AuraIO engine */
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
-        perror("auraio_create");
+        perror("aura_create");
         unlink(test_file);
         return 1;
     }
 
     /* Allocate aligned buffer */
-    void *buf = auraio_buffer_alloc(engine, BUF_SIZE);
+    void *buf = aura_buffer_alloc(engine, BUF_SIZE);
     if (!buf) {
-        perror("auraio_buffer_alloc");
-        auraio_destroy(engine);
+        perror("aura_buffer_alloc");
+        aura_destroy(engine);
         unlink(test_file);
         return 1;
     }
@@ -65,26 +65,26 @@ int main(void) {
     int fd = open(test_file, O_RDONLY);
     if (fd < 0) {
         perror("open");
-        auraio_buffer_free(engine, buf, BUF_SIZE);
-        auraio_destroy(engine);
+        aura_buffer_free(engine, buf, BUF_SIZE);
+        aura_destroy(engine);
         unlink(test_file);
         return 1;
     }
 
     /* Submit async read */
-    auraio_request_t *req = auraio_read(engine, fd, auraio_buf(buf), BUF_SIZE, 0, on_done, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_done, NULL);
     if (!req) {
-        perror("auraio_read");
+        perror("aura_read");
         close(fd);
-        auraio_buffer_free(engine, buf, BUF_SIZE);
-        auraio_destroy(engine);
+        aura_buffer_free(engine, buf, BUF_SIZE);
+        aura_destroy(engine);
         unlink(test_file);
         return 1;
     }
 
     /* Wait for completion */
     while (!done) {
-        auraio_wait(engine, 100);
+        aura_wait(engine, 100);
     }
 
     /* Verify result */
@@ -94,8 +94,8 @@ int main(void) {
 
     /* Cleanup */
     close(fd);
-    auraio_buffer_free(engine, buf, BUF_SIZE);
-    auraio_destroy(engine);
+    aura_buffer_free(engine, buf, BUF_SIZE);
+    aura_destroy(engine);
     unlink(test_file);
 
     printf("Success!\n");

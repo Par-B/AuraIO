@@ -7,7 +7,7 @@ AuraIO is designed as a **ring-per-core** asynchronous I/O runtime. Unlike tradi
 
 ## Core Components
 
-### 1. Engine (`auraio_engine_t`)
+### 1. Engine (`aura_engine_t`)
 The high-level container that manages the lifecycle of the entire runtime.
 - **Topology**: Automatically detects CPU core count (`sysconf(_SC_NPROCESSORS_ONLN)`) and creates a corresponding number of Rings.
 - **Unified EventFD**: Maintains a single `eventfd` registered with *all* rings. This allows integration with external event loops (like `epoll` or `kqueue`); when any ring processes a completion, this file descriptor becomes readable.
@@ -16,7 +16,7 @@ The high-level container that manages the lifecycle of the entire runtime.
 A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 - **Placement**: Typically pinned or logically associated with a specific CPU core.
 - **Locking**: Uses a fine-grained `pthread_mutex` for submission. While `io_uring` is lock-free, the library layer adds a lightweight lock to ensure thread safety when multiple application threads submit to the same core's ring.
-- **Ring Selection Modes** (`auraio_ring_select_t`):
+- **Ring Selection Modes** (`aura_ring_select_t`):
   - **ADAPTIVE** (default): Uses CPU-local ring normally. When the local ring is congested (>75% of in-flight limit), a two-gate check decides whether to spill: if the local ring's load is more than 2x the global average, the thread is an outlier and stays local for cache benefits. Otherwise, system-wide pressure is detected and a power-of-two random choice picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced.
   - **CPU_LOCAL**: Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Fallback: `pthread_self() % ring_count`. Best for NUMA-sensitive workloads.
   - **ROUND_ROBIN**: Always selects via `atomic_fetch_add(&next_ring) % ring_count`. Maximum single-thread scaling across all rings.
@@ -32,7 +32,7 @@ A robust control system embedded within each ring that tunes in-flight limits an
     5. *Settling*: Post-backoff stabilization (~100ms) to let the pipeline drain before re-evaluating.
     6. *Converged*: Optimal depth found — stable for 5+ seconds with no further adjustments.
 - **Inner loop**: A batch threshold optimizer tunes the number of SQEs accumulated before calling `io_uring_submit()`, amortizing syscall cost without adding latency.
-- **Spill tracking**: In ADAPTIVE ring selection mode, `auraio_stats_t.adaptive_spills` counts submissions that overflowed to a non-local ring.
+- **Spill tracking**: In ADAPTIVE ring selection mode, `aura_stats_t.adaptive_spills` counts submissions that overflowed to a non-local ring.
 
 ### 4. Memory Pool (`buffer_pool_t`)
 A zero-copy-ready slab allocator designed to reduce `malloc/free` overhead and ensure `O_DIRECT` alignment (4KB).
@@ -51,26 +51,26 @@ Every normal `io_uring` read or write requires the kernel to map the userspace b
 
 **Registered buffers** (`io_uring` fixed buffers) solve this by pre-registering a set of buffers with the kernel once. The kernel pins the pages and keeps the mapping alive across operations. Subsequent I/O referencing these buffers by index skips the map/unmap step entirely.
 
-AuraIO wraps this mechanism with `auraio_register_buffers()` and `auraio_buf_fixed()`:
+AuraIO wraps this mechanism with `aura_register_buffers()` and `aura_buf_fixed()`:
 
 ```c
 // Register two 4KB buffers with the kernel (once, at startup)
 struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
-auraio_register_buffers(engine, iovs, 2);
+aura_register_buffers(engine, iovs, 2);
 
 // Use by index — kernel skips page mapping
-auraio_read(engine, fd, auraio_buf_fixed(0, 0), 4096, offset, cb, ud);
-auraio_write(engine, fd, auraio_buf_fixed(1, 0), 4096, offset, cb, ud);
+aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
+aura_write(engine, fd, aura_buf_fixed(1, 0), 4096, offset, cb, ud);
 ```
 
 This is a separate system from the buffer pool:
 
 | System | What it does | When to use |
 |--------|-------------|-------------|
-| **Buffer pool** (`auraio_buffer_alloc`) | Userspace slab allocator for aligned buffers. Alloc/free per operation. | General-purpose I/O, dynamic buffer counts, one-off operations |
-| **Registered buffers** (`auraio_register_buffers`) | Kernel-pinned buffers referenced by index. Register once. | Same buffers reused across 1000+ ops, high-frequency small I/O (< 16KB), zero-copy critical paths |
+| **Buffer pool** (`aura_buffer_alloc`) | Userspace slab allocator for aligned buffers. Alloc/free per operation. | General-purpose I/O, dynamic buffer counts, one-off operations |
+| **Registered buffers** (`aura_register_buffers`) | Kernel-pinned buffers referenced by index. Register once. | Same buffers reused across 1000+ ops, high-frequency small I/O (< 16KB), zero-copy critical paths |
 
-**Use regular buffers** (`auraio_buf(ptr)`) when you don't want to manage registration lifecycle, when buffer counts change at runtime, or when operations are infrequent enough that mapping overhead doesn't matter.
+**Use regular buffers** (`aura_buf(ptr)`) when you don't want to manage registration lifecycle, when buffer counts change at runtime, or when operations are infrequent enough that mapping overhead doesn't matter.
 
 #### Registration Lifecycle
 
@@ -81,47 +81,47 @@ UNREGISTERED ──register──> REGISTERED ──request_unregister──> DR
                                        └──unregister (sync)──> blocks until UNREGISTERED
 ```
 
-- **UNREGISTERED**: No buffers registered. `auraio_buf_fixed()` submissions fail with `ENOENT`.
-- **REGISTERED**: Fixed-buffer I/O is active. Submissions via `auraio_buf_fixed(index, offset)` are accepted.
-- **DRAINING**: Unregister has been requested but in-flight fixed-buffer operations are still completing. New `auraio_buf_fixed()` submissions fail with `EBUSY`. In-flight operations complete normally. Regular (non-fixed) I/O is completely unaffected.
+- **UNREGISTERED**: No buffers registered. `aura_buf_fixed()` submissions fail with `ENOENT`.
+- **REGISTERED**: Fixed-buffer I/O is active. Submissions via `aura_buf_fixed(index, offset)` are accepted.
+- **DRAINING**: Unregister has been requested but in-flight fixed-buffer operations are still completing. New `aura_buf_fixed()` submissions fail with `EBUSY`. In-flight operations complete normally. Regular (non-fixed) I/O is completely unaffected.
 
 #### Knowing When Buffers Are Safe to Free
 
 **This is the critical safety question:** after requesting unregistration, when can you free or modify the underlying buffer memory?
 
-**Synchronous path** (non-callback context): Use `auraio_unregister_buffers()`. It blocks internally — calling `auraio_wait()` in a loop — until every in-flight fixed-buffer operation has completed and the kernel has unregistered the pages. When it returns 0, the buffers are fully detached from the kernel and safe to free, reuse, or modify.
+**Synchronous path** (non-callback context): Use `aura_unregister_buffers()`. It blocks internally — calling `aura_wait()` in a loop — until every in-flight fixed-buffer operation has completed and the kernel has unregistered the pages. When it returns 0, the buffers are fully detached from the kernel and safe to free, reuse, or modify.
 
 ```c
 // Main thread (not in a callback):
-auraio_unregister_buffers(engine);  // blocks until all fixed-buf I/O completes
+aura_unregister_buffers(engine);  // blocks until all fixed-buf I/O completes
 free(buf1);  // safe — kernel no longer references these pages
 free(buf2);
 ```
 
-**Deferred path** (from callbacks): Use `auraio_request_unregister_buffers()`. It marks buffers as draining and returns immediately. Finalization happens automatically during subsequent `auraio_poll()` / `auraio_wait()` / `auraio_run()` calls: once the per-ring `fixed_buf_inflight` counters all reach zero, the library calls `io_uring_unregister_buffers()` and clears the registration state.
+**Deferred path** (from callbacks): Use `aura_request_unregister_buffers()`. It marks buffers as draining and returns immediately. Finalization happens automatically during subsequent `aura_poll()` / `aura_wait()` / `aura_run()` calls: once the per-ring `fixed_buf_inflight` counters all reach zero, the library calls `io_uring_unregister_buffers()` and clears the registration state.
 
-There is no explicit completion callback for deferred unregistration. You know it is safe to free the buffers when you can successfully call `auraio_register_buffers()` with new buffers (which fails with `EBUSY` if the old set is still draining). The intended pattern is:
+There is no explicit completion callback for deferred unregistration. You know it is safe to free the buffers when you can successfully call `aura_register_buffers()` with new buffers (which fails with `EBUSY` if the old set is still draining). The intended pattern is:
 
 ```c
-void my_callback(auraio_request_t *req, ssize_t result, void *ctx) {
+void my_callback(aura_request_t *req, ssize_t result, void *ctx) {
     // Last operation done — request deferred unregister
-    auraio_request_unregister_buffers(engine);
+    aura_request_unregister_buffers(engine);
     // Do NOT free buffers here — other fixed-buf ops may still be in-flight
 }
 
 // Later, in main thread after draining:
-auraio_drain(engine, -1);   // wait for all I/O to complete
+aura_drain(engine, -1);   // wait for all I/O to complete
 // At this point finalization has run (drain calls wait internally).
 // Buffers are safe to free.
 free(buf1);
 free(buf2);
 ```
 
-**If called from a callback**, `auraio_unregister_buffers()` automatically degrades to deferred mode (equivalent to `auraio_request_unregister_buffers()`). This prevents deadlock since the callback is already on the `auraio_wait()` call stack.
+**If called from a callback**, `aura_unregister_buffers()` automatically degrades to deferred mode (equivalent to `aura_request_unregister_buffers()`). This prevents deadlock since the callback is already on the `aura_wait()` call stack.
 
 #### Registered Files
 
-File descriptor registration (`auraio_register_files`) follows the same lifecycle pattern, eliminating kernel fd-table lookups on every I/O submission. Registered files additionally support `auraio_update_file(engine, index, new_fd)` for hot-swapping individual slots without unregistering the entire set.
+File descriptor registration (`aura_register_files`) follows the same lifecycle pattern, eliminating kernel fd-table lookups on every I/O submission. Registered files additionally support `aura_update_file(engine, index, new_fd)` for hot-swapping individual slots without unregistering the entire set.
 
 ## Concurrency Model
 
@@ -141,7 +141,7 @@ graph TD
 ```
 
 ### Submission Flow
-1. Thread calls `auraio_read()`.
+1. Thread calls `aura_read()`.
 2. Library reads TLS-cached CPU ID (refreshed via `sched_getcpu()` every 32 submissions).
 3. Acquires Mutex for that Core's Ring.
 4. Pushes SQE (Submission Queue Entry).
@@ -149,12 +149,12 @@ graph TD
 6. Releases Mutex.
 
 ### Completion Flow
-1. User calls `auraio_poll()` or `auraio_wait()`.
+1. User calls `aura_poll()` or `aura_wait()`.
 2. Library iterates over **all** rings, draining each Completion Queue under that ring's completion lock.
 3. For each CQE: invokes user callback, then returns the request slot to the free stack.
 4. Adaptive controller records latency sample and updates throughput counters.
 
-**Thread affinity note:** Because step 2 drains all rings, a callback for I/O submitted on Core N may execute on whichever thread called `auraio_wait()` — which may be running on Core M. Applications must not assume callbacks run on the submitting thread. Pass all per-operation state through the `user_data` pointer rather than thread-local storage.
+**Thread affinity note:** Because step 2 drains all rings, a callback for I/O submitted on Core N may execute on whichever thread called `aura_wait()` — which may be running on Core M. Applications must not assume callbacks run on the submitting thread. Pass all per-operation state through the `user_data` pointer rather than thread-local storage.
 
 ## Design Decisions & Trade-offs
 
@@ -206,13 +206,13 @@ process_data(buf, n);
 **After (AuraIO async I/O):**
 ```c
 // Non-blocking submission - thread continues immediately
-auraio_read(engine, fd, auraio_buf(buf), len, offset,
+aura_read(engine, fd, aura_buf(buf), len, offset,
     my_callback, user_context);
 
 // Later: process completions (can batch hundreds)
-auraio_wait(engine, -1);
+aura_wait(engine, -1);
 
-void my_callback(auraio_request_t *req, ssize_t n, void *ctx) {
+void my_callback(aura_request_t *req, ssize_t n, void *ctx) {
     if (n < 0) handle_error(-n);
     process_data(/* ... */);
 }
@@ -281,7 +281,7 @@ auraio-sys          (raw FFI - auto-generated, not meant for direct use)
        └── async_io       AsyncEngine trait + IoFuture (feature = "async")
 ```
 
-The `Engine` internally holds an `Arc<EngineInner>` that wraps a `NonNull<auraio_engine_t>`. This Arc is cloned into every `Buffer`, ensuring the C engine outlives all buffers even if the user drops the `Engine` value first. The engine is `Send + Sync`; submissions from multiple threads are safe. Polling (`poll`/`wait`/`run`) is serialized by an internal `Mutex<()>` to prevent concurrent CQ access.
+The `Engine` internally holds an `Arc<EngineInner>` that wraps a `NonNull<aura_engine_t>`. This Arc is cloned into every `Buffer`, ensuring the C engine outlives all buffers even if the user drops the `Engine` value first. The engine is `Send + Sync`; submissions from multiple threads are safe. Polling (`poll`/`wait`/`run`) is serialized by an internal `Mutex<()>` to prevent concurrent CQ access.
 
 #### Key Differences from C++
 
@@ -419,7 +419,7 @@ let content = &buf.as_slice()[..n];
 - Building infrastructure that other code depends on? --> **C API**
 - Building an application or service in C++? --> **C++ API**
 - Building systems software where memory safety matters? --> **Rust API**
-- Uncertain? Start with C++ or Rust depending on your team's language. Both provide high-level ergonomics. The C++ `Engine::handle()` and Rust `Engine::as_ptr()` methods expose the underlying `auraio_engine_t*` for escape hatches.
+- Uncertain? Start with C++ or Rust depending on your team's language. Both provide high-level ergonomics. The C++ `Engine::handle()` and Rust `Engine::as_ptr()` methods expose the underlying `aura_engine_t*` for escape hatches.
 
 ### Incremental Adoption Strategy
 
@@ -430,4 +430,4 @@ You don't need to convert your entire codebase at once:
 3. **Week 3**: Measure throughput/latency improvements, expand to more call sites
 4. **Ongoing**: New code uses AuraIO by default; old code migrates opportunistically
 
-The library is designed so that synchronous and asynchronous code can coexist—you can call `auraio_wait()` immediately after submission for synchronous-style semantics while still benefiting from io_uring's kernel efficiency.
+The library is designed so that synchronous and asynchronous code can coexist—you can call `aura_wait()` immediately after submission for synchronous-style semantics while still benefiting from io_uring's kernel efficiency.

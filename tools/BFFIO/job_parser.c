@@ -223,7 +223,7 @@ void bench_config_free(bench_config_t *config) {
  * Returns 0 on success, 1 if the key is unknown (warning printed), -1 on error.
  */
 static int apply_param(job_config_t *job, const char *key, const char *value) {
-    /* ioengine: accept and ignore (always AuraIO) */
+    /* ioengine: accept and ignore (always Aura) */
     if (strncasecmp(key, "ioengine", 9) == 0) {
         return 0;
     }

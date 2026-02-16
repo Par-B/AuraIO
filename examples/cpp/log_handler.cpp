@@ -5,13 +5,13 @@
  * Shows how to install a custom log callback that formats library
  * messages with timestamps and severity levels, and how to emit
  * application-level messages through the same pipeline using
- * auraio::log_emit().
+ * aura::log_emit().
  *
  * Build: make examples
  * Run:   ./examples/cpp/log_handler
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <chrono>
 #include <fcntl.h>
@@ -20,7 +20,7 @@
 #include <iostream>
 #include <unistd.h>
 
-constexpr auto TEST_FILE = "/tmp/auraio_log_test_cpp.dat";
+constexpr auto TEST_FILE = "/tmp/aura_log_test_cpp.dat";
 constexpr size_t FILE_SIZE = 64 * 1024; // 64 KB
 constexpr size_t BUF_SIZE = 4096;
 
@@ -33,7 +33,7 @@ int main() {
     // The C++ bindings let you pass any callable — here a lambda that
     // formats each message with a millisecond timestamp and severity tag.
 
-    auraio::set_log_handler([](auraio::LogLevel level, std::string_view msg) {
+    aura::set_log_handler([](aura::LogLevel level, std::string_view msg) {
         auto now = std::chrono::system_clock::now();
         auto time_t_now = std::chrono::system_clock::to_time_t(now);
         auto ms =
@@ -43,28 +43,28 @@ int main() {
         localtime_r(&time_t_now, &tm);
 
         std::cerr << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << '.' << std::setfill('0')
-                  << std::setw(3) << ms.count() << " [myapp] " << auraio::log_level_name(level)
+                  << std::setw(3) << ms.count() << " [myapp] " << aura::log_level_name(level)
                   << ": " << msg << '\n';
     });
 
     // --- Step 2: Emit application-level messages -------------------------
-    auraio::log_emit(auraio::LogLevel::Info, "log handler installed, creating engine");
+    aura::log_emit(aura::LogLevel::Info, "log handler installed, creating engine");
 
     int fd = -1;
 
     try {
         // --- Step 3: Create engine and do I/O ----------------------------
-        auto opts = auraio::Options().queue_depth(64).ring_count(1);
-        auraio::Engine engine(opts);
+        auto opts = aura::Options().queue_depth(64).ring_count(1);
+        aura::Engine engine(opts);
 
-        auraio::log_emit(auraio::LogLevel::Notice, "engine created (1 ring, depth 64)");
+        aura::log_emit(aura::LogLevel::Notice, "engine created (1 ring, depth 64)");
 
         // Create test file
         {
             std::ofstream out(TEST_FILE, std::ios::binary);
             if (!out) {
-                auraio::log_emit(auraio::LogLevel::Error, "failed to create test file");
-                auraio::clear_log_handler();
+                aura::log_emit(aura::LogLevel::Error, "failed to create test file");
+                aura::clear_log_handler();
                 return 1;
             }
             std::string data(FILE_SIZE, 'A');
@@ -73,26 +73,26 @@ int main() {
 
         fd = open(TEST_FILE, O_RDONLY);
         if (fd < 0) {
-            auraio::log_emit(auraio::LogLevel::Error, "failed to open test file");
+            aura::log_emit(aura::LogLevel::Error, "failed to open test file");
             unlink(TEST_FILE);
-            auraio::clear_log_handler();
+            aura::clear_log_handler();
             return 1;
         }
 
         auto buffer = engine.allocate_buffer(BUF_SIZE);
 
-        auraio::log_emit(auraio::LogLevel::Debug, "submitting read");
+        aura::log_emit(aura::LogLevel::Debug, "submitting read");
 
         bool done = false;
-        (void)engine.read(fd, buffer, BUF_SIZE, 0, [&](auraio::Request &, ssize_t result) {
+        (void)engine.read(fd, buffer, BUF_SIZE, 0, [&](aura::Request &, ssize_t result) {
             if (result < 0)
-                auraio::log_emit(auraio::LogLevel::Error, "I/O error: " + std::to_string(result));
+                aura::log_emit(aura::LogLevel::Error, "I/O error: " + std::to_string(result));
             done = true;
         });
 
         while (!done) engine.wait(100);
 
-        auraio::log_emit(auraio::LogLevel::Info, "read completed successfully");
+        aura::log_emit(aura::LogLevel::Info, "read completed successfully");
 
         // --- Step 4: Show stats ------------------------------------------
         auto stats = engine.get_stats();
@@ -104,27 +104,27 @@ int main() {
         close(fd);
         unlink(TEST_FILE);
 
-        auraio::log_emit(auraio::LogLevel::Notice, "shutting down");
+        aura::log_emit(aura::LogLevel::Notice, "shutting down");
 
         // Engine destroyed here (RAII) while handler is still installed,
         // so we capture any shutdown diagnostics.
 
-    } catch (const auraio::Error &e) {
-        auraio::log_emit(auraio::LogLevel::Error, std::string("AuraIO error: ") + e.what());
+    } catch (const aura::Error &e) {
+        aura::log_emit(aura::LogLevel::Error, std::string("AuraIO error: ") + e.what());
         if (fd >= 0) close(fd);
         unlink(TEST_FILE);
-        auraio::clear_log_handler();
+        aura::clear_log_handler();
         return 1;
     } catch (const std::exception &e) {
-        auraio::log_emit(auraio::LogLevel::Error, std::string("unexpected error: ") + e.what());
+        aura::log_emit(aura::LogLevel::Error, std::string("unexpected error: ") + e.what());
         if (fd >= 0) close(fd);
         unlink(TEST_FILE);
-        auraio::clear_log_handler();
+        aura::clear_log_handler();
         return 1;
     }
 
     // Handler no longer needed after engine is gone.
-    auraio::clear_log_handler();
+    aura::clear_log_handler();
 
     std::cout << "\n--- Summary ---\n";
     std::cout << "The log handler captured all library and application messages\n";

@@ -5,14 +5,14 @@
  * Provides a user-settable log callback so the library never writes
  * directly to stderr.  Default handler is NULL (silent).
  *
- * Log level constants (AURAIO_LOG_ERR, etc.) are defined in the
- * public header <auraio.h>.
+ * Log level constants (AURA_LOG_ERR, etc.) are defined in the
+ * public header <aura.h>.
  */
 
-#ifndef AURAIO_LOG_H
-#define AURAIO_LOG_H
+#ifndef AURA_LOG_H
+#define AURA_LOG_H
 
-#include "../include/auraio.h"
+#include "../include/aura.h"
 #include <stdarg.h>
 
 /**
@@ -20,6 +20,6 @@
  *
  * No-op when no handler is registered.
  */
-void auraio_log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void aura_log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
-#endif /* AURAIO_LOG_H */
+#endif /* AURA_LOG_H */

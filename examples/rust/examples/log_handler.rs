@@ -3,11 +3,11 @@
 //! Shows how to install a custom log callback that formats library
 //! messages with timestamps and severity levels, and how to emit
 //! application-level messages through the same pipeline using
-//! `auraio::log_emit()`.
+//! `aura::log_emit()`.
 //!
 //! Run: cargo run --example log_handler
 
-use auraio::{clear_log_handler, log_emit, set_log_handler, Engine, LogLevel, Options, Result};
+use aura::{clear_log_handler, log_emit, set_log_handler, Engine, LogLevel, Options, Result};
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-const TEST_FILE: &str = "/tmp/auraio_log_test_rust.dat";
+const TEST_FILE: &str = "/tmp/aura_log_test_rust.dat";
 const FILE_SIZE: usize = 64 * 1024; // 64 KB
 const BUF_SIZE: usize = 4096;
 

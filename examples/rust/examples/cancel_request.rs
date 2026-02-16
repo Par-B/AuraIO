@@ -5,7 +5,7 @@
 //!
 //! Usage: cargo run --example cancel_request -- <file>
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::env;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
@@ -54,11 +54,11 @@ fn main() -> Result<()> {
                     }
                     Err(e) => {
                         match e {
-                            auraio::Error::Cancelled => {
+                            aura::Error::Cancelled => {
                                 println!("Read was cancelled (result = -ECANCELED)");
                                 result_clone.store(-(libc::ECANCELED as isize), Ordering::SeqCst);
                             }
-                            auraio::Error::Io(io_err) => {
+                            aura::Error::Io(io_err) => {
                                 eprintln!("Read failed: {}", io_err);
                                 let err_code = io_err.raw_os_error().unwrap_or(-1);
                                 result_clone.store(-(err_code as isize), Ordering::SeqCst);

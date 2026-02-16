@@ -4,7 +4,7 @@
 //!
 //! Usage: cargo run --example simple_read -- <file>
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::env;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
 
     let filename = &args[1];
 
-    // Create the auraio engine
+    // Create the aura engine
     println!("Creating async I/O engine...");
     let engine = Engine::new()?;
 
@@ -135,7 +135,7 @@ fn main() -> Result<()> {
                 let mut p99 = -1i32;
                 let mut p999 = -1i32;
 
-                for i in 0..auraio::Histogram::BUCKET_COUNT {
+                for i in 0..aura::Histogram::BUCKET_COUNT {
                     cumulative += hist.bucket(i);
                     if p50 == -1 && cumulative >= p50_threshold {
                         p50 = i as i32;

@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-12
+
 ### Added
-- Public `auraio_log_emit()` API and log level constants (`AURAIO_LOG_ERR` through `AURAIO_LOG_DEBUG`)
+- Lifecycle metadata operations: `aura_openat()`, `aura_close()`, `aura_statx()`, `aura_fallocate()`, `aura_ftruncate()`, `aura_sync_file_range()`
+- Metadata ops skip AIMD latency sampling (optimized for data I/O path)
+- Full lifecycle test suite (`tests/test_metadata_ops.c`)
+
+### Changed
+- `aura_request_t` internal struct extended with `meta` union for operation-specific parameters (no public API change)
+
+## [0.2.1] - 2026-02-12
+
+### Added
+- Public `aura_log_emit()` API and log level constants (`AURA_LOG_ERR` through `AURA_LOG_DEBUG`)
 - C++ log bindings (`engine/include/auraio/log.hpp`) - `auraio::set_log_handler()`, `auraio::log_emit()`, `LogLevel` enum
 - Rust log bindings (`bindings/rust/auraio/src/log.rs`) - `set_log_handler()`, `log_emit()`, `LogLevel` enum with 10 unit tests
 - Log handler examples in all three languages:
@@ -16,11 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - C++ example (`examples/cpp/log_handler.cpp`) with lambda handler and `std::chrono` timestamps
   - Rust example (`examples/rust/examples/log_handler.rs`) with closure handler and `SystemTime` timestamps
 - Syslog integration (`integrations/syslog/C/`) forwarding AuraIO logs to syslog(3)
-- Unit tests for `auraio_log_emit()` covering all levels, formatting, truncation, and no-handler case
+- Unit tests for `aura_log_emit()` covering all levels, formatting, truncation, and no-handler case
 
 ### Fixed
 - C `log_handler.c` example: renamed confusing `min_level` field to `max_level` for clarity
-- C `log_handler.c`: I/O errors now routed through `auraio_log_emit()` instead of raw `fprintf`
+- C `log_handler.c`: I/O errors now routed through `aura_log_emit()` instead of raw `fprintf`
 - C++ `log_handler.cpp`: fixed fd leak in exception handlers by adding `close(fd)` to catch blocks
 - C++ `log_handler.cpp`: added `catch (const std::exception &e)` for comprehensive exception handling
 - C++ `log_handler.cpp`: removed unused `#include <cstring>`
@@ -63,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rust bindings with async/await support (feature flag)
 - Event loop integration via pollable fd
 - Comprehensive benchmark suite with FIO comparison
-- Symbol visibility control (`AURAIO_API` / `-fvisibility=hidden`)
+- Symbol visibility control (`AURA_API` / `-fvisibility=hidden`)
 - SO versioning (`libauraio.so.0.1.0`)
 
 ### Performance

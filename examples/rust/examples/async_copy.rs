@@ -6,7 +6,7 @@
 //!
 //! Usage: cargo run --example async_copy -- <source> <destination>
 
-use auraio::{async_io::AsyncEngine, Engine, Result};
+use aura::{async_io::AsyncEngine, Engine, Result};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::io::AsRawFd;

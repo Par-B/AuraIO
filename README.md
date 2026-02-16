@@ -48,10 +48,10 @@ process_data(buf, n);
 
 **After (async):**
 ```c
-auraio_read(engine, fd, auraio_buf(buf), len, offset, on_complete, ctx);
-auraio_wait(engine, -1);  // Or integrate with your event loop
+aura_read(engine, fd, aura_buf(buf), len, offset, on_complete, ctx);
+aura_wait(engine, -1);  // Or integrate with your event loop
 
-void on_complete(auraio_request_t *req, ssize_t n, void *ctx) {
+void on_complete(aura_request_t *req, ssize_t n, void *ctx) {
     if (n < 0) handle_error(-n);
     process_data(/* ... */);
 }
@@ -64,7 +64,7 @@ void on_complete(auraio_request_t *req, ssize_t n, void *ctx) {
 | Challenge | Traditional Approach | AuraIO Approach |
 |-----------|---------------------|-----------------|
 | **Queue depth tuning** | Benchmark, pick a number, redeploy when it drifts | AIMD finds and tracks optimal depth continuously |
-| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `auraio_read()`/`auraio_write()` |
+| **io_uring complexity** | Learn SQE/CQE, manage rings, handle edge cases | One function call: `aura_read()`/`aura_write()` |
 | **Multi-core scaling** | Manual ring-per-core setup | Automatic per-CPU rings with CPU-aware routing |
 | **Changing conditions** | Re-benchmark when storage or load changes | Adapts in seconds — noisy neighbors, phase changes, thermal throttling |
 | **Buffer management** | Roll your own allocator | Built-in scalable pool with thread-local caching |
@@ -78,14 +78,14 @@ For databases, storage engines, proxies, and infrastructure:
 ```c
 #include <auraio.h>
 
-auraio_engine_t *engine = auraio_create();
-void *buf = auraio_buffer_alloc(engine, 4096);
+aura_engine_t *engine = aura_create();
+void *buf = aura_buffer_alloc(engine, 4096);
 
-auraio_read(engine, fd, auraio_buf(buf), 4096, 0, callback, user_data);
-auraio_wait(engine, -1);
+aura_read(engine, fd, aura_buf(buf), 4096, 0, callback, user_data);
+aura_wait(engine, -1);
 
-auraio_buffer_free(engine, buf, 4096);
-auraio_destroy(engine);
+aura_buffer_free(engine, buf, 4096);
+aura_destroy(engine);
 ```
 
 ### C++ API — Developer Productivity
@@ -198,26 +198,26 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> auraio::Result<()> {
 
 static int done = 0;
 
-void on_read(auraio_request_t *req, ssize_t result, void *ctx) {
+void on_read(aura_request_t *req, ssize_t result, void *ctx) {
     (void)req; (void)ctx;
     printf("Read %zd bytes\n", result);
     done = 1;
 }
 
 int main(void) {
-    auraio_engine_t *engine = auraio_create();
-    void *buf = auraio_buffer_alloc(engine, 4096);
+    aura_engine_t *engine = aura_create();
+    void *buf = aura_buffer_alloc(engine, 4096);
 
     int fd = open("/etc/hostname", O_RDONLY);
-    auraio_read(engine, fd, auraio_buf(buf), 4096, 0, on_read, NULL);
+    aura_read(engine, fd, aura_buf(buf), 4096, 0, on_read, NULL);
 
-    while (!done) auraio_wait(engine, 100);
+    while (!done) aura_wait(engine, 100);
 
     printf("Content: %s", (char *)buf);
 
-    auraio_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf, 4096);
     close(fd);
-    auraio_destroy(engine);
+    aura_destroy(engine);
 }
 ```
 
@@ -384,28 +384,28 @@ make rust-examples  # Build Rust examples
 
 | Function | Description |
 |----------|-------------|
-| `auraio_create()` | Create engine with auto-detected settings |
-| `auraio_read()` / `auraio_write()` | Submit async I/O |
-| `auraio_wait()` | Wait for completions |
-| `auraio_destroy()` | Clean up (waits for pending ops) |
+| `aura_create()` | Create engine with auto-detected settings |
+| `aura_read()` / `aura_write()` | Submit async I/O |
+| `aura_wait()` | Wait for completions |
+| `aura_destroy()` | Clean up (waits for pending ops) |
 
 ### C++ Equivalents
 
 | C++ | Equivalent to |
 |-----|---------------|
-| `Engine engine;` | `auraio_create()` |
-| `engine.read(...)` | `auraio_read(...)` with lambda callback |
+| `Engine engine;` | `aura_create()` |
+| `engine.read(...)` | `aura_read(...)` with lambda callback |
 | `co_await engine.async_read(...)` | Coroutine-style async |
-| `~Engine()` | `auraio_destroy()` |
+| `~Engine()` | `aura_destroy()` |
 
 ### Rust Equivalents
 
 | Rust | Equivalent to |
 |------|---------------|
-| `Engine::new()?` | `auraio_create()` |
-| `engine.read(fd, &buf, ...)` | `auraio_read(...)` with closure callback |
+| `Engine::new()?` | `aura_create()` |
+| `engine.read(fd, &buf, ...)` | `aura_read(...)` with closure callback |
 | `engine.async_read(...).await` | Future-based async (requires `async` feature) |
-| `drop(engine)` | `auraio_destroy()` |
+| `drop(engine)` | `aura_destroy()` |
 
 Full API documentation: [`docs/`](docs/)
 
@@ -418,11 +418,11 @@ You don't need to rewrite your application:
 3. **Measure** — Compare throughput/latency
 4. **Expand** — Migrate more call sites over time
 
-Synchronous and async code coexist — call `auraio_wait()` immediately after submission for sync-style semantics while still getting io_uring efficiency.
+Synchronous and async code coexist — call `aura_wait()` immediately after submission for sync-style semantics while still getting io_uring efficiency.
 
 ## Performance Tips
 
-1. **Use `auraio_buffer_alloc()`** for O_DIRECT — Returns aligned buffers
+1. **Use `aura_buffer_alloc()`** for O_DIRECT — Returns aligned buffers
 2. **Reuse buffers** — Freed buffers go to thread-local cache
 3. **Let it tune** — Give 1-2 seconds for AIMD to converge
 4. **Batch submissions** — Submit multiple ops before waiting

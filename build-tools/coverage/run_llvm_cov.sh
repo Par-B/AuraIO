@@ -75,8 +75,8 @@ make -C "$ROOT/tests" \
 
 # Build test_otel separately (needs exporter sources and include path)
 "$CC_BIN" $TEST_CFLAGS -I"$ROOT/engine/include" -I"$ROOT/integrations/opentelemetry/C" \
-    "$ROOT/tests/test_otel.c" "$ROOT/integrations/opentelemetry/C/auraio_otel.c" "$ROOT/integrations/opentelemetry/C/auraio_otel_push.c" \
-    -o "$ROOT/tests/test_otel" "$ROOT/engine/lib/libauraio.a" -luring -lpthread \
+    "$ROOT/tests/test_otel.c" "$ROOT/integrations/opentelemetry/C/aura_otel.c" "$ROOT/integrations/opentelemetry/C/aura_otel_push.c" \
+    -o "$ROOT/tests/test_otel" "$ROOT/engine/lib/libaura.a" -luring -lpthread \
     -fprofile-instr-generate -fcoverage-mapping >/dev/null
 
 TEST_BINS=(

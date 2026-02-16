@@ -6,9 +6,9 @@ AuraIO exposes a three-tier metrics API for monitoring I/O performance in produc
 
 | Tier | Scope | Functions |
 |------|-------|-----------|
-| **Aggregate** | Engine-wide totals | `auraio_get_stats()` |
-| **Per-Ring** | Individual io_uring ring + AIMD controller state | `auraio_get_ring_stats()`, `auraio_get_histogram()` |
-| **Buffer Pool** | Memory allocator health | `auraio_get_buffer_stats()` |
+| **Aggregate** | Engine-wide totals | `aura_get_stats()` |
+| **Per-Ring** | Individual io_uring ring + AIMD controller state | `aura_get_ring_stats()`, `aura_get_histogram()` |
+| **Buffer Pool** | Memory allocator health | `aura_get_buffer_stats()` |
 
 All stats functions are **thread-safe** and safe to call from any thread at any time, including during active I/O.
 
@@ -17,8 +17,8 @@ All stats functions are **thread-safe** and safe to call from any thread at any 
 ### Aggregate Stats
 
 ```c
-auraio_stats_t stats;
-auraio_get_stats(engine, &stats);
+aura_stats_t stats;
+aura_get_stats(engine, &stats);
 
 printf("IOPS: %.0f, Throughput: %.1f MB/s, P99: %.2f ms\n",
        stats.ops_completed / elapsed,
@@ -26,7 +26,7 @@ printf("IOPS: %.0f, Throughput: %.1f MB/s, P99: %.2f ms\n",
        stats.p99_latency_ms);
 ```
 
-Fields in `auraio_stats_t`:
+Fields in `aura_stats_t`:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -42,20 +42,20 @@ Fields in `auraio_stats_t`:
 ### Per-Ring Stats
 
 ```c
-int rings = auraio_get_ring_count(engine);
+int rings = aura_get_ring_count(engine);
 
 for (int i = 0; i < rings; i++) {
-    auraio_ring_stats_t rs;
-    auraio_get_ring_stats(engine, i, &rs);
+    aura_ring_stats_t rs;
+    aura_get_ring_stats(engine, i, &rs);
 
     printf("Ring %d: phase=%s, in_flight=%d/%d, p99=%.2fms, %.1f MB/s\n",
-           i, auraio_phase_name(rs.aimd_phase),
+           i, aura_phase_name(rs.aimd_phase),
            rs.pending_count, rs.in_flight_limit,
            rs.p99_latency_ms, rs.throughput_bps / (1024 * 1024));
 }
 ```
 
-Fields in `auraio_ring_stats_t`:
+Fields in `aura_ring_stats_t`:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -69,7 +69,7 @@ Fields in `auraio_ring_stats_t`:
 | `aimd_phase` | `int` | Controller phase (0-5, see table below) |
 | `queue_depth` | `int` | Kernel queue depth for this ring |
 
-AIMD phases (via `auraio_phase_name()`):
+AIMD phases (via `aura_phase_name()`):
 
 | Value | Name | Meaning |
 |-------|------|---------|
@@ -83,11 +83,11 @@ AIMD phases (via `auraio_phase_name()`):
 ### Latency Histogram
 
 ```c
-auraio_histogram_t hist;
-auraio_get_histogram(engine, ring_idx, &hist);
+aura_histogram_t hist;
+aura_get_histogram(engine, ring_idx, &hist);
 
 // 200 buckets x 50us = 0-10ms range
-for (int b = 0; b < AURAIO_HISTOGRAM_BUCKETS; b++) {
+for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
     if (hist.buckets[b] > 0) {
         printf("  %d-%d us: %u ops\n",
                b * hist.bucket_width_us,
@@ -106,8 +106,8 @@ When adaptive tuning is disabled (`disable_adaptive = true`), the histogram is n
 ### Buffer Pool Stats
 
 ```c
-auraio_buffer_stats_t bs;
-auraio_get_buffer_stats(engine, &bs);
+aura_buffer_stats_t bs;
+aura_get_buffer_stats(engine, &bs);
 
 printf("Pool: %zu buffers, %zu bytes across %d shards\n",
        bs.total_buffers, bs.total_allocated_bytes, bs.shard_count);
@@ -117,12 +117,12 @@ printf("Pool: %zu buffers, %zu bytes across %d shards\n",
 
 | Feature | C | C++ | Rust |
 |---------|---|-----|------|
-| Aggregate stats | `auraio_get_stats()` | `engine.get_stats()` | `engine.stats()` |
-| Ring count | `auraio_get_ring_count()` | `engine.ring_count()` | Not yet |
-| Per-ring stats | `auraio_get_ring_stats()` | `engine.get_ring_stats(i)` | Not yet |
-| Latency histogram | `auraio_get_histogram()` | `engine.get_histogram(i)` | Not yet |
-| Buffer pool stats | `auraio_get_buffer_stats()` | `engine.get_buffer_stats()` | Not yet |
-| Phase name | `auraio_phase_name()` | `ring_stats.aimd_phase_name()` | Not yet |
+| Aggregate stats | `aura_get_stats()` | `engine.get_stats()` | `engine.stats()` |
+| Ring count | `aura_get_ring_count()` | `engine.ring_count()` | Not yet |
+| Per-ring stats | `aura_get_ring_stats()` | `engine.get_ring_stats(i)` | Not yet |
+| Latency histogram | `aura_get_histogram()` | `engine.get_histogram(i)` | Not yet |
+| Buffer pool stats | `aura_get_buffer_stats()` | `engine.get_buffer_stats()` | Not yet |
+| Phase name | `aura_phase_name()` | `ring_stats.aimd_phase_name()` | Not yet |
 
 The C++ bindings are header-only and fully inline — no additional link dependencies.
 
@@ -165,9 +165,9 @@ AuraIO ships a standalone Prometheus exposition text formatter in `integrations/
 
 Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
 
-**Schema versioning:** A schema info metric is emitted (`auraio_metrics_schema_info{schema="v0",stability="experimental"} 1`). Before `1.0`, new metrics may be added and labels may change. At `1.0`, the schema transitions to stable and breaking metric changes require a major-version bump.
+**Schema versioning:** A schema info metric is emitted (`aura_metrics_schema_info{schema="v0",stability="experimental"} 1`). Before `1.0`, new metrics may be added and labels may change. At `1.0`, the schema transitions to stable and breaking metric changes require a major-version bump.
 
-**Naming rules:** All metric names use the `auraio_` prefix. Labels are kept bounded and operationally meaningful — no high-cardinality labels (`req_id`, raw fd/offset, `user_data`).
+**Naming rules:** All metric names use the `aura_` prefix. Labels are kept bounded and operationally meaningful — no high-cardinality labels (`req_id`, raw fd/offset, `user_data`).
 
 **Data consistency:** Observability reads are intentionally lock-free best-effort snapshots. Values may be updated while being read, and minor cross-field skew is expected. Metrics are intended for trends and alerting, not strict accounting.
 
@@ -184,10 +184,10 @@ make exporters
 The formatter writes Prometheus exposition text into a user-provided buffer:
 
 ```c
-#include "auraio_prometheus.h"
+#include "aura_prometheus.h"
 
 char buf[256 * 1024];
-int len = auraio_metrics_prometheus(engine, buf, sizeof(buf));
+int len = aura_metrics_prometheus(engine, buf, sizeof(buf));
 if (len < 0) {
     // Buffer too small — |len| is an estimate of needed size
 }
@@ -201,28 +201,28 @@ Integrate this into whichever HTTP server you already run — there is no built-
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `auraio_ops_completed_total` | counter | — | Total I/O operations completed |
-| `auraio_metrics_schema_info` | gauge | `schema`, `stability` | Exporter schema version/status (`v0`, `experimental` before 1.0) |
-| `auraio_bytes_transferred_total` | counter | — | Total bytes transferred |
-| `auraio_throughput_bytes_per_second` | gauge | — | Current aggregate throughput |
-| `auraio_p99_latency_seconds` | gauge | — | Aggregate P99 latency |
-| `auraio_in_flight` | gauge | — | Current total in-flight operations |
-| `auraio_optimal_in_flight` | gauge | — | AIMD-tuned aggregate in-flight limit |
-| `auraio_optimal_batch_size` | gauge | — | AIMD-tuned aggregate batch size |
-| `auraio_ring_count` | gauge | — | Number of io_uring rings |
-| `auraio_ring_ops_completed_total` | counter | `ring` | Ops completed per ring |
-| `auraio_ring_bytes_transferred_total` | counter | `ring` | Bytes transferred per ring |
-| `auraio_ring_in_flight` | gauge | `ring` | Current in-flight per ring |
-| `auraio_ring_in_flight_limit` | gauge | `ring` | AIMD in-flight limit per ring |
-| `auraio_ring_batch_threshold` | gauge | `ring` | AIMD batch threshold per ring |
-| `auraio_ring_queue_depth` | gauge | `ring` | Kernel queue depth per ring |
-| `auraio_ring_p99_latency_seconds` | gauge | `ring` | P99 latency per ring |
-| `auraio_ring_throughput_bytes_per_second` | gauge | `ring` | Throughput per ring |
-| `auraio_ring_aimd_phase` | gauge | `ring` | AIMD phase (0-5) per ring |
-| `auraio_latency_seconds` | histogram | `ring` | Latency distribution per ring (sum estimated from bucket midpoints) |
-| `auraio_buffer_pool_allocated_bytes` | gauge | — | Buffer pool allocated bytes |
-| `auraio_buffer_pool_buffers` | gauge | — | Total buffers in pool |
-| `auraio_buffer_pool_shards` | gauge | — | Number of pool shards |
+| `aura_ops_completed_total` | counter | — | Total I/O operations completed |
+| `aura_metrics_schema_info` | gauge | `schema`, `stability` | Exporter schema version/status (`v0`, `experimental` before 1.0) |
+| `aura_bytes_transferred_total` | counter | — | Total bytes transferred |
+| `aura_throughput_bytes_per_second` | gauge | — | Current aggregate throughput |
+| `aura_p99_latency_seconds` | gauge | — | Aggregate P99 latency |
+| `aura_in_flight` | gauge | — | Current total in-flight operations |
+| `aura_optimal_in_flight` | gauge | — | AIMD-tuned aggregate in-flight limit |
+| `aura_optimal_batch_size` | gauge | — | AIMD-tuned aggregate batch size |
+| `aura_ring_count` | gauge | — | Number of io_uring rings |
+| `aura_ring_ops_completed_total` | counter | `ring` | Ops completed per ring |
+| `aura_ring_bytes_transferred_total` | counter | `ring` | Bytes transferred per ring |
+| `aura_ring_in_flight` | gauge | `ring` | Current in-flight per ring |
+| `aura_ring_in_flight_limit` | gauge | `ring` | AIMD in-flight limit per ring |
+| `aura_ring_batch_threshold` | gauge | `ring` | AIMD batch threshold per ring |
+| `aura_ring_queue_depth` | gauge | `ring` | Kernel queue depth per ring |
+| `aura_ring_p99_latency_seconds` | gauge | `ring` | P99 latency per ring |
+| `aura_ring_throughput_bytes_per_second` | gauge | `ring` | Throughput per ring |
+| `aura_ring_aimd_phase` | gauge | `ring` | AIMD phase (0-5) per ring |
+| `aura_latency_seconds` | histogram | `ring` | Latency distribution per ring (sum estimated from bucket midpoints) |
+| `aura_buffer_pool_allocated_bytes` | gauge | — | Buffer pool allocated bytes |
+| `aura_buffer_pool_buffers` | gauge | — | Total buffers in pool |
+| `aura_buffer_pool_shards` | gauge | — | Number of pool shards |
 
 ### Demo Server
 
@@ -233,7 +233,7 @@ A minimal example server is included for testing:
 curl -s http://localhost:9091/metrics
 ```
 
-This is a demo only — it runs a single-threaded accept loop and is not intended for production use. In production, call `auraio_metrics_prometheus()` from your existing HTTP/metrics infrastructure.
+This is a demo only — it runs a single-threaded accept loop and is not intended for production use. In production, call `aura_metrics_prometheus()` from your existing HTTP/metrics infrastructure.
 
 ### Grafana Dashboard
 
@@ -241,19 +241,19 @@ Point Prometheus at your application's `/metrics` endpoint, then build dashboard
 
 ```promql
 # Throughput across all rings
-auraio_throughput_bytes_per_second
+aura_throughput_bytes_per_second
 
 # Per-ring P99 latency
-auraio_ring_p99_latency_seconds
+aura_ring_p99_latency_seconds
 
 # AIMD phase distribution (are rings converged?)
-count by (ring) (auraio_ring_aimd_phase == 5)
+count by (ring) (aura_ring_aimd_phase == 5)
 
 # Latency P99 from histogram (more accurate than gauge)
-histogram_quantile(0.99, rate(auraio_latency_seconds_bucket[1m]))
+histogram_quantile(0.99, rate(aura_latency_seconds_bucket[1m]))
 
 # In-flight utilization ratio
-auraio_ring_in_flight / auraio_ring_in_flight_limit
+aura_ring_in_flight / aura_ring_in_flight_limit
 ```
 
 ## Sampling Rate & Performance
@@ -262,11 +262,11 @@ auraio_ring_in_flight / auraio_ring_in_flight_limit
 
 | Operation | Cost | Lock | Notes |
 |-----------|------|------|-------|
-| `auraio_get_stats()` | ~1-2 us | Per-ring mutex (iterated) | Aggregates across all rings |
-| `auraio_get_ring_stats()` | ~50-100 ns | Single ring mutex | One lock/unlock pair |
-| `auraio_get_histogram()` | ~200-500 ns | Single ring mutex | Copies 200 x 4-byte buckets under lock |
-| `auraio_get_buffer_stats()` | ~10-30 ns | None (lockless) | Atomic reads only |
-| `auraio_phase_name()` | ~5 ns | None | Pure lookup |
+| `aura_get_stats()` | ~1-2 us | Per-ring mutex (iterated) | Aggregates across all rings |
+| `aura_get_ring_stats()` | ~50-100 ns | Single ring mutex | One lock/unlock pair |
+| `aura_get_histogram()` | ~200-500 ns | Single ring mutex | Copies 200 x 4-byte buckets under lock |
+| `aura_get_buffer_stats()` | ~10-30 ns | None (lockless) | Atomic reads only |
+| `aura_phase_name()` | ~5 ns | None | Pure lookup |
 
 ### Total Cost at Various Polling Rates
 
@@ -294,7 +294,7 @@ Buffer pool stats are fully lockless — they read atomics that are updated duri
 
 ### Histogram Double-Buffering
 
-The latency histogram uses a **double-buffer swap** strategy. The AIMD controller periodically swaps the active and inactive histogram windows. `auraio_get_histogram()` copies the *active* window, so:
+The latency histogram uses a **double-buffer swap** strategy. The AIMD controller periodically swaps the active and inactive histogram windows. `aura_get_histogram()` copies the *active* window, so:
 
 - You always get the most recent complete measurement window
 - The copy is ~800 bytes (200 buckets x 4 bytes) and takes ~200-500 ns under lock

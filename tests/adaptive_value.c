@@ -20,7 +20,7 @@
  */
 
 #define _GNU_SOURCE
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -144,7 +144,7 @@ typedef struct {
 // ============================================================================
 
 static int create_temp_file(config_t *cfg) {
-    char path[] = "/tmp/auraio_adaptive_XXXXXX";
+    char path[] = "/tmp/aura_adaptive_XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) {
         perror("mkstemp");
@@ -273,7 +273,7 @@ struct run_ctx {
     int free_top;
 };
 
-static void io_callback(auraio_request_t *req, ssize_t res, void *user_data) {
+static void io_callback(aura_request_t *req, ssize_t res, void *user_data) {
     (void)req;
     (void)res;
     io_slot_t *slot = user_data;
@@ -317,8 +317,8 @@ typedef struct {
 static phase_result_t run_workload(int fd, const run_config_t *rc) {
     phase_result_t result = { 0 };
 
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.queue_depth = rc->depth;
     opts.ring_count = 1;
     opts.single_thread = true;
@@ -332,9 +332,9 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
         opts.max_p99_latency_ms = rc->target_p99_ms;
     }
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
-        fprintf(stderr, "auraio_create failed: %s\n", strerror(errno));
+        fprintf(stderr, "aura_create failed: %s\n", strerror(errno));
         return result;
     }
 
@@ -347,7 +347,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
         free(bufs);
         free(slots);
         free(free_stack);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return result;
     }
     int max_block = rc->block_size;
@@ -360,7 +360,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
             free(bufs);
             free(slots);
             free(free_stack);
-            auraio_destroy(engine);
+            aura_destroy(engine);
             return result;
         }
     }
@@ -408,15 +408,15 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
 
         if (!ctx.warming_up && now >= ctx.measure_deadline) {
             if (inflight == 0) break;
-            auraio_wait(engine, 1);
+            aura_wait(engine, 1);
             inflight = submitted - ctx.completed;
             continue;
         }
 
         // For adaptive mode, respect engine's AIMD-chosen depth
         if (rc->adaptive) {
-            auraio_ring_stats_t rstats;
-            if (auraio_get_ring_stats(engine, 0, &rstats) == 0 && rstats.in_flight_limit > 0) {
+            aura_ring_stats_t rstats;
+            if (aura_get_ring_stats(engine, 0, &rstats) == 0 && rstats.in_flight_limit > 0) {
                 effective_depth = rstats.in_flight_limit;
                 if (effective_depth > rc->depth) effective_depth = rc->depth;
             }
@@ -430,12 +430,12 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
             else slots[slot].submit_ns = 0;
             sample_counter++;
 
-            auraio_request_t *req =
-                auraio_read(engine, fd, auraio_buf(bufs[slot]), (size_t)cur_block_size,
+            aura_request_t *req =
+                aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cur_block_size,
                             cur_offsets[submitted % OFFSET_TABLE_SIZE], io_callback, &slots[slot]);
             if (!req) {
                 ctx.free_stack[ctx.free_top++] = slot;
-                auraio_wait(engine, 1);
+                aura_wait(engine, 1);
                 inflight = submitted - ctx.completed;
                 continue;
             }
@@ -443,8 +443,8 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
             submitted++;
         }
 
-        int n = auraio_poll(engine);
-        if (n == 0 && inflight > 0) auraio_wait(engine, 1);
+        int n = aura_poll(engine);
+        if (n == 0 && inflight > 0) aura_wait(engine, 1);
         inflight = submitted - ctx.completed;
     }
 
@@ -456,15 +456,15 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
 
     // Get AIMD converged depth
     if (rc->adaptive) {
-        auraio_ring_stats_t rstats;
-        if (auraio_get_ring_stats(engine, 0, &rstats) == 0) {
+        aura_ring_stats_t rstats;
+        if (aura_get_ring_stats(engine, 0, &rstats) == 0) {
             result.converged_depth = rstats.in_flight_limit;
         }
     } else {
         result.converged_depth = rc->depth;
     }
 
-    auraio_destroy(engine);
+    aura_destroy(engine);
     for (int i = 0; i < num_bufs; i++) free(bufs[i]);
     free(bufs);
     free(slots);
@@ -782,7 +782,7 @@ int main(int argc, char **argv) {
         // User-provided file
         const char *path = cfg.file_path;
         // Check env var
-        if (!path) path = getenv("AURAIO_PERF_FILE");
+        if (!path) path = getenv("AURA_PERF_FILE");
         fd = open(path, O_RDWR | O_DIRECT);
         if (fd < 0) {
             fd = open(path, O_RDWR);

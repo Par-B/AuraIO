@@ -7,7 +7,7 @@
  * Usage: ./simple_read <file>
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -27,9 +27,9 @@ int main(int argc, char **argv) {
     const char *filename = argv[1];
 
     try {
-        // Create the auraio engine
+        // Create the aura engine
         std::cout << "Creating async I/O engine...\n";
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Open file with O_DIRECT for best async I/O performance
         int fd = open(filename, O_RDONLY | O_DIRECT);
@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
             std::cout << "Note: O_DIRECT not available, using buffered I/O\n";
         }
         if (fd < 0) {
-            throw auraio::Error(errno, filename);
+            throw aura::Error(errno, filename);
         }
 
         // Allocate aligned buffer from engine's pool (RAII)
@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
 
         // Submit async read
         std::cout << "Submitting async read of " << READ_SIZE << " bytes...\n";
-        (void)engine.read(fd, buffer, READ_SIZE, 0, [&](auraio::Request &, ssize_t res) {
+        (void)engine.read(fd, buffer, READ_SIZE, 0, [&](aura::Request &, ssize_t res) {
             if (res < 0) {
                 std::cerr << "Read failed: " << strerror(static_cast<int>(-res)) << "\n";
             } else {
@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
             if (hist.total_count() > 0) {
                 std::cout << "\nLatency Histogram (Ring 0):\n";
                 std::cout << "  Total samples: " << hist.total_count() << "\n";
-                std::cout << "  Bucket width:  " << auraio::Histogram::bucket_width_us << " μs\n";
+                std::cout << "  Bucket width:  " << aura::Histogram::bucket_width_us << " μs\n";
                 std::cout << "  Max tracked:   " << hist.max_tracked_us() << " μs\n";
 
                 // Calculate percentiles from histogram
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
                 uint32_t p999_threshold = (hist.total_count() * 999) / 1000;
                 int p50 = -1, p90 = -1, p99 = -1, p999 = -1;
 
-                for (int i = 0; i < auraio::Histogram::bucket_count; i++) {
+                for (int i = 0; i < aura::Histogram::bucket_count; i++) {
                     cumulative += hist.bucket(i);
                     if (p50 == -1 && cumulative >= p50_threshold) p50 = i;
                     if (p90 == -1 && cumulative >= p90_threshold) p90 = i;
@@ -132,16 +132,16 @@ int main(int argc, char **argv) {
                 std::cout << std::fixed << std::setprecision(2);
                 if (p50 >= 0)
                     std::cout << "  P50 latency:   "
-                              << (p50 * auraio::Histogram::bucket_width_us) / 1000.0 << " ms\n";
+                              << (p50 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
                 if (p90 >= 0)
                     std::cout << "  P90 latency:   "
-                              << (p90 * auraio::Histogram::bucket_width_us) / 1000.0 << " ms\n";
+                              << (p90 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
                 if (p99 >= 0)
                     std::cout << "  P99 latency:   "
-                              << (p99 * auraio::Histogram::bucket_width_us) / 1000.0 << " ms\n";
+                              << (p99 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
                 if (p999 >= 0)
                     std::cout << "  P99.9 latency: "
-                              << (p999 * auraio::Histogram::bucket_width_us) / 1000.0 << " ms\n";
+                              << (p999 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
                 if (hist.overflow() > 0) {
                     std::cout << "  Overflow:      " << hist.overflow() << " samples (> "
                               << hist.max_tracked_us() << " μs)\n";
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
         std::cout << "\nDone!\n";
         return (result > 0) ? 0 : 1;
 
-    } catch (const auraio::Error &e) {
+    } catch (const aura::Error &e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         return 1;
     } catch (const std::exception &e) {

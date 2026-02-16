@@ -6,7 +6,7 @@
 //!
 //! Usage: cargo run --example file_copy -- <source> <destination>
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::env;
 use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;

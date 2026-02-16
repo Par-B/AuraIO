@@ -2,7 +2,7 @@
  * @file vectored_io.c
  * @brief Demonstrate vectored (scatter-gather) I/O operations
  *
- * Shows how to use auraio_readv() and auraio_writev() for efficient
+ * Shows how to use aura_readv() and aura_writev() for efficient
  * I/O with multiple buffers in a single syscall. Useful for:
  * - Database page operations (header + data in separate buffers)
  * - Structured file formats (metadata + content sections)
@@ -13,14 +13,14 @@
  * Run:   ./examples/C/vectored_io
  */
 
-#include <auraio.h>
+#include <aura.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-#define TEST_FILE "/tmp/auraio_vectored_test.dat"
+#define TEST_FILE "/tmp/aura_vectored_test.dat"
 #define HEADER_SIZE 64
 #define PAYLOAD_SIZE 1024
 
@@ -29,7 +29,7 @@ typedef struct {
     ssize_t result;
 } io_context_t;
 
-void write_completion(auraio_request_t *req, ssize_t result, void *user_data) {
+void write_completion(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_context_t *ctx = (io_context_t *)user_data;
     ctx->result = result;
@@ -41,7 +41,7 @@ void write_completion(auraio_request_t *req, ssize_t result, void *user_data) {
     }
 }
 
-void read_completion(auraio_request_t *req, ssize_t result, void *user_data) {
+void read_completion(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_context_t *ctx = (io_context_t *)user_data;
     ctx->result = result;
@@ -57,9 +57,9 @@ int main(void) {
     printf("AuraIO Vectored I/O Example\n");
     printf("===========================\n\n");
 
-    auraio_engine_t *engine = auraio_create();
+    aura_engine_t *engine = aura_create();
     if (!engine) {
-        perror("auraio_create");
+        perror("aura_create");
         return 1;
     }
 
@@ -74,7 +74,7 @@ int main(void) {
     char *header = calloc(1, HEADER_SIZE);
     if (!header) {
         perror("calloc header");
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
     snprintf(header, HEADER_SIZE, "METADATA: size=%d, checksum=0xABCD, version=1", PAYLOAD_SIZE);
@@ -84,7 +84,7 @@ int main(void) {
     if (!payload) {
         perror("calloc payload");
         free(header);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
     memset(payload, 'X', PAYLOAD_SIZE - 1); /* Fill with 'X' */
@@ -102,26 +102,26 @@ int main(void) {
         perror("open for write");
         free(payload);
         free(header);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
     /* Submit vectored write */
     io_context_t write_ctx = { 0, 0 };
-    auraio_request_t *write_req =
-        auraio_writev(engine, wfd, write_iov, 2, 0, write_completion, &write_ctx);
+    aura_request_t *write_req =
+        aura_writev(engine, wfd, write_iov, 2, 0, write_completion, &write_ctx);
     if (!write_req) {
-        perror("auraio_writev");
+        perror("aura_writev");
         close(wfd);
         free(payload);
         free(header);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
     /* Wait for write completion */
     while (!write_ctx.done) {
-        auraio_wait(engine, 10);
+        aura_wait(engine, 10);
     }
 
     printf("  Header (%zu bytes): %s\n", write_iov[0].iov_len, header);
@@ -147,7 +147,7 @@ int main(void) {
         perror("calloc read buffers");
         free(read_header);
         free(read_payload);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         unlink(TEST_FILE);
         return 1;
     }
@@ -165,28 +165,28 @@ int main(void) {
         perror("open for read");
         free(read_payload);
         free(read_header);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         unlink(TEST_FILE);
         return 1;
     }
 
     /* Submit vectored read */
     io_context_t read_ctx = { 0, 0 };
-    auraio_request_t *read_req =
-        auraio_readv(engine, rfd, read_iov, 2, 0, read_completion, &read_ctx);
+    aura_request_t *read_req =
+        aura_readv(engine, rfd, read_iov, 2, 0, read_completion, &read_ctx);
     if (!read_req) {
-        perror("auraio_readv");
+        perror("aura_readv");
         close(rfd);
         free(read_payload);
         free(read_header);
-        auraio_destroy(engine);
+        aura_destroy(engine);
         unlink(TEST_FILE);
         return 1;
     }
 
     /* Wait for read completion */
     while (!read_ctx.done) {
-        auraio_wait(engine, 10);
+        aura_wait(engine, 10);
     }
 
     printf("  Header (%zu bytes): %s\n", read_iov[0].iov_len, read_header);
@@ -209,7 +209,7 @@ int main(void) {
     close(rfd);
     free(read_payload);
     free(read_header);
-    auraio_destroy(engine);
+    aura_destroy(engine);
     unlink(TEST_FILE);
 
     printf("\n======================================\n");

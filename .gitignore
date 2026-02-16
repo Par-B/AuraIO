@@ -17,6 +17,7 @@ tests/test_ring_select
 tests/test_concurrency_stress
 tests/test_coverage
 tests/test_otel
+tests/test_metadata_ops
 tests/bench_buffer
 tests/test_*_tsan
 tests/test_*_asan

@@ -6,7 +6,7 @@
 //!
 //! Usage: cargo run --example write_modes -- <file>
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::env;
 use std::fs;
 use std::os::unix::io::RawFd;
@@ -50,7 +50,7 @@ fn run_write_test(filename: &str, use_direct: bool) -> Result<()> {
             return Ok(());
         }
         eprintln!("Failed to open '{}': {}", filename, err);
-        return Err(auraio::Error::Io(err));
+        return Err(aura::Error::Io(err));
     }
 
     // Allocate buffer - use aligned for O_DIRECT

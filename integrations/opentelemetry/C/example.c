@@ -13,9 +13,9 @@
  *   ./otel_example --endpoint http://host:4318/v1/metrics
  */
 
-#include <auraio.h>
-#include "auraio_otel.h"
-#include "auraio_otel_push.h"
+#include <aura.h>
+#include "aura_otel.h"
+#include "aura_otel_push.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -56,19 +56,19 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, handle_signal);
 
     /* Create a minimal AuraIO engine for demonstration */
-    auraio_options_t opts;
-    auraio_options_init(&opts);
+    aura_options_t opts;
+    aura_options_init(&opts);
     opts.ring_count = 1;
     opts.queue_depth = 64;
 
-    auraio_engine_t *engine = auraio_create_with_options(&opts);
+    aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "Failed to create AuraIO engine: %s\n", strerror(errno));
         return 1;
     }
 
-    printf("AuraIO OpenTelemetry Exporter (v%s)\n", auraio_version());
-    printf("Engine: %d ring(s), queue_depth=%d\n", auraio_get_ring_count(engine), opts.queue_depth);
+    printf("AuraIO OpenTelemetry Exporter (v%s)\n", aura_version());
+    printf("Engine: %d ring(s), queue_depth=%d\n", aura_get_ring_count(engine), opts.queue_depth);
 
     if (dry_run) {
         printf("Mode: dry-run (stdout)\n\n");
@@ -80,12 +80,12 @@ int main(int argc, char *argv[]) {
     char *buf = malloc(METRICS_BUF_SIZE);
     if (!buf) {
         fprintf(stderr, "Failed to allocate metrics buffer\n");
-        auraio_destroy(engine);
+        aura_destroy(engine);
         return 1;
     }
 
     while (running) {
-        int len = auraio_metrics_otel(engine, buf, METRICS_BUF_SIZE);
+        int len = aura_metrics_otel(engine, buf, METRICS_BUF_SIZE);
         if (len < 0) {
             fprintf(stderr, "Failed to format metrics: %s\n",
                     errno == ENOBUFS ? "buffer too small" : strerror(errno));
@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
             printf("%.*s\n", len, buf);
             break;
         } else {
-            int status = auraio_otel_push(endpoint, buf, (size_t)len);
+            int status = aura_otel_push(endpoint, buf, (size_t)len);
             if (status == 200) {
                 printf("Pushed %d bytes -> HTTP %d OK\n", len, status);
             } else {
@@ -111,6 +111,6 @@ int main(int argc, char *argv[]) {
 
     free(buf);
     printf("\nShutting down...\n");
-    auraio_destroy(engine);
+    aura_destroy(engine);
     return 0;
 }

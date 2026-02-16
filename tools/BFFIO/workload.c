@@ -3,7 +3,7 @@
  * @brief Core I/O loop, file management, and worker threads for BFFIO
  *
  * Drives the benchmark workload: opens/creates files, spawns worker threads,
- * submits async I/O via AuraIO, collects completions via callbacks, and
+ * submits async I/O via Aura, collects completions via callbacks, and
  * manages the ramp/measurement lifecycle.
  *
  * The hot path (submit + callback) is zero-malloc: each thread pre-allocates
@@ -342,18 +342,18 @@ static void file_set_close(file_set_t *fset) {
 /* ============================================================================
  * I/O completion callback (the hot path)
  *
- * Callbacks run inside auraio_wait() on the worker thread, so tls_pool
+ * Callbacks run inside aura_wait() on the worker thread, so tls_pool
  * points to the correct per-thread pool.
  *
  * Completion timestamp is cached per poll cycle via tls_completion_ns
  * to avoid calling clock_gettime for every individual callback.
- * Reset to 0 before each auraio_poll()/auraio_wait() call; the first
+ * Reset to 0 before each aura_poll()/aura_wait() call; the first
  * callback in the batch calls now_ns() and subsequent callbacks reuse it.
  * ============================================================================ */
 
 static _Thread_local uint64_t tls_completion_ns;
 
-static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void io_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_ctx_t *ctx = user_data;
 
@@ -385,7 +385,7 @@ static void io_callback(auraio_request_t *req, ssize_t result, void *user_data) 
  * Fsync completion callback
  * ============================================================================ */
 
-static void fsync_callback(auraio_request_t *req, ssize_t result, void *user_data) {
+static void fsync_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_ctx_t *ctx = user_data;
 
@@ -453,7 +453,7 @@ static inline int select_file(thread_ctx_t *tctx, uint64_t *rng) {
 static void *worker_thread(void *arg) {
     thread_ctx_t *tctx = arg;
     const job_config_t *config = tctx->config;
-    auraio_engine_t *engine = tctx->engine;
+    aura_engine_t *engine = tctx->engine;
     thread_stats_t *stats = tctx->stats;
 
     /* Initialize per-thread io_ctx pool */
@@ -466,7 +466,7 @@ static void *worker_thread(void *arg) {
      * Fill with non-zero data once to avoid zero-page optimization on writes.
      * FIO also fills once at init (--refill_buffers is opt-in). */
     for (int s = 0; s < tctx->effective_depth; s++) {
-        tctx->pool.slots[s].buffer = auraio_buffer_alloc(engine, (size_t)config->bs);
+        tctx->pool.slots[s].buffer = aura_buffer_alloc(engine, (size_t)config->bs);
         if (tctx->pool.slots[s].buffer) {
             memset(tctx->pool.slots[s].buffer, 0xA5 ^ (s & 0xFF), (size_t)config->bs);
         }
@@ -474,7 +474,7 @@ static void *worker_thread(void *arg) {
             fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", tctx->thread_id,
                     s);
             for (int f = 0; f < s; f++) {
-                auraio_buffer_free(engine, tctx->pool.slots[f].buffer, (size_t)config->bs);
+                aura_buffer_free(engine, tctx->pool.slots[f].buffer, (size_t)config->bs);
                 tctx->pool.slots[f].buffer = NULL;
             }
             io_ctx_pool_destroy(&tctx->pool);
@@ -607,12 +607,12 @@ static void *worker_thread(void *arg) {
             /* Submit the I/O */
             atomic_fetch_add(&stats->inflight, 1);
 
-            auraio_request_t *req;
+            aura_request_t *req;
             if (do_write) {
-                req = auraio_write(engine, fd, auraio_buf(buf), (size_t)bs, (off_t)offset,
+                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset,
                                    io_callback, ctx);
             } else {
-                req = auraio_read(engine, fd, auraio_buf(buf), (size_t)bs, (off_t)offset,
+                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset,
                                   io_callback, ctx);
             }
 
@@ -643,7 +643,7 @@ static void *worker_thread(void *arg) {
 
                         atomic_fetch_add(&stats->inflight, 1);
 
-                        auraio_request_t *fsync_req = auraio_fsync(engine, fd, AURAIO_FSYNC_DEFAULT,
+                        aura_request_t *fsync_req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT,
                                                                    fsync_callback, fsync_ctx);
                         if (!fsync_req) {
                             atomic_fetch_sub(&stats->inflight, 1);
@@ -658,16 +658,16 @@ static void *worker_thread(void *arg) {
          * The first callback in this poll cycle will call now_ns() once;
          * subsequent callbacks reuse that timestamp. */
         tls_completion_ns = 0;
-        auraio_poll(engine);
+        aura_poll(engine);
     }
 
     /* Drain remaining inflight I/O for this thread */
     while (atomic_load(&stats->inflight) > 0) {
         tls_completion_ns = 0;
-        auraio_wait(engine, 1);
+        aura_wait(engine, 1);
     }
 
-    /* Pool destruction is deferred to workload_run (after auraio_drain)
+    /* Pool destruction is deferred to workload_run (after aura_drain)
      * to avoid use-after-free when cross-thread completions arrive. */
 
     atomic_fetch_add(tctx->workers_done, 1);
@@ -678,7 +678,7 @@ static void *worker_thread(void *arg) {
  * workload_run -- top-level entry point
  * ============================================================================ */
 
-int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_stats_t *stats,
+int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats_t *stats,
                  uint64_t *runtime_ms) {
     int num_threads = config->numjobs > 0 ? config->numjobs : 1;
 
@@ -726,8 +726,8 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
      * so the worker never self-limits below the AIMD ceiling. */
     int effective_depth = config->iodepth;
     if (config->target_p99_ms > 0.0) {
-        auraio_ring_stats_t rstats;
-        if (auraio_get_ring_stats(engine, 0, &rstats) == 0 && rstats.queue_depth > 0) {
+        aura_ring_stats_t rstats;
+        if (aura_get_ring_stats(engine, 0, &rstats) == 0 && rstats.queue_depth > 0) {
             effective_depth = rstats.queue_depth;
         }
     }
@@ -840,12 +840,12 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
          * at the AIMD-found depth, not the probing ramp-up. */
         if (config->target_p99_ms > 0.0 && !converged_reset && !atomic_load(&ramping)) {
             int all_stable = 1;
-            int ring_count = auraio_get_ring_count(engine);
+            int ring_count = aura_get_ring_count(engine);
             for (int r = 0; r < ring_count; r++) {
-                auraio_ring_stats_t rs;
-                if (auraio_get_ring_stats(engine, r, &rs) == 0 && rs.ops_completed > 0) {
-                    if (rs.aimd_phase != AURAIO_PHASE_STEADY &&
-                        rs.aimd_phase != AURAIO_PHASE_CONVERGED) {
+                aura_ring_stats_t rs;
+                if (aura_get_ring_stats(engine, r, &rs) == 0 && rs.ops_completed > 0) {
+                    if (rs.aimd_phase != AURA_PHASE_STEADY &&
+                        rs.aimd_phase != AURA_PHASE_CONVERGED) {
                         all_stable = 0;
                         break;
                     }
@@ -894,13 +894,13 @@ int workload_run(const job_config_t *config, auraio_engine_t *engine, thread_sta
     }
 
     /* Final drain to ensure all completions are processed */
-    auraio_drain(engine, 5000);
+    aura_drain(engine, 5000);
 
     /* Free pre-allocated buffers, per-file offsets, then destroy pools */
     for (int i = 0; i < num_threads; i++) {
         for (int s = 0; s < tctx[i].pool.capacity; s++) {
             if (tctx[i].pool.slots[s].buffer) {
-                auraio_buffer_free(engine, tctx[i].pool.slots[s].buffer, (size_t)config->bs);
+                aura_buffer_free(engine, tctx[i].pool.slots[s].buffer, (size_t)config->bs);
                 tctx[i].pool.slots[s].buffer = NULL;
             }
         }

@@ -243,7 +243,7 @@ main.c
 - **One engine per job** — Each `.fio` section gets a fresh AuraIO engine so AIMD converges cleanly per workload with no stale state.
 - **Pre-allocated callback pool** — Each thread owns an `io_ctx_pool_t` (free-stack of `iodepth` slots). Zero `malloc`/`free` on the I/O hot path.
 - **Per-thread atomics** — `thread_stats_t` uses `_Atomic` counters. No shared lock for stats recording.
-- **Cross-thread callback safety** — AuraIO callbacks can fire on any thread calling `auraio_wait()`. All state is passed via the `user_data` pointer, not thread-local storage.
+- **Cross-thread callback safety** — AuraIO callbacks can fire on any thread calling `aura_wait()`. All state is passed via the `user_data` pointer, not thread-local storage.
 
 ## File Reference
 

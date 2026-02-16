@@ -8,7 +8,7 @@
 //!
 //! Run: cargo run --example quickstart
 
-use auraio::{Engine, Result};
+use aura::{Engine, Result};
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 const BUF_SIZE: usize = 4096;
 
 fn main() -> Result<()> {
-    let test_file = "/tmp/auraio_rust_quickstart.tmp";
+    let test_file = "/tmp/aura_rust_quickstart.tmp";
     let test_data = b"Hello from AuraIO Rust bindings! This is async I/O.\n";
 
     // Create a test file with known content

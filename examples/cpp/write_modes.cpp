@@ -9,7 +9,7 @@
  * Usage: ./write_modes <file>
  */
 
-#include <auraio.hpp>
+#include <aura.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -33,7 +33,7 @@ int run_write_test(const char* filename, bool use_direct) {
 
     try {
         // Create engine
-        auraio::Engine engine;
+        aura::Engine engine;
 
         // Open file with appropriate flags
         int flags = O_WRONLY | O_CREAT | O_TRUNC;
@@ -47,11 +47,11 @@ int run_write_test(const char* filename, bool use_direct) {
                 std::cout << "O_DIRECT not supported on this filesystem, skipping\n";
                 return 0;
             }
-            throw auraio::Error(errno, filename);
+            throw aura::Error(errno, filename);
         }
 
         // Allocate buffer - use aligned for O_DIRECT, regular vector for buffered
-        auraio::Buffer aligned_buf;
+        aura::Buffer aligned_buf;
         std::vector<char> heap_buf;
         void* buf;
 
@@ -79,8 +79,8 @@ int run_write_test(const char* filename, bool use_direct) {
 
         for (int i = 0; i < NUM_WRITES; i++) {
             off_t offset = i * static_cast<off_t>(WRITE_SIZE);
-            (void)engine.write(fd, auraio::buf(buf), WRITE_SIZE, offset,
-                [&completed, &end_time](auraio::Request&, ssize_t result) {
+            (void)engine.write(fd, aura::buf(buf), WRITE_SIZE, offset,
+                [&completed, &end_time](aura::Request&, ssize_t result) {
                     if (result < 0) {
                         std::cerr << "Write failed: " << strerror(static_cast<int>(-result)) << "\n";
                     }
@@ -120,7 +120,7 @@ int run_write_test(const char* filename, bool use_direct) {
 
         return 0;
 
-    } catch (const auraio::Error& e) {
+    } catch (const aura::Error& e) {
         std::cerr << "AuraIO error: " << e.what() << "\n";
         return -1;
     }

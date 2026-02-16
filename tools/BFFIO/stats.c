@@ -375,7 +375,7 @@ static void compute_direction(const thread_stats_t *raw, uint64_t runtime_ms, in
  * Result computation
  * -------------------------------------------------------------------- */
 
-void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, auraio_engine_t *engine,
+void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, aura_engine_t *engine,
                            const char *jobname, job_result_t *result) {
     memset(result, 0, sizeof(*result));
     strncpy(result->jobname, jobname, sizeof(result->jobname) - 1);
@@ -438,20 +438,20 @@ void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, aurai
         }
     }
 
-    /* Pull AuraIO adaptive tuning info */
+    /* Pull Aura adaptive tuning info */
     if (engine) {
-        auraio_stats_t engine_stats;
-        auraio_get_stats(engine, &engine_stats);
-        result->auraio_final_depth = engine_stats.peak_in_flight;
-        result->auraio_p99_ms = engine_stats.p99_latency_ms;
-        result->auraio_throughput_bps = engine_stats.current_throughput_bps;
+        aura_stats_t engine_stats;
+        aura_get_stats(engine, &engine_stats);
+        result->aura_final_depth = engine_stats.peak_in_flight;
+        result->aura_p99_ms = engine_stats.p99_latency_ms;
+        result->aura_throughput_bps = engine_stats.current_throughput_bps;
         result->adaptive_spills = engine_stats.adaptive_spills;
 
-        auraio_ring_stats_t ring_stats;
-        if (auraio_get_ring_stats(engine, 0, &ring_stats) == 0) {
-            result->auraio_phase = ring_stats.aimd_phase;
-            const char *phase_str = auraio_phase_name(ring_stats.aimd_phase);
-            strncpy(result->auraio_phase_name, phase_str, sizeof(result->auraio_phase_name) - 1);
+        aura_ring_stats_t ring_stats;
+        if (aura_get_ring_stats(engine, 0, &ring_stats) == 0) {
+            result->aura_phase = ring_stats.aimd_phase;
+            const char *phase_str = aura_phase_name(ring_stats.aimd_phase);
+            strncpy(result->aura_phase_name, phase_str, sizeof(result->aura_phase_name) - 1);
         }
     }
 }
