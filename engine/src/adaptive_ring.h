@@ -19,31 +19,7 @@
 #include <liburing.h>
 
 #include "adaptive_engine.h"
-
-/* Forward declarations */
-typedef struct aura_request aura_request_t;
-typedef void (*aura_callback_t)(aura_request_t *req, ssize_t result, void *user_data);
-
-/**
- * Request operation type
- */
-typedef enum {
-    AURA_OP_READ,
-    AURA_OP_WRITE,
-    AURA_OP_READV,
-    AURA_OP_WRITEV,
-    AURA_OP_FSYNC,
-    AURA_OP_FDATASYNC,
-    AURA_OP_CANCEL,
-    AURA_OP_READ_FIXED,     /**< Read using registered buffer */
-    AURA_OP_WRITE_FIXED,    /**< Write using registered buffer */
-    AURA_OP_OPENAT,         /**< Async openat */
-    AURA_OP_CLOSE,          /**< Async close */
-    AURA_OP_STATX,          /**< Async statx */
-    AURA_OP_FALLOCATE,      /**< Async fallocate */
-    AURA_OP_FTRUNCATE,      /**< Async ftruncate */
-    AURA_OP_SYNC_FILE_RANGE /**< Async sync_file_range */
-} aura_op_type_t;
+#include "aura.h" /* aura_op_type_t, aura_request_t, aura_callback_t */
 
 /**
  * Request context
@@ -53,8 +29,8 @@ typedef enum {
 struct aura_request {
     /* Operation info */
     aura_op_type_t op_type; /**< Operation type */
-    int fd;                   /**< File descriptor */
-    off_t offset;             /**< File offset */
+    int fd;                 /**< File descriptor */
+    off_t offset;           /**< File offset */
 
     /* Buffer for simple read/write */
     void *buffer; /**< I/O buffer */
@@ -68,7 +44,7 @@ struct aura_request {
 
     /* Callback */
     aura_callback_t callback; /**< Completion callback */
-    void *user_data;            /**< User data for callback */
+    void *user_data;          /**< User data for callback */
 
     /* Internal tracking */
     int64_t submit_time_ns;      /**< Submission timestamp */
@@ -132,12 +108,12 @@ typedef struct {
     pthread_mutex_t cq_lock; /**< Protects completion queue access */
 
     /* Request tracking */
-    aura_request_t *requests; /**< Request array */
-    int *free_request_stack;    /**< Free request indices */
-    int free_request_count;     /**< Number of free request slots */
-    int max_requests;           /**< Queue depth */
-    _Atomic int pending_count;  /**< Number of in-flight ops (atomic for lock-free reads) */
-    int peak_pending_count;     /**< High-water mark of pending_count (updated by tick thread) */
+    aura_request_t *requests;  /**< Request array */
+    int *free_request_stack;   /**< Free request indices */
+    int free_request_count;    /**< Number of free request slots */
+    int max_requests;          /**< Queue depth */
+    _Atomic int pending_count; /**< Number of in-flight ops (atomic for lock-free reads) */
+    int peak_pending_count;    /**< High-water mark of pending_count (updated by tick thread) */
 
     /* Adaptive controller */
     adaptive_controller_t adaptive; /**< AIMD controller */

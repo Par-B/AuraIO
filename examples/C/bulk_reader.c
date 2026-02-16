@@ -62,7 +62,7 @@ void on_file_read(aura_request_t *req, ssize_t result, void *user_data) {
 
     /* Clean up per-file resources */
     close(fctx->fd);
-    aura_buffer_free(ctx->engine, fctx->buf, READ_SIZE);
+    aura_buffer_free(ctx->engine, fctx->buf);
     free(fctx);
 
     ctx->files_completed++;
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
         /* Allocate per-file context for cleanup in callback */
         file_ctx_t *fctx = malloc(sizeof(file_ctx_t));
         if (!fctx) {
-            aura_buffer_free(engine, buf, READ_SIZE);
+            aura_buffer_free(engine, buf);
             close(fd);
             continue;
         }
@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
             submitted++;
         } else {
             free(fctx);
-            aura_buffer_free(engine, buf, READ_SIZE);
+            aura_buffer_free(engine, buf);
             close(fd);
         }
     }
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
 
     /* Engine tuning results */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
     printf("\nAdaptive tuning results:\n");
     printf("  Optimal in-flight: %d\n", stats.optimal_in_flight);
     printf("  Optimal batch:     %d\n", stats.optimal_batch_size);

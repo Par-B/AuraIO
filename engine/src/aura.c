@@ -97,6 +97,7 @@ struct aura_engine {
 
     /* Buffer pool (largest member, placed last) */
     buffer_pool_t buffer_pool; /**< Aligned buffer pool */
+    buf_size_map_t buf_size_map; /**< ptr → size_class lookup for buffer_free */
 };
 
 /* ============================================================================
@@ -606,8 +607,12 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
         return NULL;
     }
 
-    /* Initialize buffer pool */
+    /* Initialize buffer pool and size map */
     if (buffer_pool_init(&engine->buffer_pool, engine->buffer_alignment) != 0) {
+        goto cleanup_engine;
+    }
+    if (buf_size_map_init(&engine->buf_size_map) != 0) {
+        buffer_pool_destroy(&engine->buffer_pool);
         goto cleanup_engine;
     }
 
@@ -690,6 +695,7 @@ cleanup_rings_full:
 cleanup_rings:
     free(engine->rings);
 cleanup_buffer_pool:
+    buf_size_map_destroy(&engine->buf_size_map);
     buffer_pool_destroy(&engine->buffer_pool);
 cleanup_engine:
     pthread_rwlock_destroy(&engine->reg_lock);
@@ -737,7 +743,8 @@ void aura_destroy(aura_engine_t *engine) {
     }
     free(engine->rings);
 
-    /* Destroy buffer pool */
+    /* Destroy buffer pool and size map */
+    buf_size_map_destroy(&engine->buf_size_map);
     buffer_pool_destroy(&engine->buffer_pool);
 
     pthread_rwlock_destroy(&engine->reg_lock);
@@ -749,8 +756,8 @@ void aura_destroy(aura_engine_t *engine) {
  * ============================================================================
  */
 
-aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len,
-                              off_t offset, aura_callback_t callback, void *user_data) {
+aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
+                          aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || len == 0) {
         errno = EINVAL;
         return NULL;
@@ -865,8 +872,8 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
     }
 }
 
-aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len,
-                               off_t offset, aura_callback_t callback, void *user_data) {
+aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
+                           aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || len == 0) {
         errno = EINVAL;
         return NULL;
@@ -981,8 +988,8 @@ aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t
     }
 }
 
-aura_request_t *aura_fsync(aura_engine_t *engine, int fd, aura_fsync_flags_t flags,
-                               aura_callback_t callback, void *user_data) {
+aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
+                           aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
@@ -1039,7 +1046,7 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, aura_fsync_flags_t fla
  * ============================================================================ */
 
 aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
-                                mode_t mode, aura_callback_t callback, void *user_data) {
+                            mode_t mode, aura_callback_t callback, void *user_data) {
     if (!engine || !pathname) {
         errno = EINVAL;
         return NULL;
@@ -1067,7 +1074,7 @@ aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathna
 }
 
 aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callback,
-                               void *user_data) {
+                           void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
@@ -1094,8 +1101,8 @@ aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callba
 }
 
 aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
-                               unsigned int mask, struct statx *statxbuf,
-                               aura_callback_t callback, void *user_data) {
+                           unsigned int mask, struct statx *statxbuf, aura_callback_t callback,
+                           void *user_data) {
     if (!engine || !pathname || !statxbuf) {
         errno = EINVAL;
         return NULL;
@@ -1123,8 +1130,8 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
     return ctx.req;
 }
 
-aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset,
-                                   off_t len, aura_callback_t callback, void *user_data) {
+aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset, off_t len,
+                               aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
@@ -1167,7 +1174,7 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
 }
 
 aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
-                                   aura_callback_t callback, void *user_data) {
+                               aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
@@ -1207,9 +1214,9 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
     return ctx.req;
 }
 
-aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset,
-                                         off_t nbytes, unsigned int flags,
-                                         aura_callback_t callback, void *user_data) {
+aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
+                                     unsigned int flags, aura_callback_t callback,
+                                     void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
@@ -1257,7 +1264,7 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
  */
 
 aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt,
-                               off_t offset, aura_callback_t callback, void *user_data) {
+                           off_t offset, aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || !iov || iovcnt <= 0 || iovcnt > IOV_MAX) {
         errno = EINVAL;
         return NULL;
@@ -1305,9 +1312,8 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
     return ctx.req;
 }
 
-aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *iov,
-                                int iovcnt, off_t offset, aura_callback_t callback,
-                                void *user_data) {
+aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt,
+                            off_t offset, aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || !iov || iovcnt <= 0 || iovcnt > IOV_MAX) {
         errno = EINVAL;
         return NULL;
@@ -1776,15 +1782,36 @@ void *aura_buffer_alloc(aura_engine_t *engine, size_t size) {
         return NULL;
     }
 
-    return buffer_pool_alloc(&engine->buffer_pool, size);
+    void *buf = buffer_pool_alloc(&engine->buffer_pool, size);
+    if (buf) {
+        /* Record ptr → size_class so buffer_free doesn't need size */
+        int class_idx = 0;
+        size_t s = size;
+        if (s <= 4096) class_idx = 0;
+        else if (s <= 8192) class_idx = 1;
+        else if (s <= 16384) class_idx = 2;
+        else if (s <= 32768) class_idx = 3;
+        else if (s <= 65536) class_idx = 4;
+        else if (s <= 131072) class_idx = 5;
+        else if (s <= 262144) class_idx = 6;
+        else {
+            int lz = __builtin_clzl(s - 1);
+            int hb = (int)(sizeof(unsigned long) * 8) - lz;
+            class_idx = hb - 12;
+            if (class_idx < 0) class_idx = 0;
+            if (class_idx >= 16) class_idx = 15;
+        }
+        buf_size_map_insert(&engine->buf_size_map, buf, class_idx);
+    }
+    return buf;
 }
 
-void aura_buffer_free(aura_engine_t *engine, void *buf, size_t size) {
+void aura_buffer_free(aura_engine_t *engine, void *buf) {
     if (!engine || !buf) {
         return;
     }
 
-    buffer_pool_free(&engine->buffer_pool, buf, size);
+    buffer_pool_free_tracked(&engine->buffer_pool, &engine->buf_size_map, buf);
 }
 
 /* ============================================================================
@@ -2073,12 +2100,14 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats) {
-    if (!engine || !stats) {
+void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+    if (!engine || !stats || stats_size == 0) {
         return;
     }
 
-    memset(stats, 0, sizeof(*stats));
+    /* Zero the caller's buffer (may be smaller than our struct) */
+    aura_stats_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
 
     /* Aggregate stats from all rings */
     int total_in_flight = 0;
@@ -2095,8 +2124,8 @@ void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats) {
          * completion handlers and tick thread */
         ring_lock(ring);
 
-        stats->ops_completed += ring->ops_completed;
-        stats->bytes_transferred += ring->bytes_completed;
+        tmp.ops_completed += ring->ops_completed;
+        tmp.bytes_transferred += ring->bytes_completed;
         total_in_flight += atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
         total_peak_in_flight += ring->peak_pending_count;
 
@@ -2118,22 +2147,25 @@ void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats) {
         ring_unlock(ring);
     }
 
-    stats->current_in_flight = total_in_flight;
-    stats->peak_in_flight = total_peak_in_flight;
-    stats->optimal_in_flight = total_optimal_inflight;
+    tmp.current_in_flight = total_in_flight;
+    tmp.peak_in_flight = total_peak_in_flight;
+    tmp.optimal_in_flight = total_optimal_inflight;
     /* Guard against division by zero if no rings are active */
-    stats->optimal_batch_size = engine->ring_count > 0 ? total_batch_size / engine->ring_count : 0;
-    stats->current_throughput_bps = total_throughput;
-    stats->p99_latency_ms = max_p99;
-    stats->adaptive_spills = atomic_load_explicit(&engine->adaptive_spills, memory_order_relaxed);
+    tmp.optimal_batch_size = engine->ring_count > 0 ? total_batch_size / engine->ring_count : 0;
+    tmp.current_throughput_bps = total_throughput;
+    tmp.p99_latency_ms = max_p99;
+    tmp.adaptive_spills = atomic_load_explicit(&engine->adaptive_spills, memory_order_relaxed);
+
+    /* Copy only as many bytes as the caller's struct can hold */
+    size_t copy_size = stats_size < sizeof(tmp) ? stats_size : sizeof(tmp);
+    memcpy(stats, &tmp, copy_size);
 }
 
 /* Verify public and internal histogram constants stay in sync */
 _Static_assert(AURA_HISTOGRAM_BUCKETS == LATENCY_BUCKET_COUNT,
                "Public AURA_HISTOGRAM_BUCKETS must match internal LATENCY_BUCKET_COUNT");
-_Static_assert(
-    AURA_HISTOGRAM_BUCKET_WIDTH_US == LATENCY_BUCKET_WIDTH_US,
-    "Public AURA_HISTOGRAM_BUCKET_WIDTH_US must match internal LATENCY_BUCKET_WIDTH_US");
+_Static_assert(AURA_HISTOGRAM_BUCKET_WIDTH_US == LATENCY_BUCKET_WIDTH_US,
+               "Public AURA_HISTOGRAM_BUCKET_WIDTH_US must match internal LATENCY_BUCKET_WIDTH_US");
 
 /* Verify public phase constants match internal enum */
 _Static_assert(AURA_PHASE_BASELINE == ADAPTIVE_PHASE_BASELINE,
@@ -2154,38 +2186,39 @@ int aura_get_ring_count(const aura_engine_t *engine) {
     return engine->ring_count;
 }
 
-int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats) {
-    if (!engine || !stats) return -1;
+int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
+                        size_t stats_size) {
+    if (!engine || !stats || stats_size == 0) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
-        memset(stats, 0, sizeof(*stats));
+        memset(stats, 0, stats_size < sizeof(*stats) ? stats_size : sizeof(*stats));
         return -1;
     }
+
+    aura_ring_stats_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
 
     ring_ctx_t *ring = &engine->rings[ring_idx];
     ring_lock(ring);
 
-    stats->ops_completed = ring->ops_completed;
-    stats->bytes_transferred = ring->bytes_completed;
-    stats->pending_count = atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
-    stats->peak_in_flight = ring->peak_pending_count;
-    stats->queue_depth = ring->max_requests;
+    tmp.ops_completed = ring->ops_completed;
+    tmp.bytes_transferred = ring->bytes_completed;
+    tmp.pending_count = atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
+    tmp.peak_in_flight = ring->peak_pending_count;
+    tmp.queue_depth = ring->max_requests;
 
-    /* Use acquire ordering on all adaptive controller atomics to pair with
-     * release in the tick thread.  The tick thread writes these without
-     * holding ring->lock, so the mutex alone does not establish
-     * happens-before; acquire on the loads does. */
     adaptive_controller_t *ctrl = &ring->adaptive;
-    stats->in_flight_limit =
+    tmp.in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_acquire);
-    stats->batch_threshold =
+    tmp.batch_threshold =
         atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_acquire);
-    stats->p99_latency_ms = atomic_load_explicit(&ctrl->current_p99_ms, memory_order_acquire);
-    stats->throughput_bps =
-        atomic_load_explicit(&ctrl->current_throughput_bps, memory_order_acquire);
-    stats->aimd_phase = atomic_load_explicit(&ctrl->phase, memory_order_acquire);
-    memset(stats->_reserved, 0, sizeof(stats->_reserved));
+    tmp.p99_latency_ms = atomic_load_explicit(&ctrl->current_p99_ms, memory_order_acquire);
+    tmp.throughput_bps = atomic_load_explicit(&ctrl->current_throughput_bps, memory_order_acquire);
+    tmp.aimd_phase = atomic_load_explicit(&ctrl->phase, memory_order_acquire);
 
     ring_unlock(ring);
+
+    size_t copy_size = stats_size < sizeof(tmp) ? stats_size : sizeof(tmp);
+    memcpy(stats, &tmp, copy_size);
     return 0;
 }
 
@@ -2226,6 +2259,11 @@ int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stat
     stats->total_buffers = atomic_load_explicit(&pool->total_buffers, memory_order_relaxed);
     stats->shard_count = pool->shard_count;
     return 0;
+}
+
+int aura_request_op_type(const aura_request_t *req) {
+    if (!req) return -1;
+    return (int)req->op_type;
 }
 
 const char *aura_phase_name(int phase) {

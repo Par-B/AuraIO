@@ -86,11 +86,10 @@ int main(int argc, char **argv) {
 
     /* Submit async read */
     printf("Submitting async read of %d bytes...\n", READ_SIZE);
-    aura_request_t *req =
-        aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read_done, &state);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read_done, &state);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
-        aura_buffer_free(engine, buf, READ_SIZE);
+        aura_buffer_free(engine, buf);
         close(fd);
         aura_destroy(engine);
         return 1;
@@ -119,7 +118,7 @@ int main(int argc, char **argv) {
 
     /* Get aggregate statistics */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
     printf("\nEngine statistics:\n");
     printf("  Ops completed:     %lld\n", (long long)stats.ops_completed);
     printf("  Bytes transferred: %lld\n", (long long)stats.bytes_transferred);
@@ -132,7 +131,7 @@ int main(int argc, char **argv) {
     int rings = aura_get_ring_count(engine);
     for (int i = 0; i < rings; i++) {
         aura_ring_stats_t rs;
-        if (aura_get_ring_stats(engine, i, &rs) == 0) {
+        if (aura_get_ring_stats(engine, i, &rs, sizeof(rs)) == 0) {
             printf("  Ring %d: phase=%s depth=%d/%d\n", i, aura_phase_name(rs.aimd_phase),
                    rs.pending_count, rs.in_flight_limit);
         }
@@ -188,7 +187,7 @@ int main(int argc, char **argv) {
     }
 
     /* Cleanup */
-    aura_buffer_free(engine, buf, READ_SIZE);
+    aura_buffer_free(engine, buf);
     close(fd);
     aura_destroy(engine);
 

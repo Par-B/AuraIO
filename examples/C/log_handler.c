@@ -168,8 +168,7 @@ int main(void) {
     aura_log_emit(AURA_LOG_DEBUG, "submitting read: fd=%d offset=0 size=%d", fd, BUF_SIZE);
 
     io_completed = 0;
-    aura_request_t *req =
-        aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_complete, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_complete, NULL);
     if (!req) {
         aura_log_emit(AURA_LOG_ERR, "aura_read failed: %s", strerror(errno));
     } else {
@@ -179,13 +178,13 @@ int main(void) {
 
     /* --- Step 4: Show stats -------------------------------------------- */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
     printf("\nEngine stats:\n");
     printf("  Operations completed: %lld\n", (long long)stats.ops_completed);
     printf("  P99 latency: %.3f ms\n", stats.p99_latency_ms);
 
     /* --- Step 5: Clean up ---------------------------------------------- */
-    aura_buffer_free(engine, buf, BUF_SIZE);
+    aura_buffer_free(engine, buf);
     close(fd);
     unlink(TEST_FILE);
 

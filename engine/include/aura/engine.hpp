@@ -149,8 +149,8 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req = aura_read(handle_, fd, buf.c_buf(), len, offset,
-                                            aura_detail_callback_trampoline, ctx);
+        aura_request_t *req =
+            aura_read(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -180,8 +180,8 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req = aura_write(handle_, fd, buf.c_buf(), len, offset,
-                                             aura_detail_callback_trampoline, ctx);
+        aura_request_t *req =
+            aura_write(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -219,7 +219,7 @@ class Engine {
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
         aura_request_t *req = aura_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()),
-                                             offset, aura_detail_callback_trampoline, ctx);
+                                         offset, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -256,7 +256,7 @@ class Engine {
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
         aura_request_t *req = aura_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()),
-                                              offset, aura_detail_callback_trampoline, ctx);
+                                          offset, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -309,8 +309,8 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req = aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC,
-                                             aura_detail_callback_trampoline, ctx);
+        aura_request_t *req =
+            aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -587,7 +587,7 @@ class Engine {
      */
     [[nodiscard]] Stats get_stats() const {
         Stats stats;
-        aura_get_stats(handle_, &stats.stats_);
+        aura_get_stats(handle_, &stats.stats_, sizeof(stats.stats_));
         return stats;
     }
 
@@ -605,7 +605,7 @@ class Engine {
      */
     [[nodiscard]] RingStats get_ring_stats(int ring_idx) const {
         RingStats rs;
-        if (aura_get_ring_stats(handle_, ring_idx, &rs.stats_) != 0)
+        if (aura_get_ring_stats(handle_, ring_idx, &rs.stats_, sizeof(rs.stats_)) != 0)
             throw std::out_of_range("ring_idx out of range");
         rs.ring_idx_ = ring_idx;
         return rs;

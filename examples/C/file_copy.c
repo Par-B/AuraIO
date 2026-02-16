@@ -110,8 +110,8 @@ int main(int argc, char *argv[]) {
 
         /* Read chunk from source */
         io_state_t read_state = { .done = 0, .result = 0 };
-        aura_request_t *req = aura_read(engine, src_fd, aura_buf(buf), chunk, offset,
-                                            on_io_complete, &read_state);
+        aura_request_t *req =
+            aura_read(engine, src_fd, aura_buf(buf), chunk, offset, on_io_complete, &read_state);
         if (!req) {
             fprintf(stderr, "\nRead submission failed at offset %lld: %s\n", (long long)offset,
                     strerror(errno));
@@ -136,7 +136,7 @@ int main(int argc, char *argv[]) {
         /* Write chunk to destination */
         io_state_t write_state = { .done = 0, .result = 0 };
         req = aura_write(engine, dst_fd, aura_buf(buf), bytes_read, offset, on_io_complete,
-                           &write_state);
+                         &write_state);
         if (!req) {
             fprintf(stderr, "\nWrite submission failed at offset %lld: %s\n", (long long)offset,
                     strerror(errno));
@@ -203,7 +203,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
-    aura_buffer_free(engine, buf, CHUNK_SIZE);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     close(src_fd);
     close(dst_fd);

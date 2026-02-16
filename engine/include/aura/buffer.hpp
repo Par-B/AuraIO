@@ -306,8 +306,8 @@ class Buffer {
      * Result of releasing buffer ownership
      */
     struct ReleasedBuffer {
-        void *data;              /**< Buffer pointer */
-        size_t size;             /**< Buffer size in bytes */
+        void *data;            /**< Buffer pointer */
+        size_t size;           /**< Buffer size in bytes */
         aura_engine_t *engine; /**< Engine that owns the pool (nullptr if not pool-allocated) */
     };
 
@@ -316,7 +316,7 @@ class Buffer {
      *
      * After calling release(), the Buffer will not free the memory
      * on destruction. Caller becomes responsible for freeing via
-     * aura_buffer_free(released.engine, released.data, released.size).
+     * aura_buffer_free(released.engine, released.data).
      *
      * @return ReleasedBuffer with pointer, size, and engine needed for freeing
      */
@@ -354,7 +354,7 @@ inline void Buffer::release_internal() noexcept {
         bool engine_alive =
             engine_ && engine_alive_ && engine_alive_->load(std::memory_order_acquire);
         if (engine_alive) {
-            aura_buffer_free(engine_, ptr_, size_);
+            aura_buffer_free(engine_, ptr_);
         } else {
             /* Engine already destroyed: fail-safe fallback for pool allocations. */
             free(ptr_);

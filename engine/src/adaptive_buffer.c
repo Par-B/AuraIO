@@ -806,3 +806,154 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
 
     pthread_mutex_unlock(&shard->lock);
 }
+
+/* ============================================================================
+ * Buffer Size Map (ptr → size_class)
+ * ============================================================================ */
+
+static inline size_t buf_map_hash(uintptr_t key, size_t mask) {
+    /* Mix bits — pointers are page-aligned so low 12 bits are zero.
+     * Fibonacci hashing distributes well for aligned pointers. */
+    key ^= key >> 16;
+    key *= 0x9E3779B97F4A7C15ULL;
+    key ^= key >> 16;
+    return key & mask;
+}
+
+static inline size_t buf_map_stripe(uintptr_t key) {
+    return (key >> 12) & (BUF_MAP_STRIPE_COUNT - 1);
+}
+
+int buf_size_map_init(buf_size_map_t *map) {
+    map->capacity = BUF_MAP_INITIAL_CAPACITY;
+    atomic_init(&map->count, 0);
+    map->entries = calloc(map->capacity, sizeof(buf_map_entry_t));
+    if (!map->entries) return -1;
+    for (int i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
+        pthread_mutex_init(&map->locks[i], NULL);
+    }
+    return 0;
+}
+
+void buf_size_map_destroy(buf_size_map_t *map) {
+    free(map->entries);
+    map->entries = NULL;
+    map->capacity = 0;
+    for (int i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
+        pthread_mutex_destroy(&map->locks[i]);
+    }
+}
+
+/* Grow the table (caller must hold ALL stripe locks) */
+static void buf_map_grow(buf_size_map_t *map) {
+    size_t old_cap = map->capacity;
+    size_t new_cap = old_cap * 2;
+    buf_map_entry_t *old = map->entries;
+    buf_map_entry_t *new_entries = calloc(new_cap, sizeof(buf_map_entry_t));
+    if (!new_entries) return; /* grow failed — insertions will still work, just slower */
+
+    size_t new_mask = new_cap - 1;
+    for (size_t i = 0; i < old_cap; i++) {
+        if (old[i].key != 0) {
+            size_t idx = buf_map_hash(old[i].key, new_mask);
+            while (new_entries[idx].key != 0) {
+                idx = (idx + 1) & new_mask;
+            }
+            new_entries[idx] = old[i];
+        }
+    }
+
+    map->entries = new_entries;
+    map->capacity = new_cap;
+    free(old);
+}
+
+void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
+    uintptr_t key = (uintptr_t)ptr;
+    size_t stripe = buf_map_stripe(key);
+
+    pthread_mutex_lock(&map->locks[stripe]);
+
+    /* Check load factor — if too high, grab all locks and grow */
+    size_t count = atomic_load_explicit(&map->count, memory_order_relaxed);
+    if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
+        /* Acquire remaining locks in order */
+        for (size_t i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
+            if (i != stripe) pthread_mutex_lock(&map->locks[i]);
+        }
+        /* Re-check after acquiring all locks */
+        count = atomic_load_explicit(&map->count, memory_order_relaxed);
+        if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
+            buf_map_grow(map);
+        }
+        for (size_t i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
+            if (i != stripe) pthread_mutex_unlock(&map->locks[i]);
+        }
+    }
+
+    size_t mask = map->capacity - 1;
+    size_t idx = buf_map_hash(key, mask);
+    while (map->entries[idx].key != 0) {
+        idx = (idx + 1) & mask;
+    }
+    map->entries[idx].key = key;
+    map->entries[idx].class_idx = (uint8_t)class_idx;
+    atomic_fetch_add_explicit(&map->count, 1, memory_order_relaxed);
+
+    pthread_mutex_unlock(&map->locks[stripe]);
+}
+
+int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
+    uintptr_t key = (uintptr_t)ptr;
+    size_t stripe = buf_map_stripe(key);
+
+    pthread_mutex_lock(&map->locks[stripe]);
+
+    size_t mask = map->capacity - 1;
+    size_t idx = buf_map_hash(key, mask);
+
+    /* Linear probe to find the key */
+    while (map->entries[idx].key != 0) {
+        if (map->entries[idx].key == key) {
+            int class_idx = map->entries[idx].class_idx;
+            /* Delete with backward-shift to maintain probe chains */
+            size_t hole = idx;
+            for (;;) {
+                size_t next = (hole + 1) & mask;
+                if (map->entries[next].key == 0) break;
+                size_t natural = buf_map_hash(map->entries[next].key, mask);
+                /* Check if 'next' is displaced past 'hole' */
+                bool displaced = (hole < next) ? (natural <= hole || natural > next)
+                                               : (natural <= hole && natural > next);
+                if (displaced) {
+                    map->entries[hole] = map->entries[next];
+                    hole = next;
+                } else {
+                    break;
+                }
+            }
+            map->entries[hole].key = 0;
+            atomic_fetch_sub_explicit(&map->count, 1, memory_order_relaxed);
+            pthread_mutex_unlock(&map->locks[stripe]);
+            return class_idx;
+        }
+        idx = (idx + 1) & mask;
+    }
+
+    pthread_mutex_unlock(&map->locks[stripe]);
+    return -1; /* Not found */
+}
+
+void buffer_pool_free_tracked(buffer_pool_t *pool, buf_size_map_t *map, void *buf) {
+    if (!pool || !buf) return;
+
+    int class_idx = buf_size_map_remove(map, buf);
+    if (class_idx < 0) {
+        /* Unknown buffer — just free it directly */
+        free(buf);
+        return;
+    }
+
+    size_t size = class_to_size(class_idx);
+    buffer_pool_free(pool, buf, size);
+}

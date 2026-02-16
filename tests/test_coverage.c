@@ -236,8 +236,8 @@ TEST(log_emit_public_all_levels) {
     aura_set_log_handler(test_log_handler, &sentinel);
 
     /* Verify each public log level constant dispatches correctly. */
-    static const int levels[] = { AURA_LOG_ERR, AURA_LOG_WARN, AURA_LOG_NOTICE,
-                                  AURA_LOG_INFO, AURA_LOG_DEBUG };
+    static const int levels[] = { AURA_LOG_ERR, AURA_LOG_WARN, AURA_LOG_NOTICE, AURA_LOG_INFO,
+                                  AURA_LOG_DEBUG };
     for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
         atomic_store(&log_cb_count, 0);
         last_log_level = -1;
@@ -320,7 +320,7 @@ TEST(request_introspection_during_io) {
     aura_wait(engine, 1000);
     assert(cb_called == 1);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -391,7 +391,7 @@ TEST(drain_with_pending_io) {
     assert(rc >= 1);
     assert(cb_called == 1);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -634,7 +634,7 @@ TEST(read_null_callback) {
     assert(req);
     aura_drain(engine, 1000);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -652,7 +652,7 @@ TEST(write_null_callback) {
     assert(req);
     aura_drain(engine, 1000);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -690,7 +690,7 @@ TEST(cancel_completed_request) {
     /* We cannot safely test this because the request handle is invalid
      * after the callback. Skip this specific test. */
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -766,8 +766,7 @@ TEST(register_buffers_and_use) {
 
     /* Read using registered buffer */
     cb_called = 0;
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, basic_cb, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -870,7 +869,7 @@ TEST(register_files_and_io) {
     assert(cb_called == 1);
     assert(cb_result == 4096);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
 
     rc = aura_unregister_files(engine);
     assert(rc == 0);
@@ -959,8 +958,7 @@ TEST(deferred_unregister_buffers) {
     aura_poll(engine);
 
     /* After finalization, fixed buffer submission should fail */
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == ENOENT || errno == EBUSY);
 
@@ -1056,7 +1054,7 @@ TEST(buffer_alloc_free_multiple_sizes) {
     }
 
     for (int i = 0; i < 6; i++) {
-        aura_buffer_free(engine, bufs[i], sizes[i]);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     aura_destroy(engine);
@@ -1071,7 +1069,7 @@ TEST(buffer_free_null) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     /* Free NULL should be no-op */
-    aura_buffer_free(engine, NULL, 4096);
+    aura_buffer_free(engine, NULL);
     aura_destroy(engine);
 }
 
@@ -1091,7 +1089,7 @@ static void *buffer_thread(void *arg) {
         void *buf = aura_buffer_alloc(ctx->engine, 4096);
         assert(buf);
         memset(buf, 0, 4096);
-        aura_buffer_free(ctx->engine, buf, 4096);
+        aura_buffer_free(ctx->engine, buf);
     }
     atomic_store(&ctx->done, 1);
     return NULL;
@@ -1127,7 +1125,7 @@ static void *buffer_thread_exit(void *arg) {
     for (int i = 0; i < 5; i++) {
         void *buf = aura_buffer_alloc(ctx->engine, 4096);
         assert(buf);
-        aura_buffer_free(ctx->engine, buf, 4096);
+        aura_buffer_free(ctx->engine, buf);
     }
     atomic_store(&ctx->done, 1);
     return NULL;
@@ -1140,7 +1138,7 @@ static void *buffer_thread_late_exit(void *arg) {
     for (int i = 0; i < 10; i++) {
         void *buf = aura_buffer_alloc(ctx->engine, 4096);
         assert(buf);
-        aura_buffer_free(ctx->engine, buf, 4096);
+        aura_buffer_free(ctx->engine, buf);
     }
     /* Signal done but don't exit yet - pool will be destroyed while thread is alive */
     atomic_store(&ctx->done, 1);
@@ -1214,7 +1212,7 @@ TEST(buffer_pool_huge_alloc) {
     /* Try allocating exactly at the max (128MB) */
     buf = aura_buffer_alloc(engine, 128 * 1024 * 1024);
     if (buf) {
-        aura_buffer_free(engine, buf, 128 * 1024 * 1024);
+        aura_buffer_free(engine, buf);
     }
 
     aura_destroy(engine);
@@ -1243,7 +1241,7 @@ TEST(buffer_pool_shard_capacity) {
      * but shard capacity is 256. With 600 buffers, at least one shard
      * will overflow and trigger deferred free. */
     for (int i = 0; i < NUM_BUFS; i++) {
-        aura_buffer_free(engine, bufs[i], 4096);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     /* Second round: 8KB buffers to exercise different size class */
@@ -1252,7 +1250,7 @@ TEST(buffer_pool_shard_capacity) {
         assert(bufs[i]);
     }
     for (int i = 0; i < NUM_BUFS; i++) {
-        aura_buffer_free(engine, bufs[i], 8192);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     /* Third round: Force the "no metadata slots" path by exhausting slots */
@@ -1261,7 +1259,7 @@ TEST(buffer_pool_shard_capacity) {
         assert(bufs[i]);
     }
     for (int i = 0; i < NUM_BUFS; i++) {
-        aura_buffer_free(engine, bufs[i], 16384);
+        aura_buffer_free(engine, bufs[i]);
     }
 
 #undef NUM_BUFS
@@ -1278,7 +1276,7 @@ TEST(buffer_pool_cross_thread_reuse) {
 
     void *buf1 = aura_buffer_alloc(engine, 8192);
     assert(buf1);
-    aura_buffer_free(engine, buf1, 8192);
+    aura_buffer_free(engine, buf1);
 
     /* Now spawn a thread that allocates - should hit shard slow path */
     pthread_t t;
@@ -1304,7 +1302,7 @@ TEST(buffer_pool_direct_shard_free) {
 
     /* Free all at once - should overflow thread cache and shard */
     for (int i = 0; i < 1000; i++) {
-        aura_buffer_free(engine, bufs[i], 4096);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     aura_destroy(engine);
@@ -1332,7 +1330,7 @@ TEST(buffer_pool_size_classes) {
     for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
         void *buf = aura_buffer_alloc(engine, sizes[i]);
         if (buf) { /* May be NULL for very large sizes */
-            aura_buffer_free(engine, buf, sizes[i]);
+            aura_buffer_free(engine, buf);
         }
     }
 
@@ -1920,7 +1918,7 @@ TEST(buffer_pool_thread_cache_refill) {
     for (int i = 0; i < 20; i++) {
         void *buf = aura_buffer_alloc(engine, 4096);
         assert(buf);
-        aura_buffer_free(engine, buf, 4096);
+        aura_buffer_free(engine, buf);
     }
 
     /* Allocate again - should hit cache refill path from shard */
@@ -1930,7 +1928,7 @@ TEST(buffer_pool_thread_cache_refill) {
     }
 
     for (int i = 0; i < 30; i++) {
-        aura_buffer_free(engine, bufs[i], 4096);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     aura_destroy(engine);
@@ -1953,7 +1951,7 @@ TEST(buffer_pool_mixed_sizes) {
     /* Free in reverse order */
     for (int i = 99; i >= 0; i--) {
         size_t size = sizes[i % 6];
-        aura_buffer_free(engine, bufs[i], size);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     /* Allocate again to reuse freed buffers */
@@ -1961,7 +1959,7 @@ TEST(buffer_pool_mixed_sizes) {
         size_t size = sizes[i % 6];
         bufs[i] = aura_buffer_alloc(engine, size);
         assert(bufs[i]);
-        aura_buffer_free(engine, bufs[i], size);
+        aura_buffer_free(engine, bufs[i]);
     }
 
     aura_destroy(engine);
@@ -2021,7 +2019,7 @@ TEST(submit_after_destroy_begins) {
     aura_drain(engine, 1000);
     assert(cb_called == 1);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }

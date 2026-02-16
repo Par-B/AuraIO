@@ -58,11 +58,11 @@ double run_benchmark(aura_engine_t *engine, int fd, int use_registered, void *un
             if (use_registered) {
                 /* Use registered buffer by index */
                 req = aura_read(engine, fd, aura_buf_fixed(buf_idx, 0), BUF_SIZE, offset,
-                                  completion_callback, NULL);
+                                completion_callback, NULL);
             } else {
                 /* Use pre-allocated unregistered buffer */
                 req = aura_read(engine, fd, aura_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset,
-                                  completion_callback, NULL);
+                                completion_callback, NULL);
             }
 
             if (!req) {
@@ -137,7 +137,7 @@ int main(void) {
         if (!unreg_bufs[i]) {
             perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                aura_buffer_free(engine_unreg, unreg_bufs[j], BUF_SIZE);
+                aura_buffer_free(engine_unreg, unreg_bufs[j]);
             }
             aura_destroy(engine_unreg);
             close(fd);
@@ -149,14 +149,14 @@ int main(void) {
     double unreg_time = run_benchmark(engine_unreg, fd, 0, unreg_bufs);
 
     aura_stats_t unreg_stats;
-    aura_get_stats(engine_unreg, &unreg_stats);
+    aura_get_stats(engine_unreg, &unreg_stats, sizeof(unreg_stats));
 
     printf("  Time: %.2f ms\n", unreg_time);
     printf("  Throughput: %.2f MB/s\n", unreg_stats.current_throughput_bps / (1024.0 * 1024.0));
     printf("  P99 Latency: %.3f ms\n", unreg_stats.p99_latency_ms);
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        aura_buffer_free(engine_unreg, unreg_bufs[i], BUF_SIZE);
+        aura_buffer_free(engine_unreg, unreg_bufs[i]);
     }
     aura_destroy(engine_unreg);
 
@@ -183,7 +183,7 @@ int main(void) {
         if (!buffers[i]) {
             perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                aura_buffer_free(engine_reg, buffers[j], BUF_SIZE);
+                aura_buffer_free(engine_reg, buffers[j]);
             }
             aura_destroy(engine_reg);
             close(fd);
@@ -198,7 +198,7 @@ int main(void) {
     if (aura_register_buffers(engine_reg, iovs, NUM_BUFFERS) < 0) {
         perror("aura_register_buffers");
         for (int i = 0; i < NUM_BUFFERS; i++) {
-            aura_buffer_free(engine_reg, buffers[i], BUF_SIZE);
+            aura_buffer_free(engine_reg, buffers[i]);
         }
         aura_destroy(engine_reg);
         close(fd);
@@ -212,7 +212,7 @@ int main(void) {
     double reg_time = run_benchmark(engine_reg, fd, 1, NULL);
 
     aura_stats_t reg_stats;
-    aura_get_stats(engine_reg, &reg_stats);
+    aura_get_stats(engine_reg, &reg_stats, sizeof(reg_stats));
 
     printf("  Time: %.2f ms\n", reg_time);
     printf("  Throughput: %.2f MB/s\n", reg_stats.current_throughput_bps / (1024.0 * 1024.0));
@@ -248,7 +248,7 @@ int main(void) {
 
     /* Free buffer memory */
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        aura_buffer_free(engine_reg, buffers[i], BUF_SIZE);
+        aura_buffer_free(engine_reg, buffers[i]);
     }
 
     /* Cleanup */

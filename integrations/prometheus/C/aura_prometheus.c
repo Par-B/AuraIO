@@ -45,7 +45,7 @@ int aura_metrics_prometheus(aura_engine_t *engine, char *buf, size_t buf_size) {
 
     /* --- Aggregate engine stats --- */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
 
     PROM_APPEND("# HELP aura_metrics_schema_info Exporter metrics schema and stability\n"
                 "# TYPE aura_metrics_schema_info gauge\n"
@@ -107,7 +107,7 @@ int aura_metrics_prometheus(aura_engine_t *engine, char *buf, size_t buf_size) {
         }
 
         for (int i = 0; i < ring_count; i++) {
-            aura_get_ring_stats(engine, i, &rs[i]);
+            aura_get_ring_stats(engine, i, &rs[i], sizeof(rs[i]));
         }
 
         PROM_APPEND("# HELP aura_ring_ops_completed_total Operations completed per ring\n"

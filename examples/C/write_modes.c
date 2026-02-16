@@ -140,7 +140,7 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Get engine stats */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
     printf("P99 latency: %.2f ms\n", stats.p99_latency_ms);
     printf("Optimal in-flight: %d\n", stats.optimal_in_flight);
 
@@ -160,7 +160,7 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Cleanup */
     if (use_direct) {
-        aura_buffer_free(engine, buf, WRITE_SIZE);
+        aura_buffer_free(engine, buf);
     } else {
         free(buf);
     }

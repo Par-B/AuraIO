@@ -31,7 +31,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
-#include <linux/stat.h> /* struct statx */
+#ifdef __linux__
+#    include <linux/stat.h> /* struct statx */
+#endif
 
 /* ============================================================================
  * Version Information
@@ -39,15 +41,14 @@
  */
 
 #define AURA_VERSION_MAJOR 0
-#define AURA_VERSION_MINOR 3
+#define AURA_VERSION_MINOR 4
 #define AURA_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
-#define AURA_VERSION                                                                             \
-    (AURA_VERSION_MAJOR * 10000 + AURA_VERSION_MINOR * 100 + AURA_VERSION_PATCH)
+#define AURA_VERSION (AURA_VERSION_MAJOR * 10000 + AURA_VERSION_MINOR * 100 + AURA_VERSION_PATCH)
 
 /** Version as a string */
-#define AURA_VERSION_STRING "0.3.0"
+#define AURA_VERSION_STRING "0.4.0"
 
 /* Ensure version components stay within packed integer limits */
 #if AURA_VERSION_MINOR > 99 || AURA_VERSION_PATCH > 99
@@ -116,6 +117,33 @@ typedef struct aura_engine aura_engine_t;
  * become invalid.
  */
 typedef struct aura_request aura_request_t;
+
+/**
+ * Operation type identifiers
+ *
+ * Returned by aura_request_op_type() for dispatch in generic completion
+ * handlers.  For read/write ops the callback result is bytes transferred;
+ * for openat it is the new fd; for other ops it is 0 on success.
+ */
+typedef enum {
+    AURA_OP_READ = 0,
+    AURA_OP_WRITE = 1,
+    AURA_OP_READV = 2,
+    AURA_OP_WRITEV = 3,
+    AURA_OP_FSYNC = 4,
+    AURA_OP_FDATASYNC = 5,
+    AURA_OP_CANCEL = 6,
+    AURA_OP_READ_FIXED = 7,  /**< Read using registered buffer */
+    AURA_OP_WRITE_FIXED = 8, /**< Write using registered buffer */
+    AURA_OP_OPENAT = 9,      /**< Result is new fd (>= 0) */
+    AURA_OP_CLOSE = 10,
+    AURA_OP_STATX = 11,
+    AURA_OP_FALLOCATE = 12,
+    AURA_OP_FTRUNCATE = 13,
+    AURA_OP_SYNC_FILE_RANGE = 14,
+    AURA_OP__RESERVED_15 = 15, /**< Reserved for future ops */
+    AURA_OP__RESERVED_16 = 16,
+} aura_op_type_t;
 
 /**
  * Completion callback type
@@ -214,11 +242,11 @@ typedef struct {
 
 typedef struct {
     uint32_t buckets[AURA_HISTOGRAM_BUCKETS]; /**< Latency frequency buckets */
-    uint32_t overflow;                          /**< Count of operations exceeding max_tracked_us */
-    uint32_t total_count;                       /**< Total samples in this snapshot */
-    int bucket_width_us;                        /**< Width of each bucket in microseconds */
-    int max_tracked_us;                         /**< Maximum tracked latency in microseconds */
-    uint32_t _reserved[2];                      /**< Reserved for future use; must be zero */
+    uint32_t overflow;                        /**< Count of operations exceeding max_tracked_us */
+    uint32_t total_count;                     /**< Total samples in this snapshot */
+    int bucket_width_us;                      /**< Width of each bucket in microseconds */
+    int max_tracked_us;                       /**< Maximum tracked latency in microseconds */
+    uint32_t _reserved[2];                    /**< Reserved for future use; must be zero */
 } aura_histogram_t;
 
 /**
@@ -285,18 +313,67 @@ typedef struct {
     uint32_t _reserved[7]; /**< Reserved for future use; must be zero */
 } aura_options_t;
 
-/**
- * Fsync flags for aura_fsync()
+/* ============================================================================
+ * AURA Flag Constants
  *
- * Controls the type of flush operation:
- *   AURA_FSYNC_DEFAULT  (0) -- full fsync: flushes data + metadata
- *   AURA_FSYNC_DATASYNC (1) -- fdatasync: flushes data, skips metadata
- *                                if it is not needed for data integrity
- */
-typedef enum {
-    AURA_FSYNC_DEFAULT = 0,  /**< Full fsync (metadata + data) */
-    AURA_FSYNC_DATASYNC = 1, /**< fdatasync (data only, skip metadata if possible) */
-} aura_fsync_flags_t;
+ * Wrappers around kernel flags.  Using AURA_* constants instead of raw
+ * kernel defines lets the library validate inputs and prevents breakage
+ * if new kernel capabilities appear that AURA doesn't yet handle.
+ * ============================================================================ */
+
+/** @name Fsync flags (for aura_fsync) */
+/**@{*/
+#define AURA_FSYNC_DEFAULT 0  /**< Full fsync (metadata + data) */
+#define AURA_FSYNC_DATASYNC 1 /**< fdatasync (data only, skip metadata if possible) */
+/**@}*/
+
+/** @name Fallocate modes (for aura_fallocate) */
+/**@{*/
+#define AURA_FALLOC_DEFAULT 0x00    /**< Default: allocate and extend size */
+#define AURA_FALLOC_KEEP_SIZE 0x01  /**< Allocate space without changing file size */
+#define AURA_FALLOC_PUNCH_HOLE 0x02 /**< Deallocate space (must combine with KEEP_SIZE) */
+#define AURA_FALLOC_COLLAPSE 0x08   /**< Remove a range and collapse file */
+#define AURA_FALLOC_ZERO 0x10       /**< Zero a range without deallocating */
+#define AURA_FALLOC_INSERT 0x20     /**< Insert space, shifting existing data */
+/**@}*/
+
+/** @name sync_file_range flags (for aura_sync_file_range) */
+/**@{*/
+#define AURA_SYNC_RANGE_WAIT_BEFORE 0x01 /**< Wait for prior writeout to complete */
+#define AURA_SYNC_RANGE_WRITE 0x02       /**< Initiate writeout of dirty pages */
+#define AURA_SYNC_RANGE_WAIT_AFTER 0x04  /**< Wait for writeout to complete */
+/**@}*/
+
+/** @name Statx lookup flags (for aura_statx flags parameter) */
+/**@{*/
+#define AURA_STATX_SYMLINK_NOFOLLOW 0x100 /**< Don't follow symlinks */
+#define AURA_STATX_EMPTY_PATH 0x1000      /**< Operate on fd itself (pathname="") */
+/**@}*/
+
+/** @name Statx field mask (for aura_statx mask parameter) */
+/**@{*/
+#define AURA_STATX_MODE 0x02U    /**< Request stx_mode */
+#define AURA_STATX_NLINK 0x04U   /**< Request stx_nlink */
+#define AURA_STATX_UID 0x08U     /**< Request stx_uid */
+#define AURA_STATX_GID 0x10U     /**< Request stx_gid */
+#define AURA_STATX_ATIME 0x20U   /**< Request stx_atime */
+#define AURA_STATX_MTIME 0x40U   /**< Request stx_mtime */
+#define AURA_STATX_CTIME 0x80U   /**< Request stx_ctime */
+#define AURA_STATX_SIZE 0x200U   /**< Request stx_size */
+#define AURA_STATX_BLOCKS 0x400U /**< Request stx_blocks */
+#define AURA_STATX_ALL 0xFFFU    /**< Request all basic fields */
+/**@}*/
+
+/** @name Open flags (for aura_openat flags parameter) */
+/**@{*/
+#define AURA_O_RDONLY 0x0000 /**< Open for reading only */
+#define AURA_O_WRONLY 0x0001 /**< Open for writing only */
+#define AURA_O_RDWR 0x0002   /**< Open for reading and writing */
+#define AURA_O_CREAT 0x0040  /**< Create file if it doesn't exist */
+#define AURA_O_TRUNC 0x0200  /**< Truncate file to zero length */
+#define AURA_O_APPEND 0x0400 /**< Append to end of file */
+#define AURA_O_DIRECT 0x4000 /**< Direct I/O (bypass page cache) */
+/**@}*/
 
 /* ============================================================================
  * Buffer Descriptors (Unified Buffer API)
@@ -425,8 +502,7 @@ AURA_API AURA_WARN_UNUSED aura_engine_t *aura_create(void);
  * first)
  * @return Engine handle, or NULL on failure (errno set)
  */
-AURA_API AURA_WARN_UNUSED aura_engine_t *
-aura_create_with_options(const aura_options_t *options);
+AURA_API AURA_WARN_UNUSED aura_engine_t *aura_create_with_options(const aura_options_t *options);
 
 /**
  * Destroy an async I/O engine
@@ -491,9 +567,9 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
-            aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf,
+                                                    size_t len, off_t offset,
+                                                    aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous write operation
@@ -520,9 +596,9 @@ aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offse
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
-             aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf,
+                                                     size_t len, off_t offset,
+                                                     aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous fsync operation
@@ -540,9 +616,8 @@ aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offs
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int fd,
-                                                             aura_fsync_flags_t flags,
-                                                             aura_callback_t callback,
-                                                             void *user_data);
+                                                     unsigned int flags, aura_callback_t callback,
+                                                     void *user_data);
 
 /* ============================================================================
  * Lifecycle Metadata Operations
@@ -571,9 +646,9 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int flags, mode_t mode,
-              aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_openat(aura_engine_t *engine, int dirfd,
+                                                      const char *pathname, int flags, mode_t mode,
+                                                      aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous close operation.
@@ -586,9 +661,10 @@ aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int flags, m
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_close(aura_engine_t *engine, int fd, aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int fd,
+                                                     aura_callback_t callback, void *user_data);
 
+#ifdef __linux__
 /**
  * Submit an asynchronous statx operation.
  *
@@ -598,16 +674,18 @@ aura_close(aura_engine_t *engine, int fd, aura_callback_t callback, void *user_d
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
  * @param pathname  Path (relative to dirfd; "" with AT_EMPTY_PATH for fd-based stat)
- * @param flags     Lookup flags (AT_SYMLINK_NOFOLLOW, AT_EMPTY_PATH, etc.)
- * @param mask      Requested fields (STATX_SIZE, STATX_MTIME, etc.)
+ * @param flags     Lookup flags (AURA_STATX_EMPTY_PATH, AURA_STATX_SYMLINK_NOFOLLOW)
+ * @param mask      Requested fields (AURA_STATX_SIZE, AURA_STATX_MTIME, etc.)
  * @param statxbuf  Output buffer -- kernel writes directly here
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int flags, unsigned int mask,
-             struct statx *statxbuf, aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int dirfd,
+                                                     const char *pathname, int flags,
+                                                     unsigned int mask, struct statx *statxbuf,
+                                                     aura_callback_t callback, void *user_data);
+#endif
 
 /**
  * Submit an asynchronous fallocate operation.
@@ -623,10 +701,9 @@ aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int flags, un
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, int fd,
-                                                                 int mode, off_t offset, off_t len,
-                                                                 aura_callback_t callback,
-                                                                 void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode,
+                                                         off_t offset, off_t len,
+                                                         aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous ftruncate operation.
@@ -641,9 +718,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, 
  * @return Request handle, or NULL on error (errno set)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd,
-                                                                 off_t length,
-                                                                 aura_callback_t callback,
-                                                                 void *user_data);
+                                                         off_t length, aura_callback_t callback,
+                                                         void *user_data);
 
 /**
  * Submit an asynchronous sync_file_range operation.
@@ -660,8 +736,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, 
  * @return Request handle, or NULL on error (errno set)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
-                       unsigned int flags, aura_callback_t callback, void *user_data);
+aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, unsigned int flags,
+                     aura_callback_t callback, void *user_data);
 
 /* ============================================================================
  * Vectored I/O Operations
@@ -684,9 +760,10 @@ aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_readv(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt, off_t offset,
-             aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_readv(aura_engine_t *engine, int fd,
+                                                     const struct iovec *iov, int iovcnt,
+                                                     off_t offset, aura_callback_t callback,
+                                                     void *user_data);
 
 /**
  * Submit an asynchronous vectored write operation
@@ -704,9 +781,10 @@ aura_readv(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt, o
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
-AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_writev(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt, off_t offset,
-              aura_callback_t callback, void *user_data);
+AURA_API AURA_WARN_UNUSED aura_request_t *aura_writev(aura_engine_t *engine, int fd,
+                                                      const struct iovec *iov, int iovcnt,
+                                                      off_t offset, aura_callback_t callback,
+                                                      void *user_data);
 
 /* ============================================================================
  * Cancellation
@@ -761,6 +839,17 @@ AURA_API int aura_request_fd(const aura_request_t *req);
  * @return User data pointer passed to submission function
  */
 AURA_API void *aura_request_user_data(const aura_request_t *req);
+
+/**
+ * Get the operation type of a request
+ *
+ * Useful in generic completion handlers to distinguish between operations
+ * (e.g., openat returns a new fd, read/write return bytes transferred).
+ *
+ * @param req Request handle
+ * @return Operation type (AURA_OP_READ, AURA_OP_OPENAT, etc.), or -1 if NULL
+ */
+AURA_API int aura_request_op_type(const aura_request_t *req);
 
 /* ============================================================================
  * Event Processing
@@ -836,7 +925,7 @@ AURA_API void aura_stop(aura_engine_t *engine);
 /**
  * Drain all pending I/O operations
  *
- * Waits until all in-flight operations across all rings have completed.
+ * Waits until ALL in-flight operations across all rings have completed.
  * Useful for graceful shutdown or synchronization points.
  *
  * New submissions are NOT blocked during drain; if other threads submit
@@ -844,6 +933,11 @@ AURA_API void aura_stop(aura_engine_t *engine);
  *
  * On timeout, returns -1 with errno=ETIMEDOUT. Operations that completed
  * before the timeout are still processed (callbacks invoked).
+ *
+ * **When to use which:**
+ * - aura_poll()  — non-blocking, for event loops
+ * - aura_wait()  — block until at least one completion, for simple loops
+ * - aura_drain() — block until ALL completions finish, for shutdown/sync
  *
  * @param engine     Engine handle
  * @param timeout_ms Maximum wait time in milliseconds (-1 = wait forever,
@@ -878,16 +972,14 @@ AURA_API AURA_WARN_UNUSED void *aura_buffer_alloc(aura_engine_t *engine, size_t 
  * Return a buffer to the engine's pool
  *
  * The buffer must have been allocated by aura_buffer_alloc() on the same
- * engine. The size parameter MUST match the original allocation size exactly;
- * passing a different size causes undefined behavior (pool corruption).
+ * engine. The size is looked up automatically from an internal table.
  *
  * Thread-safe: may be called from any thread.
  *
  * @param engine Engine handle
  * @param buf    Buffer to free (may be NULL)
- * @param size   Size of the buffer (MUST match allocation size exactly)
  */
-AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf, size_t size);
+AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
 
 /* ============================================================================
  * Registered Buffers (Advanced)
@@ -931,8 +1023,8 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf, size_t size);
  * @param count  Number of buffers
  * @return 0 on success, -1 on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine,
-                                                          const struct iovec *iovs, int count);
+AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs,
+                                                    int count);
 
 /**
  * Request deferred unregister of registered buffers (callback-safe)
@@ -982,8 +1074,7 @@ AURA_API int aura_unregister_buffers(aura_engine_t *engine);
  * @param count  Number of file descriptors
  * @return 0 on success, -1 on error (errno set)
  */
-AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const int *fds,
-                                                        int count);
+AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const int *fds, int count);
 
 /**
  * Update a registered file descriptor
@@ -1037,12 +1128,18 @@ AURA_API int aura_unregister_files(aura_engine_t *engine);
  * Retrieves throughput, latency, and tuning parameters for monitoring.
  * If engine or stats is NULL, returns without modifying stats.
  *
+ * The stats_size parameter enables forward compatibility: pass
+ * sizeof(aura_stats_t) so the library writes at most that many bytes.
+ * Code compiled against an older header with a smaller struct will
+ * receive fewer fields without buffer overruns.
+ *
  * Thread-safe: reads atomic counters and locks each ring briefly.
  *
- * @param engine Engine handle (may be NULL)
- * @param stats  Output statistics structure (may be NULL)
+ * @param engine     Engine handle (may be NULL)
+ * @param stats      Output statistics structure (may be NULL)
+ * @param stats_size sizeof(aura_stats_t) from caller's compilation
  */
-AURA_API void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats);
+AURA_API void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
 
 /**
  * Get the number of io_uring rings in the engine
@@ -1059,13 +1156,14 @@ AURA_API int aura_get_ring_count(const aura_engine_t *engine);
  * If engine or stats is NULL, returns -1 without modifying stats.
  * If ring_idx is out of range, returns -1 and zeroes stats.
  *
- * @param engine   Engine handle
- * @param ring_idx Ring index (0 to aura_get_ring_count()-1)
- * @param stats    Output statistics structure
+ * @param engine     Engine handle
+ * @param ring_idx   Ring index (0 to aura_get_ring_count()-1)
+ * @param stats      Output statistics structure
+ * @param stats_size sizeof(aura_ring_stats_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/stats or invalid ring_idx)
  */
 AURA_API int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
-                                     aura_ring_stats_t *stats);
+                                 aura_ring_stats_t *stats, size_t stats_size);
 
 /**
  * Get a latency histogram snapshot for a specific ring
@@ -1082,8 +1180,7 @@ AURA_API int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
  * @param hist     Output histogram structure
  * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
  */
-AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx,
-                                    aura_histogram_t *hist);
+AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist);
 
 /**
  * Get buffer pool statistics

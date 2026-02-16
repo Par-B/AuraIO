@@ -377,7 +377,7 @@ impl Engine {
             aura_sys::aura_fsync(
                 self.inner.raw(),
                 fd,
-                aura_sys::aura_fsync_flags_t_AURA_FSYNC_DEFAULT,
+                aura_sys::AURA_FSYNC_DEFAULT,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -408,7 +408,7 @@ impl Engine {
             aura_sys::aura_fsync(
                 self.inner.raw(),
                 fd,
-                aura_sys::aura_fsync_flags_t_AURA_FSYNC_DATASYNC,
+                aura_sys::AURA_FSYNC_DATASYNC,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -657,7 +657,7 @@ impl Engine {
     /// Get current engine statistics
     pub fn stats(&self) -> Stats {
         let mut inner: aura_sys::aura_stats_t = unsafe { std::mem::zeroed() };
-        unsafe { aura_sys::aura_get_stats(self.inner.raw(), &mut inner) };
+        unsafe { aura_sys::aura_get_stats(self.inner.raw(), &mut inner, std::mem::size_of::<aura_sys::aura_stats_t>()) };
         Stats::new(inner)
     }
 
@@ -677,7 +677,7 @@ impl Engine {
     /// `Ok(RingStats)` on success, `Err` if ring_idx is invalid
     pub fn ring_stats(&self, ring_idx: i32) -> Result<crate::stats::RingStats> {
         let mut inner: aura_sys::aura_ring_stats_t = unsafe { std::mem::zeroed() };
-        let ret = unsafe { aura_sys::aura_get_ring_stats(self.inner.raw(), ring_idx, &mut inner) };
+        let ret = unsafe { aura_sys::aura_get_ring_stats(self.inner.raw(), ring_idx, &mut inner, std::mem::size_of::<aura_sys::aura_ring_stats_t>()) };
         if ret == 0 {
             Ok(crate::stats::RingStats::new(inner))
         } else {

@@ -38,7 +38,7 @@ void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
 
 void print_stats(const char *config_name, aura_engine_t *engine, double elapsed_ms) {
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
 
     printf("\n%s Configuration:\n", config_name);
     printf("  Elapsed time: %.2f ms\n", elapsed_ms);
@@ -60,7 +60,7 @@ void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
         if (!bufs[i]) {
             perror("aura_buffer_alloc");
             for (int j = 0; j < i; j++) {
-                aura_buffer_free(engine, bufs[j], BUF_SIZE);
+                aura_buffer_free(engine, bufs[j]);
             }
             return;
         }
@@ -76,8 +76,8 @@ void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
         while (submitted < NUM_OPS && (submitted - completed) < CONCURRENT_BUFS / 2) {
             off_t offset = (rand() % (FILE_SIZE / BUF_SIZE)) * BUF_SIZE;
             void *buf = bufs[submitted % CONCURRENT_BUFS];
-            aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset,
-                                                completion_callback, NULL);
+            aura_request_t *req =
+                aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, completion_callback, NULL);
             if (!req) {
                 perror("aura_read");
                 break;
@@ -101,7 +101,7 @@ void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
     print_stats(config_name, engine, elapsed);
 
     for (int i = 0; i < CONCURRENT_BUFS; i++) {
-        aura_buffer_free(engine, bufs[i], BUF_SIZE);
+        aura_buffer_free(engine, bufs[i]);
     }
 }
 

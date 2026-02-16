@@ -90,7 +90,6 @@ impl Drop for Buffer {
             aura_sys::aura_buffer_free(
                 self.engine.raw(),
                 self.ptr.as_ptr() as *mut std::ffi::c_void,
-                self.len,
             );
         }
     }

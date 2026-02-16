@@ -224,7 +224,7 @@ static void read_callback(aura_request_t *req, ssize_t result, void *user_data) 
     atomic_fetch_sub(&ctx->stats->inflight, 1);
 
     if (ctx->buffer && ctx->engine) {
-        aura_buffer_free(ctx->engine, ctx->buffer, ctx->size);
+        aura_buffer_free(ctx->engine, ctx->buffer);
     }
     free(ctx);
 }
@@ -275,9 +275,9 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
         atomic_fetch_add(&stats.inflight, 1);
 
         if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
-                        ctx) == NULL) {
+                      ctx) == NULL) {
             atomic_fetch_sub(&stats.inflight, 1);
-            aura_buffer_free(engine, buf, buf_size);
+            aura_buffer_free(engine, buf);
             free(ctx);
         }
     }
@@ -311,10 +311,10 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                            read_callback, ctx) == NULL) {
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
+                          ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
-                aura_buffer_free(engine, buf, buf_size);
+                aura_buffer_free(engine, buf);
                 free(ctx);
                 break;
             }
@@ -330,7 +330,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     // Get engine stats
     aura_stats_t engine_stats;
-    aura_get_stats(engine, &engine_stats);
+    aura_get_stats(engine, &engine_stats, sizeof(engine_stats));
 
     printf("\nResults:\n");
     printf("  Operations:      %lu completed, %lu failed\n", ops, failed);
@@ -403,8 +403,8 @@ static void bench_latency(int duration_sec, size_t buf_size) {
 
         latency_sync_ctx_t sync_ctx = { &done, &result };
 
-        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                        latency_callback, &sync_ctx) != NULL) {
+        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, latency_callback,
+                      &sync_ctx) != NULL) {
             while (!atomic_load(&done)) {
                 aura_wait(engine, 1);
             }
@@ -437,7 +437,7 @@ static void bench_latency(int duration_sec, size_t buf_size) {
     printf("  Max latency:     %.2f us\n", (double)max_lat / 1000.0);
     printf("  P99 latency:     %lu us\n", stats_p99_latency_us(&stats));
 
-    aura_buffer_free(engine, buf, buf_size);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
 }
 
@@ -482,7 +482,7 @@ static void *buffer_thread_fn(void *arg) {
         // Free some (50% chance)
         if (buf_count > 0 && (fast_rand() % 2)) {
             buf_count--;
-            aura_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
+            aura_buffer_free(td->engine, buffers[buf_count].ptr);
             atomic_fetch_add(td->frees, 1);
         }
     }
@@ -490,7 +490,7 @@ static void *buffer_thread_fn(void *arg) {
     // Cleanup
     while (buf_count > 0) {
         buf_count--;
-        aura_buffer_free(td->engine, buffers[buf_count].ptr, buffers[buf_count].size);
+        aura_buffer_free(td->engine, buffers[buf_count].ptr);
         atomic_fetch_add(td->frees, 1);
     }
 
@@ -611,9 +611,9 @@ static void bench_scalability(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
 
                 if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                                read_callback, ctx) == NULL) {
+                              read_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    aura_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf);
                     free(ctx);
                     break;
                 }
@@ -690,10 +690,10 @@ static void bench_syscall_batching(int duration_sec) {
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                            read_callback, ctx) == NULL) {
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
+                          ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
-                aura_buffer_free(engine, buf, buf_size);
+                aura_buffer_free(engine, buf);
                 free(ctx);
                 break;
             }
@@ -707,7 +707,7 @@ static void bench_syscall_batching(int duration_sec) {
     double elapsed_sec = ns_to_sec(elapsed);
 
     aura_stats_t engine_stats;
-    aura_get_stats(engine, &engine_stats);
+    aura_get_stats(engine, &engine_stats, sizeof(engine_stats));
 
     uint64_t ops = atomic_load(&stats.ops_completed);
     uint64_t bytes = atomic_load(&stats.bytes_transferred);
@@ -746,7 +746,7 @@ static void mixed_callback(aura_request_t *req, ssize_t result, void *user_data)
     atomic_fetch_sub(&ctx->stats->inflight, 1);
 
     if (ctx->buffer && ctx->engine) {
-        aura_buffer_free(ctx->engine, ctx->buffer, ctx->size);
+        aura_buffer_free(ctx->engine, ctx->buffer);
     }
     free(ctx);
 }
@@ -817,9 +817,9 @@ static void bench_mixed_workload(int duration_sec) {
                 reads++;
 
                 if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                                mixed_callback, ctx) == NULL) {
+                              mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    aura_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf);
                     free(ctx);
                     reads--;
                 }
@@ -843,9 +843,9 @@ static void bench_mixed_workload(int duration_sec) {
                 writes++;
 
                 if (aura_write(engine, write_fds[fd_idx], aura_buf(buf), buf_size, offset,
-                                 mixed_callback, ctx) == NULL) {
+                               mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
-                    aura_buffer_free(engine, buf, buf_size);
+                    aura_buffer_free(engine, buf);
                     free(ctx);
                     writes--;
                 }
@@ -862,7 +862,7 @@ static void bench_mixed_workload(int duration_sec) {
                 fsyncs++;
 
                 if (aura_fsync(engine, write_fds[fd_idx], AURA_FSYNC_DEFAULT, mixed_callback,
-                                 ctx) == NULL) {
+                               ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     free(ctx);
                     fsyncs--;
@@ -877,7 +877,7 @@ static void bench_mixed_workload(int duration_sec) {
     double elapsed_sec = ns_to_sec(elapsed);
 
     aura_stats_t engine_stats;
-    aura_get_stats(engine, &engine_stats);
+    aura_get_stats(engine, &engine_stats, sizeof(engine_stats));
 
     uint64_t ops = atomic_load(&stats.ops_completed);
     uint64_t bytes = atomic_load(&stats.bytes_transferred);

@@ -67,11 +67,10 @@ int main(int argc, char *argv[]) {
 
     /* Submit an async read */
     printf("Submitting async read...\n");
-    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0,
-                                         on_read, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read, NULL);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
-        aura_buffer_free(engine, buf, READ_SIZE);
+        aura_buffer_free(engine, buf);
         close(fd);
         aura_destroy(engine);
         return 1;
@@ -95,10 +94,11 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Final result: %zd (%s)\n", read_result,
-           read_result == -ECANCELED ? "cancelled" :
-           read_result < 0 ? strerror(-(int)read_result) : "success");
+           read_result == -ECANCELED ? "cancelled"
+           : read_result < 0         ? strerror(-(int)read_result)
+                                     : "success");
 
-    aura_buffer_free(engine, buf, READ_SIZE);
+    aura_buffer_free(engine, buf);
     close(fd);
     aura_destroy(engine);
     return 0;

@@ -90,7 +90,7 @@ static void *worker_simple(void *arg) {
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted)
         aura_wait(ctx->engine, 100);
 
-    aura_buffer_free(ctx->engine, buf, BUF_SIZE);
+    aura_buffer_free(ctx->engine, buf);
     return NULL;
 }
 
@@ -162,7 +162,7 @@ static void *worker_adaptive(void *arg) {
         if (++spins > 50000) break;
     }
 
-    aura_buffer_free(ctx->engine, buf, BUF_SIZE);
+    aura_buffer_free(ctx->engine, buf);
     return NULL;
 }
 
@@ -250,13 +250,13 @@ static void run_mode(aura_ring_select_t mode, int ring_count, int ops_per_thread
 
     /* Collect stats */
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
     result->spills = stats.adaptive_spills;
 
     result->rings_used = 0;
     for (int i = 0; i < actual_rings && i < MAX_RINGS; i++) {
         aura_ring_stats_t rs;
-        aura_get_ring_stats(engine, i, &rs);
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
         result->per_ring_ops[i] = rs.ops_completed;
         if (rs.ops_completed > 0) result->rings_used++;
     }

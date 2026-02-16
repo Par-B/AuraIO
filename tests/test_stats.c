@@ -124,7 +124,7 @@ TEST(ring_stats_basic) {
     assert(engine != NULL);
 
     aura_ring_stats_t rs;
-    int rc = aura_get_ring_stats(engine, 0, &rs);
+    int rc = aura_get_ring_stats(engine, 0, &rs, sizeof(rs));
     assert(rc == 0);
 
     assert(rs.queue_depth == 64);
@@ -138,7 +138,7 @@ TEST(ring_stats_basic) {
 TEST(ring_stats_null_engine) {
     aura_ring_stats_t rs;
     memset(&rs, 0xFF, sizeof(rs));
-    int rc = aura_get_ring_stats(NULL, 0, &rs);
+    int rc = aura_get_ring_stats(NULL, 0, &rs, sizeof(rs));
     assert(rc == -1);
     /* Struct should be unchanged when engine is NULL */
     assert(rs.queue_depth == (int)0xFFFFFFFF);
@@ -147,7 +147,7 @@ TEST(ring_stats_null_engine) {
 TEST(ring_stats_null_output) {
     aura_engine_t *engine = aura_create();
     assert(engine != NULL);
-    int rc = aura_get_ring_stats(engine, 0, NULL);
+    int rc = aura_get_ring_stats(engine, 0, NULL, 0);
     assert(rc == -1);
     aura_destroy(engine);
 }
@@ -163,18 +163,18 @@ TEST(ring_stats_out_of_range) {
     aura_ring_stats_t rs;
 
     /* Negative index */
-    int rc = aura_get_ring_stats(engine, -1, &rs);
+    int rc = aura_get_ring_stats(engine, -1, &rs, sizeof(rs));
     assert(rc == -1);
     assert(rs.queue_depth == 0);
     assert(rs.ops_completed == 0);
 
     /* One past end (classic off-by-one boundary) */
-    rc = aura_get_ring_stats(engine, 1, &rs);
+    rc = aura_get_ring_stats(engine, 1, &rs, sizeof(rs));
     assert(rc == -1);
     assert(rs.queue_depth == 0);
 
     /* Far out of range */
-    rc = aura_get_ring_stats(engine, 999, &rs);
+    rc = aura_get_ring_stats(engine, 999, &rs, sizeof(rs));
     assert(rc == -1);
     assert(rs.queue_depth == 0);
     assert(rs.ops_completed == 0);
@@ -303,8 +303,8 @@ TEST(buffer_stats_after_alloc) {
 
     /* Free buffers — pool may cache them, so allocated_bytes may not decrease.
      * Verify stats are still valid (non-negative, no increase). */
-    aura_buffer_free(engine, buf1, 4096);
-    aura_buffer_free(engine, buf2, 8192);
+    aura_buffer_free(engine, buf1);
+    aura_buffer_free(engine, buf2);
 
     aura_buffer_stats_t bs2;
     aura_get_buffer_stats(engine, &bs2);
@@ -357,11 +357,11 @@ TEST(phase_constants_match) {
 TEST(aggregate_stats_null) {
     aura_stats_t stats;
     memset(&stats, 0xFF, sizeof(stats));
-    aura_get_stats(NULL, &stats);
+    aura_get_stats(NULL, &stats, sizeof(stats));
     /* Should not crash — struct unchanged since engine is NULL */
     assert(stats.ops_completed == (int64_t)0xFFFFFFFFFFFFFFFFLL);
 
-    aura_get_stats(NULL, NULL);
+    aura_get_stats(NULL, NULL, 0);
     /* Should not crash */
 }
 
@@ -379,14 +379,13 @@ TEST(aggregate_stats_sanity) {
     /* Submit a single I/O */
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
 
     aura_stats_t stats;
-    aura_get_stats(engine, &stats);
+    aura_get_stats(engine, &stats, sizeof(stats));
 
     assert(stats.ops_completed >= 1);
     assert(stats.bytes_transferred >= 4096);
@@ -395,7 +394,7 @@ TEST(aggregate_stats_sanity) {
     assert(stats.p99_latency_ms >= 0.0);
     assert(stats.current_throughput_bps >= 0.0);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -417,25 +416,24 @@ TEST(ring_stats_after_io) {
 
     /* Stats should be zero before any I/O */
     aura_ring_stats_t rs;
-    aura_get_ring_stats(engine, 0, &rs);
+    aura_get_ring_stats(engine, 0, &rs, sizeof(rs));
     assert(rs.ops_completed == 0);
     assert(rs.bytes_transferred == 0);
 
     /* Submit and complete a read */
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
 
     /* Ring stats should now reflect the completed operation */
-    aura_get_ring_stats(engine, 0, &rs);
+    aura_get_ring_stats(engine, 0, &rs, sizeof(rs));
     assert(rs.ops_completed >= 1);
     assert(rs.bytes_transferred >= 4096);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -485,7 +483,7 @@ TEST(histogram_after_io) {
     /* Allow small discrepancy due to approximate snapshot */
     assert(bucket_sum >= hist.total_count - 1);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -515,14 +513,14 @@ TEST(aggregate_stats_match_ring_stats) {
 
     /* Sum per-ring ops and bytes should match aggregate */
     aura_stats_t agg;
-    aura_get_stats(engine, &agg);
+    aura_get_stats(engine, &agg, sizeof(agg));
 
     int64_t total_ops = 0;
     int64_t total_bytes = 0;
     int rings = aura_get_ring_count(engine);
     for (int i = 0; i < rings; i++) {
         aura_ring_stats_t rs;
-        aura_get_ring_stats(engine, i, &rs);
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
         total_ops += rs.ops_completed;
         total_bytes += rs.bytes_transferred;
     }
@@ -530,7 +528,7 @@ TEST(aggregate_stats_match_ring_stats) {
     assert(total_ops == agg.ops_completed);
     assert(total_bytes == agg.bytes_transferred);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -574,12 +572,12 @@ TEST(ring_select_round_robin) {
     int rings_used = 0;
     for (int i = 0; i < 4; i++) {
         aura_ring_stats_t rs;
-        aura_get_ring_stats(engine, i, &rs);
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
         if (rs.ops_completed > 0) rings_used++;
     }
     assert(rings_used == 4);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -612,12 +610,12 @@ TEST(ring_select_cpu_local) {
     int rings_used = 0;
     for (int i = 0; i < 4; i++) {
         aura_ring_stats_t rs;
-        aura_get_ring_stats(engine, i, &rs);
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
         if (rs.ops_completed > 0) rings_used++;
     }
     assert(rings_used == 1);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -647,7 +645,7 @@ static void *stats_reader_thread(void *arg) {
         /* Exercise all stats functions under concurrent I/O */
         for (int i = 0; i < rings; i++) {
             aura_ring_stats_t rs;
-            aura_get_ring_stats(ctx->engine, i, &rs);
+            aura_get_ring_stats(ctx->engine, i, &rs, sizeof(rs));
             assert(rs.queue_depth > 0);
             assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_CONVERGED);
 
@@ -705,7 +703,7 @@ TEST(concurrent_stats_and_io) {
     pthread_join(reader, NULL);
     assert(atomic_load(&ctx.reads_done) > 0);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }

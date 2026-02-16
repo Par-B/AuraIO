@@ -416,7 +416,8 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
         // For adaptive mode, respect engine's AIMD-chosen depth
         if (rc->adaptive) {
             aura_ring_stats_t rstats;
-            if (aura_get_ring_stats(engine, 0, &rstats) == 0 && rstats.in_flight_limit > 0) {
+            if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0 &&
+                rstats.in_flight_limit > 0) {
                 effective_depth = rstats.in_flight_limit;
                 if (effective_depth > rc->depth) effective_depth = rc->depth;
             }
@@ -432,7 +433,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
 
             aura_request_t *req =
                 aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cur_block_size,
-                            cur_offsets[submitted % OFFSET_TABLE_SIZE], io_callback, &slots[slot]);
+                          cur_offsets[submitted % OFFSET_TABLE_SIZE], io_callback, &slots[slot]);
             if (!req) {
                 ctx.free_stack[ctx.free_top++] = slot;
                 aura_wait(engine, 1);
@@ -457,7 +458,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
     // Get AIMD converged depth
     if (rc->adaptive) {
         aura_ring_stats_t rstats;
-        if (aura_get_ring_stats(engine, 0, &rstats) == 0) {
+        if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0) {
             result.converged_depth = rstats.in_flight_limit;
         }
     } else {

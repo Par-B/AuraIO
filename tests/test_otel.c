@@ -570,7 +570,7 @@ TEST(nonzero_counters_after_io) {
     asint += strlen("\"asInt\":\"");
     assert(!(asint[0] == '0' && asint[1] == '"'));
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }

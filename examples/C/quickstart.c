@@ -65,7 +65,7 @@ int main(void) {
     int fd = open(test_file, O_RDONLY);
     if (fd < 0) {
         perror("open");
-        aura_buffer_free(engine, buf, BUF_SIZE);
+        aura_buffer_free(engine, buf);
         aura_destroy(engine);
         unlink(test_file);
         return 1;
@@ -76,7 +76,7 @@ int main(void) {
     if (!req) {
         perror("aura_read");
         close(fd);
-        aura_buffer_free(engine, buf, BUF_SIZE);
+        aura_buffer_free(engine, buf);
         aura_destroy(engine);
         unlink(test_file);
         return 1;
@@ -94,7 +94,7 @@ int main(void) {
 
     /* Cleanup */
     close(fd);
-    aura_buffer_free(engine, buf, BUF_SIZE);
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     unlink(test_file);
 

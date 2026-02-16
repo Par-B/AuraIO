@@ -578,7 +578,7 @@ static void aura_callback(aura_request_t *req, ssize_t res, void *user_data) {
 }
 
 static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool adaptive,
-                                const off_t *offsets, int warmup_sec) {
+                              const off_t *offsets, int warmup_sec) {
     perf_result_t result = { 0 };
 
     aura_options_t opts;
@@ -650,7 +650,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
 
             aura_request_t *req =
                 aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cfg->block_size,
-                            offsets[submitted % OFFSET_TABLE_SIZE], aura_callback, &slots[slot]);
+                          offsets[submitted % OFFSET_TABLE_SIZE], aura_callback, &slots[slot]);
             if (!req) {
                 // Engine full, return slot and drain some completions
                 ctx.free_stack[ctx.free_top++] = slot;
@@ -679,7 +679,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
     // Get AIMD converged depth
     if (adaptive) {
         aura_ring_stats_t rstats;
-        if (aura_get_ring_stats(engine, 0, &rstats) == 0)
+        if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0)
             result.depth_used = rstats.in_flight_limit;
         else result.depth_used = depth;
     } else {

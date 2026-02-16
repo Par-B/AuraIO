@@ -441,14 +441,14 @@ void stats_compute_results(const thread_stats_t *raw, uint64_t runtime_ms, aura_
     /* Pull Aura adaptive tuning info */
     if (engine) {
         aura_stats_t engine_stats;
-        aura_get_stats(engine, &engine_stats);
+        aura_get_stats(engine, &engine_stats, sizeof(engine_stats));
         result->aura_final_depth = engine_stats.peak_in_flight;
         result->aura_p99_ms = engine_stats.p99_latency_ms;
         result->aura_throughput_bps = engine_stats.current_throughput_bps;
         result->adaptive_spills = engine_stats.adaptive_spills;
 
         aura_ring_stats_t ring_stats;
-        if (aura_get_ring_stats(engine, 0, &ring_stats) == 0) {
+        if (aura_get_ring_stats(engine, 0, &ring_stats, sizeof(ring_stats)) == 0) {
             result->aura_phase = ring_stats.aimd_phase;
             const char *phase_str = aura_phase_name(ring_stats.aimd_phase);
             strncpy(result->aura_phase_name, phase_str, sizeof(result->aura_phase_name) - 1);

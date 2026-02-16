@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-15
+
+### Breaking Changes
+- **`aura_buffer_free()`** no longer requires a `size` parameter. The pool now tracks buffer sizes internally via a side hash table. Old: `aura_buffer_free(engine, buf, size)` → New: `aura_buffer_free(engine, buf)`
+- **`aura_get_stats()`** and **`aura_get_ring_stats()`** now accept a `size_t struct_size` parameter for forward-compatible struct versioning. Pass `sizeof(aura_stats_t)` / `sizeof(aura_ring_stats_t)` as the last argument
+- **`aura_fsync()`** flags parameter changed from `aura_fsync_flags_t` enum to `unsigned int`. Use `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1)
+
+### Added
+- `AURA_*` flag constants for all operations: `AURA_FSYNC_*`, `AURA_FALLOC_*`, `AURA_SYNC_RANGE_*`, `AURA_STATX_*`, `AURA_O_*` — provides a validated whitelist instead of exposing raw kernel flags
+- `aura_request_op_type()` introspection function — returns the operation type of a request, enabling generic completion handlers to dispatch by op type
+- `aura_op_type_t` enum exposed in public header with stable integer values and reserved slots for future ops
+- Internal `buf_size_map_t` hash table for O(1) buffer size tracking (open addressing, Fibonacci hashing, striped locks)
+
+### Changed
+- `linux/stat.h` include guarded with `#ifdef __linux__` for better header portability
+- `aura_statx()` declaration guarded with `#ifdef __linux__`
+- Documentation: added "When to use which" guidance for `aura_poll()` vs `aura_wait()` vs `aura_drain()`
+
 ## [0.3.0] - 2026-02-12
 
 ### Added

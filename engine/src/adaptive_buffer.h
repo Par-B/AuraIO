@@ -118,21 +118,21 @@ typedef struct {
  */
 typedef struct buffer_pool {
     /* === CL 0: Read-only after init (no contention) === */
-    buffer_shard_t *shards;                  /**< Dynamically allocated shards */
-    int shard_count;                         /**< Number of shards (power of 2) */
-    int shard_mask;                          /**< shard_count - 1 for fast modulo */
-    uint64_t pool_id;                        /**< Unique generation ID (set once at init) */
-    size_t alignment;                        /**< Buffer alignment (typically 4096) */
+    buffer_shard_t *shards; /**< Dynamically allocated shards */
+    int shard_count;        /**< Number of shards (power of 2) */
+    int shard_mask;         /**< shard_count - 1 for fast modulo */
+    uint64_t pool_id;       /**< Unique generation ID (set once at init) */
+    size_t alignment;       /**< Buffer alignment (typically 4096) */
 
     /* === CL 1: Read-heavy atomics (get_thread_cache hot path) === */
     _Alignas(64) _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
-    _Atomic bool destroyed;                  /**< Pool destroyed flag for safety */
-    _Atomic int registrations_inflight;      /**< Caches currently in registration path */
+    _Atomic bool destroyed;                               /**< Pool destroyed flag for safety */
+    _Atomic int registrations_inflight; /**< Caches currently in registration path */
 
     /* === CL 2: Write-heavy counters (slow path only) === */
     _Alignas(64) _Atomic size_t total_allocated; /**< Total bytes allocated (atomic) */
-    _Atomic size_t total_buffers;            /**< Total buffer count (atomic) */
-    _Atomic int next_shard;                  /**< Round-robin shard assignment */
+    _Atomic size_t total_buffers;                /**< Total buffer count (atomic) */
+    _Atomic int next_shard;                      /**< Round-robin shard assignment */
 } buffer_pool_t;
 
 /**
@@ -176,5 +176,49 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size);
  * @param size Buffer size (must match allocation size)
  */
 void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size);
+
+/* ============================================================================
+ * Buffer Size Map (ptr → size_class lookup)
+ *
+ * Open-addressing hash table that tracks the size class of each
+ * buffer allocated through the pool.  This lets buffer_pool_free_tracked()
+ * work without requiring the caller to pass the size.
+ * ============================================================================ */
+
+/** Initial capacity (must be power of 2) */
+#define BUF_MAP_INITIAL_CAPACITY 1024
+
+/** Load factor threshold for growth (75%) */
+#define BUF_MAP_LOAD_FACTOR_NUM 3
+#define BUF_MAP_LOAD_FACTOR_DEN 4
+
+/** Number of striped locks */
+#define BUF_MAP_STRIPE_COUNT 16
+
+typedef struct {
+    uintptr_t key;     /**< ptr value, 0 = empty slot */
+    uint8_t class_idx; /**< Size class index (0-15) */
+} buf_map_entry_t;
+
+typedef struct {
+    buf_map_entry_t *entries;
+    size_t capacity;      /**< Always a power of 2 */
+    _Atomic size_t count; /**< Number of live entries */
+    pthread_mutex_t locks[BUF_MAP_STRIPE_COUNT];
+} buf_size_map_t;
+
+int buf_size_map_init(buf_size_map_t *map);
+void buf_size_map_destroy(buf_size_map_t *map);
+void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx);
+int buf_size_map_remove(buf_size_map_t *map, void *ptr);
+
+/**
+ * Free buffer back to pool (size looked up automatically)
+ *
+ * @param pool Pool to return to
+ * @param map  Size map for ptr→class lookup
+ * @param buf  Buffer to free
+ */
+void buffer_pool_free_tracked(buffer_pool_t *pool, buf_size_map_t *map, void *buf);
 
 #endif /* ADAPTIVE_BUFFER_H */

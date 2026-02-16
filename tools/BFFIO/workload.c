@@ -474,7 +474,7 @@ static void *worker_thread(void *arg) {
             fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", tctx->thread_id,
                     s);
             for (int f = 0; f < s; f++) {
-                aura_buffer_free(engine, tctx->pool.slots[f].buffer, (size_t)config->bs);
+                aura_buffer_free(engine, tctx->pool.slots[f].buffer);
                 tctx->pool.slots[f].buffer = NULL;
             }
             io_ctx_pool_destroy(&tctx->pool);
@@ -609,11 +609,11 @@ static void *worker_thread(void *arg) {
 
             aura_request_t *req;
             if (do_write) {
-                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset,
-                                   io_callback, ctx);
+                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, io_callback,
+                                 ctx);
             } else {
-                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset,
-                                  io_callback, ctx);
+                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, io_callback,
+                                ctx);
             }
 
             if (!req) {
@@ -643,8 +643,8 @@ static void *worker_thread(void *arg) {
 
                         atomic_fetch_add(&stats->inflight, 1);
 
-                        aura_request_t *fsync_req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT,
-                                                                   fsync_callback, fsync_ctx);
+                        aura_request_t *fsync_req =
+                            aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, fsync_callback, fsync_ctx);
                         if (!fsync_req) {
                             atomic_fetch_sub(&stats->inflight, 1);
                             io_ctx_pool_put(&tctx->pool, fsync_ctx);
@@ -727,7 +727,8 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
     int effective_depth = config->iodepth;
     if (config->target_p99_ms > 0.0) {
         aura_ring_stats_t rstats;
-        if (aura_get_ring_stats(engine, 0, &rstats) == 0 && rstats.queue_depth > 0) {
+        if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0 &&
+            rstats.queue_depth > 0) {
             effective_depth = rstats.queue_depth;
         }
     }
@@ -843,7 +844,7 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
             int ring_count = aura_get_ring_count(engine);
             for (int r = 0; r < ring_count; r++) {
                 aura_ring_stats_t rs;
-                if (aura_get_ring_stats(engine, r, &rs) == 0 && rs.ops_completed > 0) {
+                if (aura_get_ring_stats(engine, r, &rs, sizeof(rs)) == 0 && rs.ops_completed > 0) {
                     if (rs.aimd_phase != AURA_PHASE_STEADY &&
                         rs.aimd_phase != AURA_PHASE_CONVERGED) {
                         all_stable = 0;
@@ -900,7 +901,7 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
     for (int i = 0; i < num_threads; i++) {
         for (int s = 0; s < tctx[i].pool.capacity; s++) {
             if (tctx[i].pool.slots[s].buffer) {
-                aura_buffer_free(engine, tctx[i].pool.slots[s].buffer, (size_t)config->bs);
+                aura_buffer_free(engine, tctx[i].pool.slots[s].buffer);
                 tctx[i].pool.slots[s].buffer = NULL;
             }
         }

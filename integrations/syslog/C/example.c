@@ -132,7 +132,7 @@ int main(void) {
     aura_log_emit(AURA_LOG_NOTICE, "now logging under ident \"my-daemon\"");
 
     /* --- Clean up ------------------------------------------------------ */
-    aura_buffer_free(engine, buf, BUF_SIZE);
+    aura_buffer_free(engine, buf);
     close(fd);
     unlink(TEST_FILE);
 
