@@ -2102,7 +2102,7 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+void aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         return;
     }
@@ -2189,7 +2189,7 @@ int aura_get_ring_count(const aura_engine_t *engine) {
     return engine->ring_count;
 }
 
-int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
+int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
                         size_t stats_size) {
     if (!engine || !stats || stats_size == 0) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
@@ -2225,7 +2225,7 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
     return 0;
 }
 
-int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist) {
+int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist) {
     if (!engine || !hist) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(hist, 0, sizeof(*hist));

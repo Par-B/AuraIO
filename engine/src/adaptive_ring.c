@@ -869,11 +869,16 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
     ring_cq_lock(ctx);
     if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
         /* Nothing available - release lock and do blocking wait.
-         * We intentionally call io_uring_wait_cqe without holding
-         * cq_lock.  This allows other threads to poll/peek CQEs
-         * concurrently.  After the wait returns, we re-acquire
-         * cq_lock and batch-peek, which handles the case where
-         * another thread consumed the waking CQE first. */
+         * We intentionally call io_uring_wait_cqe_timeout without
+         * holding cq_lock.  This is safe because:
+         * - The wait only reads CQ head/tail (never writes CQ head)
+         * - CQ head is only written by io_uring_cqe_seen, always under cq_lock
+         * - CQ tail is only written by the kernel with store-release semantics
+         * - io_uring_enter (the blocking syscall) is thread-safe
+         * This allows other threads to poll/peek CQEs concurrently.
+         * After the wait returns, we fall through to ring_drain_cqes
+         * which acquires cq_lock, handling the case where another
+         * thread consumed the waking CQE first. */
         int ret;
         ring_cq_unlock(ctx);
 

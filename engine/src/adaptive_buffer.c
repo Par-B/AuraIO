@@ -214,16 +214,34 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
         return NULL;
     }
 
-    /* Orphaned cache from a destroyed pool: pool destroy set pool=NULL
-     * but left the struct for us to free (since our TLS still referenced it). */
+    /* Cache belongs to a different pool — clean up before returning NULL.
+     * The caller will get NULL and fall through to the shard slow path. */
     if (cache && cache->pool != pool) {
         if (cache->pool == NULL) {
+            /* Orphaned by pool destroy: pool set pool=NULL and left the
+             * struct for us to free (since our TLS still referenced it). */
             pthread_mutex_destroy(&cache->cleanup_mutex);
             free(cache);
-            tls_cache = NULL;
-            if (tls_key_valid) {
-                pthread_setspecific(tls_key, NULL);
+        } else {
+            /* Old pool still alive — flush cached buffers back to it.
+             * The cache is still in the old pool's thread_caches list,
+             * so we can't free the struct (pool destroy will do that).
+             * Mark cleaned_up so pool destroy skips the redundant flush. */
+            buffer_pool_t *old_pool = cache->pool;
+            pthread_mutex_lock(&cache->cleanup_mutex);
+            if (!cache->cleaned_up) {
+                for (int ci = 0; ci < BUFFER_SIZE_CLASSES; ci++) {
+                    while (cache->counts[ci] > 0) {
+                        cache_flush(old_pool, cache, ci, class_to_size(ci));
+                    }
+                }
+                cache->cleaned_up = true;
             }
+            pthread_mutex_unlock(&cache->cleanup_mutex);
+        }
+        tls_cache = NULL;
+        if (tls_key_valid) {
+            pthread_setspecific(tls_key, NULL);
         }
         return NULL;
     }
@@ -661,7 +679,9 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     }
 
     /* Slow path: shard also empty, or no thread cache.
-     * Re-check destroyed: pool may have been torn down since our earlier check. */
+     * Safety: callers MUST NOT call alloc after buffer_pool_destroy() begins.
+     * The destroyed flag is a diagnostic check, not a synchronization mechanism -
+     * there is no lock that atomically covers both the flag and shard access. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         errno = ENXIO;
         return NULL;
@@ -761,7 +781,9 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     }
 
     /* Slow path: no thread cache or flush failed, go directly to shard.
-     * Re-check destroyed: pool may have been torn down since our earlier check. */
+     * Safety: callers MUST NOT call free after buffer_pool_destroy() begins.
+     * The destroyed flag is a diagnostic check, not a synchronization mechanism -
+     * there is no lock that atomically covers both the flag and shard access. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         free(buf);
         return;
@@ -880,6 +902,12 @@ int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     size_t mask = map->capacity - 1;
     size_t idx = buf_map_hash(key, mask);
     while (map->entries[idx].key != 0) {
+        if (map->entries[idx].key == key) {
+            /* Duplicate key: update in place instead of inserting again */
+            map->entries[idx].class_idx = (uint8_t)class_idx;
+            pthread_mutex_unlock(&map->lock);
+            return 0;
+        }
         idx = (idx + 1) & mask;
     }
     map->entries[idx].key = key;

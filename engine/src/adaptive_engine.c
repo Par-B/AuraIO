@@ -11,6 +11,7 @@
 #include "adaptive_engine.h"
 #include "internal.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -233,6 +234,15 @@ const char *adaptive_phase_name(adaptive_phase_t phase) {
  * ============================================================================ */
 
 bool adaptive_tick(adaptive_controller_t *ctrl) {
+    /* NOT thread-safe: must be called from a single thread only.
+     * Concurrent calls would double-swap the histogram (fetch_xor twice),
+     * causing both callers to read the active histogram and corrupt state. */
+#ifndef NDEBUG
+    static _Atomic int tick_entered = 0;
+    int prev = atomic_fetch_add_explicit(&tick_entered, 1, memory_order_relaxed);
+    assert(prev == 0 && "adaptive_tick called concurrently — not thread-safe");
+#endif
+
     int64_t now_ns = get_time_ns();
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
     int64_t elapsed_ns = now_ns - start_ns;
@@ -254,6 +264,9 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
 
     /* If we don't have enough data and haven't hit max window, accumulate more */
     if (!have_min_samples && !have_min_time && !hit_max_time) {
+#ifndef NDEBUG
+        atomic_fetch_sub_explicit(&tick_entered, 1, memory_order_relaxed);
+#endif
         return false; /* Skip this tick, keep accumulating */
     }
 
@@ -490,5 +503,8 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * by atomic_exchange at the top of this function. */
     atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
 
+#ifndef NDEBUG
+    atomic_fetch_sub_explicit(&tick_entered, 1, memory_order_relaxed);
+#endif
     return params_changed;
 }
