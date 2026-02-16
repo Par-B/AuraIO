@@ -274,11 +274,10 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
 
 static bool check_fatal_submit_errno(aura_engine_t *engine) {
     int fatal = get_fatal_submit_errno(engine);
-    if (fatal == 0) {
-        return false;
+    if (fatal != 0) {
+        errno = fatal;
     }
-    errno = fatal;
-    return true;
+    return fatal != 0;
 }
 
 static bool resolve_registered_file_locked(const aura_engine_t *engine, int fd, int *fixed_fd) {
@@ -395,26 +394,20 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
 
     if (!ring_can_submit(ring)) {
         if (ring_flush(ring) < 0) {
-            if (!flush_error_is_fatal(errno)) {
-                errno = 0;
-            } else {
+            if (flush_error_is_fatal(errno)) {
                 latch_fatal_submit_errno(engine, errno);
                 ring_unlock(ring);
                 return ctx;
             }
-            if (allow_poll) {
-                ring_unlock(ring);
-                ring_poll(ring);
-                ring_lock(ring);
-            }
-        } else {
-            if (allow_poll) {
-                /* Release lock before polling: process_completion() re-acquires ring->lock
-                 * to update counters, so holding it here would deadlock. */
-                ring_unlock(ring);
-                ring_poll(ring);
-                ring_lock(ring);
-            }
+            errno = 0;
+        }
+
+        if (allow_poll) {
+            /* Release lock before polling: process_completion() re-acquires ring->lock
+             * to update counters, so holding it here would deadlock. */
+            ring_unlock(ring);
+            ring_poll(ring);
+            ring_lock(ring);
         }
 
         if (!ring_can_submit(ring)) {
@@ -790,6 +783,7 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
         }
 
         ctx.req->fd = submit_fd;
+        ctx.req->original_fd = fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
@@ -845,6 +839,7 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
         bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
 
         ctx.req->fd = submit_fd;
+        ctx.req->original_fd = fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
@@ -906,6 +901,7 @@ aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t
         }
 
         ctx.req->fd = submit_fd;
+        ctx.req->original_fd = fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
@@ -961,6 +957,7 @@ aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t
         bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
 
         ctx.req->fd = submit_fd;
+        ctx.req->original_fd = fd;
         ctx.req->len = len;
         ctx.req->offset = offset;
         ctx.req->callback = callback;
@@ -1016,6 +1013,7 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
@@ -1058,6 +1056,7 @@ aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathna
     if (!ctx.req) return NULL;
 
     ctx.req->fd = dirfd;
+    ctx.req->original_fd = dirfd;
     ctx.req->meta.open.pathname = pathname;
     ctx.req->meta.open.flags = flags;
     ctx.req->meta.open.mode = mode;
@@ -1088,6 +1087,7 @@ aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callba
     if (!ctx.req) return NULL;
 
     ctx.req->fd = fd;
+    ctx.req->original_fd = fd;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
@@ -1114,6 +1114,7 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
     if (!ctx.req) return NULL;
 
     ctx.req->fd = dirfd;
+    ctx.req->original_fd = dirfd;
     ctx.req->meta.statx.pathname = pathname;
     ctx.req->meta.statx.flags = flags;
     ctx.req->meta.statx.mask = mask;
@@ -1134,7 +1135,7 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
 
 aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset, off_t len,
                                aura_callback_t callback, void *user_data) {
-    if (!engine || fd < 0) {
+    if (!engine || fd < 0 || offset < 0 || len < 0) {
         errno = EINVAL;
         return NULL;
     }
@@ -1156,6 +1157,7 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->offset = offset;
     ctx.req->len = (size_t)len;
     ctx.req->meta.fallocate.mode = mode;
@@ -1177,7 +1179,7 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
 
 aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
                                aura_callback_t callback, void *user_data) {
-    if (!engine || fd < 0) {
+    if (!engine || fd < 0 || length < 0) {
         errno = EINVAL;
         return NULL;
     }
@@ -1199,6 +1201,7 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->len = (size_t)length;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
@@ -1219,7 +1222,7 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
 aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
                                      unsigned int flags, aura_callback_t callback,
                                      void *user_data) {
-    if (!engine || fd < 0) {
+    if (!engine || fd < 0 || offset < 0 || nbytes < 0) {
         errno = EINVAL;
         return NULL;
     }
@@ -1241,6 +1244,7 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->offset = offset;
     ctx.req->len = (size_t)nbytes;
     ctx.req->meta.sync_range.flags = flags;
@@ -1291,6 +1295,7 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
     ctx.req->offset = offset;
@@ -1340,6 +1345,7 @@ aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *i
     }
 
     ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
     ctx.req->offset = offset;
@@ -1453,6 +1459,11 @@ int aura_request_fd(const aura_request_t *req) {
     if (!req) {
         errno = EINVAL;
         return -1;
+    }
+    /* When registered files are in use, req->fd contains the fixed-file
+     * index. Return the original file descriptor instead. */
+    if (req->uses_registered_file) {
+        return req->original_fd;
     }
     return req->fd;
 }

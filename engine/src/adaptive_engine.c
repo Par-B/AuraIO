@@ -116,8 +116,9 @@ adaptive_histogram_t *adaptive_hist_swap(adaptive_histogram_pair_t *pair) {
     /* Atomically swap to the other histogram */
     int old_idx = atomic_fetch_xor_explicit(&pair->active_index, 1, memory_order_acq_rel);
 
-    /* The old histogram is now inactive - clear it for next use.
-     * No atomic stores needed since no one is writing to it anymore. */
+    /* The old histogram is now inactive - it will be cleared for next use.
+     * Note: There is a brief race window where concurrent adaptive_hist_record()
+     * calls may still write to it between the swap and reset (see adaptive_tick). */
     adaptive_histogram_t *old_hist = &pair->histograms[old_idx];
 
     /* Return pointer to the old histogram (caller can read P99 from it) */
@@ -308,13 +309,8 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * With low IOPS, we accept fewer samples but require minimum threshold.
      * P99 with 20 samples is effectively P95, which is still useful.
      */
-    bool latency_rising = false;
     bool have_valid_p99 = (sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES && p99_ms >= 0);
-    if (have_valid_p99) {
-        if (p99_ms > latency_guard_ms) {
-            latency_rising = true;
-        }
-    }
+    bool latency_rising = have_valid_p99 && p99_ms > latency_guard_ms;
 
     /* Load current in-flight limit for use in state machine */
     int in_flight_limit =

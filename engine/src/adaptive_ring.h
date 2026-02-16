@@ -56,6 +56,11 @@ struct aura_request {
     /* State flags (trailing bools avoid mid-struct hole) */
     _Atomic bool pending; /**< True if still in-flight */
 
+    /* Original file descriptor (for aura_request_fd() API contract).
+     * When uses_registered_file is true, fd holds the fixed-file index
+     * and original_fd holds the actual file descriptor. */
+    int original_fd;
+
     /* Metadata operation parameters (union to avoid bloating the struct).
      * close uses fd; ftruncate uses len; others use op-specific fields. */
     union {
@@ -80,7 +85,7 @@ struct aura_request {
 
     /* Pad to 128 bytes (2 full cache lines) so that adjacent requests in
      * the request array never share a cache line. */
-    char _cacheline_pad[128 - 120];
+    char _cacheline_pad[128 - 124];
 };
 
 /**
