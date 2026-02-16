@@ -145,6 +145,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// Serializes tests that mutate the process-wide log handler.
+    /// Rust runs tests in parallel by default; without this guard,
+    /// concurrent set/clear calls corrupt each other's handler state.
+    static LOG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn test_log_level_ordering() {
         assert!(LogLevel::Error < LogLevel::Warning);
@@ -190,6 +195,7 @@ mod tests {
 
     #[test]
     fn test_log_emit_no_handler() {
+        let _lock = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Should be a no-op, not crash
         clear_log_handler();
         log_emit(LogLevel::Info, "test message");
@@ -197,6 +203,7 @@ mod tests {
 
     #[test]
     fn test_set_and_clear_handler() {
+        let _lock = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
 
@@ -212,6 +219,7 @@ mod tests {
 
     #[test]
     fn test_handler_receives_level_and_message() {
+        let _lock = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let received_level = Arc::new(AtomicI32::new(-1));
         let received_msg = Arc::new(Mutex::new(String::new()));
         let level_clone = received_level.clone();
@@ -232,6 +240,7 @@ mod tests {
 
     #[test]
     fn test_handler_all_levels() {
+        let _lock = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let count = Arc::new(AtomicUsize::new(0));
         let count_clone = count.clone();
 
@@ -252,6 +261,7 @@ mod tests {
 
     #[test]
     fn test_replace_handler() {
+        let _lock = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let first_count = Arc::new(AtomicUsize::new(0));
         let second_count = Arc::new(AtomicUsize::new(0));
 

@@ -103,7 +103,13 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
  * ============================================================================ */
 
 void adaptive_hist_pair_init(adaptive_histogram_pair_t *pair) {
-    memset(pair->histograms, 0, sizeof(pair->histograms));
+    for (int h = 0; h < 2; h++) {
+        for (int i = 0; i < LATENCY_BUCKET_COUNT; i++) {
+            atomic_init(&pair->histograms[h].buckets[i], 0);
+        }
+        atomic_init(&pair->histograms[h].overflow, 0);
+        atomic_init(&pair->histograms[h].total_count, 0);
+    }
     atomic_init(&pair->active_index, 0);
 }
 
