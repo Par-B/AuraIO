@@ -495,8 +495,10 @@ static void *tick_thread_func(void *arg) {
             int pending =
                 atomic_load_explicit(&engine->rings[i].pending_count, memory_order_relaxed);
             total_pending += pending;
-            if (pending > engine->rings[i].peak_pending_count) {
-                engine->rings[i].peak_pending_count = pending;
+            if (pending >
+                atomic_load_explicit(&engine->rings[i].peak_pending_count, memory_order_relaxed)) {
+                atomic_store_explicit(&engine->rings[i].peak_pending_count, pending,
+                                      memory_order_relaxed);
             }
         }
         if (engine->ring_count > 0) {
@@ -1784,24 +1786,7 @@ void *aura_buffer_alloc(aura_engine_t *engine, size_t size) {
 
     void *buf = buffer_pool_alloc(&engine->buffer_pool, size);
     if (buf) {
-        /* Record ptr → size_class so buffer_free doesn't need size */
-        int class_idx = 0;
-        size_t s = size;
-        if (s <= 4096) class_idx = 0;
-        else if (s <= 8192) class_idx = 1;
-        else if (s <= 16384) class_idx = 2;
-        else if (s <= 32768) class_idx = 3;
-        else if (s <= 65536) class_idx = 4;
-        else if (s <= 131072) class_idx = 5;
-        else if (s <= 262144) class_idx = 6;
-        else {
-            int lz = __builtin_clzl(s - 1);
-            int hb = (int)(sizeof(unsigned long) * 8) - lz;
-            class_idx = hb - 12;
-            if (class_idx < 0) class_idx = 0;
-            if (class_idx >= 16) class_idx = 15;
-        }
-        buf_size_map_insert(&engine->buf_size_map, buf, class_idx);
+        buf_size_map_insert(&engine->buf_size_map, buf, size_to_class(size));
     }
     return buf;
 }
@@ -2127,7 +2112,8 @@ void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t sta
         tmp.ops_completed += ring->ops_completed;
         tmp.bytes_transferred += ring->bytes_completed;
         total_in_flight += atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
-        total_peak_in_flight += ring->peak_pending_count;
+        total_peak_in_flight +=
+            atomic_load_explicit(&ring->peak_pending_count, memory_order_relaxed);
 
         /* Get adaptive controller values */
         adaptive_controller_t *ctrl = &ring->adaptive;
@@ -2203,7 +2189,7 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
     tmp.ops_completed = ring->ops_completed;
     tmp.bytes_transferred = ring->bytes_completed;
     tmp.pending_count = atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
-    tmp.peak_in_flight = ring->peak_pending_count;
+    tmp.peak_in_flight = atomic_load_explicit(&ring->peak_pending_count, memory_order_relaxed);
     tmp.queue_depth = ring->max_requests;
 
     adaptive_controller_t *ctrl = &ring->adaptive;

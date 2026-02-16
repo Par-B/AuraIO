@@ -142,6 +142,11 @@ typedef struct buffer_pool {
  * @param alignment Buffer alignment (typically 4096 for O_DIRECT)
  * @return 0 on success, -1 on error
  */
+/**
+ * Map buffer size to size-class index (0 to BUFFER_SIZE_CLASSES-1)
+ */
+int size_to_class(size_t size);
+
 int buffer_pool_init(buffer_pool_t *pool, size_t alignment);
 
 /**
@@ -192,9 +197,6 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size);
 #define BUF_MAP_LOAD_FACTOR_NUM 3
 #define BUF_MAP_LOAD_FACTOR_DEN 4
 
-/** Number of striped locks */
-#define BUF_MAP_STRIPE_COUNT 16
-
 typedef struct {
     uintptr_t key;     /**< ptr value, 0 = empty slot */
     uint8_t class_idx; /**< Size class index (0-15) */
@@ -204,7 +206,7 @@ typedef struct {
     buf_map_entry_t *entries;
     size_t capacity;      /**< Always a power of 2 */
     _Atomic size_t count; /**< Number of live entries */
-    pthread_mutex_t locks[BUF_MAP_STRIPE_COUNT];
+    pthread_mutex_t lock; /**< Single lock (striped locks are unsound with open-addressing) */
 } buf_size_map_t;
 
 int buf_size_map_init(buf_size_map_t *map);

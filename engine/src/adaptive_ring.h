@@ -113,7 +113,8 @@ typedef struct {
     int free_request_count;    /**< Number of free request slots */
     int max_requests;          /**< Queue depth */
     _Atomic int pending_count; /**< Number of in-flight ops (atomic for lock-free reads) */
-    int peak_pending_count;    /**< High-water mark of pending_count (updated by tick thread) */
+    _Atomic int
+        peak_pending_count; /**< High-water mark of pending_count (updated by tick thread) */
 
     /* Adaptive controller */
     adaptive_controller_t adaptive; /**< AIMD controller */

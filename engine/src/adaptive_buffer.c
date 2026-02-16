@@ -76,7 +76,7 @@ static void tls_key_init(void) {
  * @param size Buffer size in bytes
  * @return Size class index (0 to BUFFER_SIZE_CLASSES-1)
  */
-static inline int size_to_class(size_t size) {
+int size_to_class(size_t size) {
     /* Fast path: cascade covers classes 0-6 (4KB to 256KB).
      * These are the typical I/O buffer sizes. Ordered by expected
      * frequency: 4K (most common), then 64K, 8K, etc. */
@@ -820,18 +820,12 @@ static inline size_t buf_map_hash(uintptr_t key, size_t mask) {
     return key & mask;
 }
 
-static inline size_t buf_map_stripe(uintptr_t key) {
-    return (key >> 12) & (BUF_MAP_STRIPE_COUNT - 1);
-}
-
 int buf_size_map_init(buf_size_map_t *map) {
     map->capacity = BUF_MAP_INITIAL_CAPACITY;
     atomic_init(&map->count, 0);
     map->entries = calloc(map->capacity, sizeof(buf_map_entry_t));
     if (!map->entries) return -1;
-    for (int i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
-        pthread_mutex_init(&map->locks[i], NULL);
-    }
+    pthread_mutex_init(&map->lock, NULL);
     return 0;
 }
 
@@ -839,12 +833,10 @@ void buf_size_map_destroy(buf_size_map_t *map) {
     free(map->entries);
     map->entries = NULL;
     map->capacity = 0;
-    for (int i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
-        pthread_mutex_destroy(&map->locks[i]);
-    }
+    pthread_mutex_destroy(&map->lock);
 }
 
-/* Grow the table (caller must hold ALL stripe locks) */
+/* Grow the table (caller must hold wrlock) */
 static void buf_map_grow(buf_size_map_t *map) {
     size_t old_cap = map->capacity;
     size_t new_cap = old_cap * 2;
@@ -870,25 +862,13 @@ static void buf_map_grow(buf_size_map_t *map) {
 
 void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     uintptr_t key = (uintptr_t)ptr;
-    size_t stripe = buf_map_stripe(key);
 
-    pthread_mutex_lock(&map->locks[stripe]);
+    pthread_mutex_lock(&map->lock);
 
-    /* Check load factor — if too high, grab all locks and grow */
+    /* Check load factor and grow if needed */
     size_t count = atomic_load_explicit(&map->count, memory_order_relaxed);
     if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
-        /* Acquire remaining locks in order */
-        for (size_t i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
-            if (i != stripe) pthread_mutex_lock(&map->locks[i]);
-        }
-        /* Re-check after acquiring all locks */
-        count = atomic_load_explicit(&map->count, memory_order_relaxed);
-        if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
-            buf_map_grow(map);
-        }
-        for (size_t i = 0; i < BUF_MAP_STRIPE_COUNT; i++) {
-            if (i != stripe) pthread_mutex_unlock(&map->locks[i]);
-        }
+        buf_map_grow(map);
     }
 
     size_t mask = map->capacity - 1;
@@ -899,15 +879,13 @@ void buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     map->entries[idx].key = key;
     map->entries[idx].class_idx = (uint8_t)class_idx;
     atomic_fetch_add_explicit(&map->count, 1, memory_order_relaxed);
-
-    pthread_mutex_unlock(&map->locks[stripe]);
+    pthread_mutex_unlock(&map->lock);
 }
 
 int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
     uintptr_t key = (uintptr_t)ptr;
-    size_t stripe = buf_map_stripe(key);
 
-    pthread_mutex_lock(&map->locks[stripe]);
+    pthread_mutex_lock(&map->lock);
 
     size_t mask = map->capacity - 1;
     size_t idx = buf_map_hash(key, mask);
@@ -934,13 +912,13 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
             }
             map->entries[hole].key = 0;
             atomic_fetch_sub_explicit(&map->count, 1, memory_order_relaxed);
-            pthread_mutex_unlock(&map->locks[stripe]);
+            pthread_mutex_unlock(&map->lock);
             return class_idx;
         }
         idx = (idx + 1) & mask;
     }
 
-    pthread_mutex_unlock(&map->locks[stripe]);
+    pthread_mutex_unlock(&map->lock);
     return -1; /* Not found */
 }
 

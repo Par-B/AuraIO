@@ -194,7 +194,7 @@ void ring_destroy(ring_ctx_t *ctx) {
 
     if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0) {
         aura_log(AURA_LOG_WARN, "ring_destroy timed out with %d ops still pending",
-                   (int)atomic_load_explicit(&ctx->pending_count, memory_order_relaxed));
+                 (int)atomic_load_explicit(&ctx->pending_count, memory_order_relaxed));
     }
 
     adaptive_destroy(&ctx->adaptive);
@@ -256,9 +256,8 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
 
     /* Guard against double-free: if stack is already full, something is wrong */
     if (ctx->free_request_count >= ctx->max_requests) {
-        aura_log(AURA_LOG_ERR,
-                   "BUG: ring_put_request double-free detected (op_idx=%d, ring=%p)", op_idx,
-                   (void *)ctx);
+        aura_log(AURA_LOG_ERR, "BUG: ring_put_request double-free detected (op_idx=%d, ring=%p)",
+                 op_idx, (void *)ctx);
         return;
     }
 
@@ -632,6 +631,10 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
     struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
     if (!sqe) return (-1);
 
@@ -859,43 +862,12 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
     int completed = 0;
 
     if (timeout_ms == 0) {
-        /* Non-blocking: batch-extract all available CQEs in one lock hold */
-        int n = 0;
-        ring_cq_lock(ctx);
-        while (n < RING_POLL_BATCH) {
-            struct io_uring_cqe *cqe;
-            if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
-                break;
-            }
-            batch[n].req = io_uring_cqe_get_data(cqe);
-            batch[n].result = cqe->res;
-            io_uring_cqe_seen(&ctx->ring, cqe);
-            TSAN_ACQUIRE(batch[n].req);
-            n++;
-        }
-        ring_cq_unlock(ctx);
-
-        for (int i = 0; i < n; i++) {
-            retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
-        }
-        ring_retire_batch(ctx, retire, n);
-        completed = n;
-    } else {
-        /* Blocking wait: try non-blocking peek first, then block if needed.
-         * In both cases, batch-extract all available CQEs under a single
-         * cq_lock hold to merge the initial extraction with the drain. */
-        struct io_uring_cqe *cqe;
-        int n;
-
-        ring_cq_lock(ctx);
-        if (io_uring_peek_cqe(&ctx->ring, &cqe) == 0) {
-            /* CQE available immediately - batch extract all available */
-            batch[0].req = io_uring_cqe_get_data(cqe);
-            batch[0].result = cqe->res;
-            io_uring_cqe_seen(&ctx->ring, cqe);
-            TSAN_ACQUIRE(batch[0].req);
-            n = 1;
+        /* Non-blocking: drain all available CQEs (same loop structure as ring_poll) */
+        while (1) {
+            int n = 0;
+            ring_cq_lock(ctx);
             while (n < RING_POLL_BATCH) {
+                struct io_uring_cqe *cqe;
                 if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
                     break;
                 }
@@ -907,12 +879,21 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             }
             ring_cq_unlock(ctx);
 
+            if (n == 0) break;
+
             for (int i = 0; i < n; i++) {
                 retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
             }
             ring_retire_batch(ctx, retire, n);
-            completed = n;
-        } else {
+            completed += n;
+        }
+    } else {
+        /* Blocking wait: try non-blocking peek first, then block if needed. */
+        struct io_uring_cqe *cqe;
+        bool did_wait = false;
+
+        ring_cq_lock(ctx);
+        if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
             /* Nothing available - release lock and do blocking wait.
              * We intentionally call io_uring_wait_cqe without holding
              * cq_lock.  This allows other threads to poll/peek CQEs
@@ -937,18 +918,21 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 }
                 if (ret == -EINTR) {
                     /* Signal interrupted the wait — not an error.
-                     * Fall through to re-acquire cq_lock and peek
-                     * for any CQEs that arrived before the signal. */
+                     * Fall through to drain any CQEs that arrived. */
                 } else {
                     errno = -ret;
                     return (-1);
                 }
             }
+            did_wait = true;
+            ring_cq_lock(ctx);
+        }
+        ring_cq_unlock(ctx);
+        (void)did_wait;
 
-            /* Wait returned - batch extract all available CQEs.
-             * Another thread might have consumed the CQE that woke us;
-             * n==0 is handled gracefully. */
-            n = 0;
+        /* Drain all available CQEs (same loop as ring_poll / timeout_ms==0 path) */
+        while (1) {
+            int n = 0;
             ring_cq_lock(ctx);
             while (n < RING_POLL_BATCH) {
                 if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
@@ -962,11 +946,13 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             }
             ring_cq_unlock(ctx);
 
+            if (n == 0) break;
+
             for (int i = 0; i < n; i++) {
                 retire[i] = process_completion(ctx, batch[i].req, batch[i].result);
             }
             ring_retire_batch(ctx, retire, n);
-            completed = n;
+            completed += n;
         }
     }
 
