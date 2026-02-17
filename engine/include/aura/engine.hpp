@@ -265,21 +265,10 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F> [[nodiscard]] Request fsync(int fd, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_fsync(handle_, fd, AURA_FSYNC_DEFAULT, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_fsync");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_fsync", [&](auto *ctx) {
+            return aura_fsync(handle_, fd, AURA_FSYNC_DEFAULT, aura_detail_callback_trampoline,
+                              ctx);
+        });
     }
 
     /**
@@ -292,21 +281,10 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F> [[nodiscard]] Request fdatasync(int fd, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_fsync");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_fsync", [&](auto *ctx) {
+            return aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC, aura_detail_callback_trampoline,
+                              ctx);
+        });
     }
 
     // =========================================================================
@@ -332,21 +310,10 @@ class Engine {
     template <Callback F>
     [[nodiscard]] Request openat(int dirfd, const char *pathname, int flags, mode_t mode,
                                  F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_openat(handle_, dirfd, pathname, flags, mode,
-                                          aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_openat");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_openat", [&](auto *ctx) {
+            return aura_openat(handle_, dirfd, pathname, flags, mode,
+                               aura_detail_callback_trampoline, ctx);
+        });
     }
 
     /**
@@ -359,20 +326,9 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F> [[nodiscard]] Request close(int fd, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_close");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_close", [&](auto *ctx) {
+            return aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
+        });
     }
 
 #ifdef __linux__
@@ -395,21 +351,10 @@ class Engine {
     template <Callback F>
     [[nodiscard]] Request statx(int dirfd, const char *pathname, int flags, unsigned int mask,
                                 struct statx *statxbuf, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_statx(handle_, dirfd, pathname, flags, mask, statxbuf,
-                                         aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_statx");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_statx", [&](auto *ctx) {
+            return aura_statx(handle_, dirfd, pathname, flags, mask, statxbuf,
+                              aura_detail_callback_trampoline, ctx);
+        });
     }
 #endif
 
@@ -429,21 +374,10 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request fallocate(int fd, int mode, off_t offset, off_t len, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_fallocate(handle_, fd, mode, offset, len, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_fallocate");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_fallocate", [&](auto *ctx) {
+            return aura_fallocate(handle_, fd, mode, offset, len, aura_detail_callback_trampoline,
+                                  ctx);
+        });
     }
 
     /**
@@ -459,21 +393,9 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F> [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_ftruncate(handle_, fd, length, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_ftruncate");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_ftruncate", [&](auto *ctx) {
+            return aura_ftruncate(handle_, fd, length, aura_detail_callback_trampoline, ctx);
+        });
     }
 
     /**
@@ -493,21 +415,10 @@ class Engine {
     template <Callback F>
     [[nodiscard]] Request sync_file_range(int fd, off_t offset, off_t nbytes, unsigned int flags,
                                           F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_sync_file_range(handle_, fd, offset, nbytes, flags,
-                                                   aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_sync_file_range");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_sync_file_range", [&](auto *ctx) {
+            return aura_sync_file_range(handle_, fd, offset, nbytes, flags,
+                                        aura_detail_callback_trampoline, ctx);
+        });
     }
 
     // =========================================================================
