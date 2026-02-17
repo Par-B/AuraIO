@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`aura_get_stats()` returns `int`**: Was `void`. Now returns `0` on success, `-1` with `errno=EINVAL` on NULL/invalid input
 
 ### Added
+- **auracp file copy tool** (`tools/auracp/`): Production-quality async pipelined file copy with cross-file I/O pipeline, recursive directory support, O_DIRECT mode, progress bar, and AIMD stats reporting
 - **Diagnostic APIs**: `aura_get_fatal_error()` (check if engine has latched fatal error), `aura_in_callback_context()` (detect if current thread is inside a completion callback), `aura_histogram_percentile()` (compute latency percentiles from histogram data)
 - **C++ Engine movability**: `aura::Engine` is now move-constructible and move-assignable (must not move while event loop methods are executing on another thread)
 - **C++ wrappers**: `Engine::fatal_error()`, `Engine::in_callback_context()`, `Engine::unregister()`, `Engine::request_unregister()`, `Histogram::percentile()`

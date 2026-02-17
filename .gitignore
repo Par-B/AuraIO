@@ -59,6 +59,10 @@ examples/cpp/log_handler
 tools/BFFIO/BFFIO
 tools/BFFIO/*.o
 tools/BFFIO/baseline_results/
+
+# auracp file copy tool
+tools/auracp/*.o
+
 tools/bin/
 
 # Integration binaries
