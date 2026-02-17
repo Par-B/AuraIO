@@ -1212,6 +1212,16 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
     ctx.req->uses_registered_file = use_registered_file;
 
     if (ring_submit_ftruncate(ctx.ring, ctx.req) != 0) {
+        /* If liburing doesn't support ftruncate (ENOSYS), complete immediately with error */
+        if (errno == ENOSYS) {
+            submit_end(&ctx);  /* Keep the request */
+            if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+            /* Invoke callback immediately with ENOSYS */
+            if (callback) {
+                callback(ctx.req, -ENOSYS, user_data);
+            }
+            return ctx.req;
+        }
         submit_abort(&ctx);
         if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
         return NULL;

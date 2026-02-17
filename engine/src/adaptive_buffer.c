@@ -70,34 +70,25 @@ static void tls_key_init(void) {
  *   ...
  *   Class 15: <= 128MB (and overflow)
  *
- * Uses a fast-path cascade for the 7 most common I/O sizes (<=256KB)
- * to avoid __builtin_clzl overhead. Falls back to clzl for rare large sizes.
+ * Uses __builtin_clzl for branchless size→class mapping.  A single
+ * predictable branch handles the common case (size <= 4KB = class 0).
  *
  * @param size Buffer size in bytes
  * @return Size class index (0 to BUFFER_SIZE_CLASSES-1)
  */
 int size_to_class(size_t size) {
-    /* Fast path: cascade covers classes 0-6 (4KB to 256KB).
-     * These are the typical I/O buffer sizes. Ordered by expected
-     * frequency: 4K (most common), then 64K, 8K, etc. */
+    /* Fast path: most common I/O buffer size (well-predicted). */
     if (size <= 4096) return 0;
-    if (size <= 8192) return 1;
-    if (size <= 16384) return 2;
-    if (size <= 32768) return 3;
-    if (size <= 65536) return 4;
-    if (size <= 131072) return 5;
-    if (size <= 262144) return 6;
 
-    /* Slow path: rare large buffers (>256KB). Use __builtin_clzl.
-     * Safety: size > 262144 here, so (size - 1) > 0. */
-    int leading_zeros = __builtin_clzl(size - 1);
-    int highest_bit = (int)(sizeof(unsigned long) * 8) - leading_zeros;
-    int class_idx = highest_bit - 12;
+    /* Branchless path for sizes > 4096.
+     * ceil(log2(size)) = wordsize - clzl(size - 1).
+     * class_idx = ceil(log2(size)) - 12, since class 0 = 2^12 = 4096.
+     * Safety: size > 4096 guarantees (size - 1) > 0, so clzl is defined.
+     * Also guarantees bits >= 13, so class_idx >= 1 (no underflow). */
+    int bits = (int)(sizeof(unsigned long) * 8) - __builtin_clzl(size - 1);
+    int class_idx = bits - 12;
 
-    if (class_idx < 0) return 0;
-    if (class_idx >= BUFFER_SIZE_CLASSES) {
-        return BUFFER_SIZE_CLASSES - 1;
-    }
+    if (class_idx >= BUFFER_SIZE_CLASSES) return BUFFER_SIZE_CLASSES - 1;
     return class_idx;
 }
 

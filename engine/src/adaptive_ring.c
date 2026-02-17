@@ -17,6 +17,27 @@
 #include <limits.h>
 #include <unistd.h>
 
+/* Feature detection: check if io_uring_prep_ftruncate exists in liburing
+ * This was added in liburing 2.7 (May 2024) */
+#if defined(__has_include)
+#  if __has_include(<liburing/io_uring.h>)
+#    include <liburing/io_uring.h>
+#    ifdef IORING_OP_FTRUNCATE
+#      define HAVE_FTRUNCATE_SUPPORT 1
+#    endif
+#  endif
+#endif
+
+/* If liburing lacks io_uring_prep_ftruncate, provide a stub that fails */
+#ifndef HAVE_FTRUNCATE_SUPPORT
+static inline void io_uring_prep_ftruncate(struct io_uring_sqe *sqe,
+                                            int fd, loff_t len) {
+    (void)sqe; (void)fd; (void)len;
+    /* This will never execute - we return ENOSYS before calling this */
+}
+#endif
+
+
 /* Per-thread callback context depth.
  * >0 means current thread is inside AuraIO completion callback(s). */
 static _Thread_local int callback_context_depth = 0;
@@ -621,6 +642,13 @@ int ring_submit_fallocate(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
+#ifndef HAVE_FTRUNCATE_SUPPORT
+    /* liburing < 2.7 doesn't support ftruncate - return ENOSYS
+     * The test suite will detect this and skip the test */
+    (void)ctx; (void)req;
+    errno = ENOSYS;
+    return (-1);
+#else
     struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
     if (!sqe) return (-1);
 
@@ -629,6 +657,7 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
     io_uring_sqe_set_data(sqe, req);
     meta_finish(ctx, req, AURA_OP_FTRUNCATE);
     return (0);
+#endif
 }
 
 int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
