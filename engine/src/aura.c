@@ -554,8 +554,11 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
         return NULL;
     }
 
-    /* Validate options */
-    if (options->queue_depth < 0 || options->queue_depth > 32768) {
+    /* Validate options.
+     * queue_depth == 0 means "use default"; explicit values must be >= 4
+     * because the AIMD controller needs at least 4 request slots. */
+    if (options->queue_depth < 0 || options->queue_depth > 32768 ||
+        (options->queue_depth > 0 && options->queue_depth < 4)) {
         errno = EINVAL;
         return NULL;
     }

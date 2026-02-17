@@ -331,7 +331,7 @@ class Engine {
      * @param buf Buffer to read into
      * @param len Number of bytes to read
      * @param offset File offset
-     * @return Awaitable that yields ssize_t (bytes read or negative error)
+     * @return Awaitable (co_await yields ssize_t bytes read, or throws aura::Error on failure)
      */
     inline IoAwaitable async_read(int fd, BufferRef buf, size_t len, off_t offset);
 
@@ -342,7 +342,7 @@ class Engine {
      * @param buf Buffer to write from
      * @param len Number of bytes to write
      * @param offset File offset
-     * @return Awaitable that yields ssize_t (bytes written or negative error)
+     * @return Awaitable (co_await yields ssize_t bytes written, or throws aura::Error on failure)
      */
     inline IoAwaitable async_write(int fd, BufferRef buf, size_t len, off_t offset);
 
@@ -350,7 +350,7 @@ class Engine {
      * Async fsync operation for coroutines
      *
      * @param fd File descriptor
-     * @return Awaitable that completes when fsync is done
+     * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
     inline FsyncAwaitable async_fsync(int fd);
 
@@ -358,7 +358,7 @@ class Engine {
      * Async fdatasync operation for coroutines
      *
      * @param fd File descriptor
-     * @return Awaitable that completes when fdatasync is done
+     * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
     inline FsyncAwaitable async_fdatasync(int fd);
 
@@ -585,7 +585,7 @@ class Engine {
      *
      * @return Stats object with current metrics
      */
-    [[nodiscard]] Stats get_stats() const {
+    [[nodiscard]] Stats get_stats() const noexcept {
         Stats stats;
         aura_get_stats(handle_, &stats.stats_, sizeof(stats.stats_));
         return stats;
@@ -628,7 +628,7 @@ class Engine {
      * Get buffer pool statistics
      * @return BufferStats snapshot
      */
-    [[nodiscard]] BufferStats get_buffer_stats() const {
+    [[nodiscard]] BufferStats get_buffer_stats() const noexcept {
         BufferStats bs;
         aura_get_buffer_stats(handle_, &bs.stats_);
         return bs;

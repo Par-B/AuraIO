@@ -1232,6 +1232,10 @@ AURA_API const char *aura_version(void);
 /**
  * Log callback type
  *
+ * The callback may be invoked concurrently from multiple threads.
+ * Implementations MUST be thread-safe (e.g. use a mutex, write to
+ * a thread-safe logger, or only call async-signal-safe functions).
+ *
  * @param level   Severity (AURA_LOG_ERR .. AURA_LOG_DEBUG; matches syslog)
  * @param msg     Formatted message string (NUL-terminated)
  * @param userdata Opaque pointer passed to aura_set_log_handler()
@@ -1242,9 +1246,12 @@ typedef void (*aura_log_fn)(int level, const char *msg, void *userdata);
  * Set the library-wide log handler
  *
  * By default no handler is installed and the library is silent.
- * The handler is global (process-wide) and may be called from any thread.
+ * The handler is global (process-wide) and may be called from any thread
+ * (including internal tick threads and io_uring completion threads).
+ * The handler MUST be thread-safe.
  *
- * @param handler  Log callback (NULL to disable logging)
+ * @param handler  Log callback (NULL to disable logging).  Must be
+ *                 safe to call concurrently from multiple threads.
  * @param userdata Opaque pointer forwarded to the callback
  */
 AURA_API void aura_set_log_handler(aura_log_fn handler, void *userdata);
