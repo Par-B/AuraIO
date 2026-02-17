@@ -269,7 +269,7 @@ int aura_metrics_otel(aura_engine_t *engine, char *buf, size_t buf_size) {
 
         for (int i = 0; i < ring_count; i++) {
             aura_histogram_t hist;
-            aura_get_histogram(engine, i, &hist);
+            aura_get_histogram(engine, i, &hist, sizeof(hist));
 
             if (i > 0) OTEL_APPEND(",");
 

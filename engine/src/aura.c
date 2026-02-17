@@ -2112,7 +2112,7 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-void aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         return;
     }
@@ -2199,7 +2199,7 @@ int aura_get_ring_count(const aura_engine_t *engine) {
     return engine->ring_count;
 }
 
-int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
+int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
                         size_t stats_size) {
     if (!engine || !stats || stats_size == 0) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
@@ -2235,12 +2235,16 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
     return 0;
 }
 
-int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist) {
-    if (!engine || !hist) return -1;
+int aura_get_histogram(const aura_engine_t *engine, int ring_idx,
+                       aura_histogram_t *hist, size_t hist_size) {
+    if (!engine || !hist || hist_size == 0) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
-        memset(hist, 0, sizeof(*hist));
+        memset(hist, 0, hist_size < sizeof(*hist) ? hist_size : sizeof(*hist));
         return -1;
     }
+
+    aura_histogram_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
 
     ring_ctx_t *ring = &engine->rings[ring_idx];
     ring_lock(ring);
@@ -2249,15 +2253,18 @@ int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hi
      * the overall snapshot is approximate — see aura_histogram_t docs. */
     adaptive_histogram_t *active = adaptive_hist_active(&ring->adaptive.hist_pair);
     for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
-        hist->buckets[i] = atomic_load_explicit(&active->buckets[i], memory_order_relaxed);
+        tmp.buckets[i] = atomic_load_explicit(&active->buckets[i], memory_order_relaxed);
     }
-    hist->overflow = atomic_load_explicit(&active->overflow, memory_order_relaxed);
-    hist->total_count = atomic_load_explicit(&active->total_count, memory_order_relaxed);
-    hist->bucket_width_us = LATENCY_BUCKET_WIDTH_US;
-    hist->max_tracked_us = LATENCY_MAX_US;
-    memset(hist->_reserved, 0, sizeof(hist->_reserved));
+    tmp.overflow = atomic_load_explicit(&active->overflow, memory_order_relaxed);
+    tmp.total_count = atomic_load_explicit(&active->total_count, memory_order_relaxed);
+    tmp.bucket_width_us = LATENCY_BUCKET_WIDTH_US;
+    tmp.max_tracked_us = LATENCY_MAX_US;
 
     ring_unlock(ring);
+
+    /* Copy only as many bytes as the caller's struct can hold */
+    size_t copy_size = hist_size < sizeof(tmp) ? hist_size : sizeof(tmp);
+    memcpy(hist, &tmp, copy_size);
     return 0;
 }
 

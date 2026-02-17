@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
     /* Latency histogram (demonstrates aura_get_histogram) */
     if (rings > 0) {
         aura_histogram_t hist;
-        if (aura_get_histogram(engine, 0, &hist) == 0 && hist.total_count > 0) {
+        if (aura_get_histogram(engine, 0, &hist, sizeof(hist)) == 0 && hist.total_count > 0) {
             printf("\nLatency Histogram (Ring 0):\n");
             printf("  Total samples: %u\n", hist.total_count);
             printf("  Bucket width:  %d μs\n", hist.bucket_width_us);

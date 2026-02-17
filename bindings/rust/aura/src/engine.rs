@@ -696,7 +696,14 @@ impl Engine {
     /// `Ok(Histogram)` on success, `Err` if ring_idx is invalid
     pub fn histogram(&self, ring_idx: i32) -> Result<crate::stats::Histogram> {
         let mut inner: aura_sys::aura_histogram_t = unsafe { std::mem::zeroed() };
-        let ret = unsafe { aura_sys::aura_get_histogram(self.inner.raw(), ring_idx, &mut inner) };
+        let ret = unsafe {
+            aura_sys::aura_get_histogram(
+                self.inner.raw(),
+                ring_idx,
+                &mut inner,
+                std::mem::size_of::<aura_sys::aura_histogram_t>(),
+            )
+        };
         if ret == 0 {
             Ok(crate::stats::Histogram::new(inner))
         } else {

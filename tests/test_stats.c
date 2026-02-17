@@ -195,7 +195,7 @@ TEST(histogram_basic) {
     assert(engine != NULL);
 
     aura_histogram_t hist;
-    int rc = aura_get_histogram(engine, 0, &hist);
+    int rc = aura_get_histogram(engine, 0, &hist, sizeof(hist));
     assert(rc == 0);
 
     assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
@@ -207,7 +207,7 @@ TEST(histogram_basic) {
 TEST(histogram_null_engine) {
     aura_histogram_t hist;
     memset(&hist, 0xFF, sizeof(hist));
-    int rc = aura_get_histogram(NULL, 0, &hist);
+    int rc = aura_get_histogram(NULL, 0, &hist, sizeof(hist));
     assert(rc == -1);
     /* Struct should be unchanged when engine is NULL */
     assert(hist.bucket_width_us == (int)0xFFFFFFFF);
@@ -216,7 +216,7 @@ TEST(histogram_null_engine) {
 TEST(histogram_null_output) {
     aura_engine_t *engine = aura_create();
     assert(engine != NULL);
-    int rc = aura_get_histogram(engine, 0, NULL);
+    int rc = aura_get_histogram(engine, 0, NULL, sizeof(aura_histogram_t));
     assert(rc == -1);
     aura_destroy(engine);
 }
@@ -232,18 +232,18 @@ TEST(histogram_out_of_range) {
     aura_histogram_t hist;
 
     /* Negative index */
-    int rc = aura_get_histogram(engine, -1, &hist);
+    int rc = aura_get_histogram(engine, -1, &hist, sizeof(hist));
     assert(rc == -1);
     assert(hist.bucket_width_us == 0);
     assert(hist.total_count == 0);
 
     /* One past end */
-    rc = aura_get_histogram(engine, 1, &hist);
+    rc = aura_get_histogram(engine, 1, &hist, sizeof(hist));
     assert(rc == -1);
     assert(hist.bucket_width_us == 0);
 
     /* Far out of range */
-    rc = aura_get_histogram(engine, 999, &hist);
+    rc = aura_get_histogram(engine, 999, &hist, sizeof(hist));
     assert(rc == -1);
     assert(hist.bucket_width_us == 0);
     assert(hist.total_count == 0);
@@ -463,7 +463,7 @@ TEST(histogram_after_io) {
 
     /* Histogram should have recorded some samples */
     aura_histogram_t hist;
-    aura_get_histogram(engine, 0, &hist);
+    aura_get_histogram(engine, 0, &hist, sizeof(hist));
 
     assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
     assert(hist.max_tracked_us == 10000);
@@ -650,7 +650,7 @@ static void *stats_reader_thread(void *arg) {
             assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_CONVERGED);
 
             aura_histogram_t hist;
-            aura_get_histogram(ctx->engine, i, &hist);
+            aura_get_histogram(ctx->engine, i, &hist, sizeof(hist));
             assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
         }
 

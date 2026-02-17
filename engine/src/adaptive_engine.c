@@ -476,12 +476,12 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         }
         break;
 
-    case ADAPTIVE_PHASE_BACKOFF:
-        /* Multiplicative decrease */
-        in_flight_limit = (int)(in_flight_limit * ADAPTIVE_AIMD_DECREASE);
-        if (in_flight_limit < ctrl->min_in_flight) {
-            in_flight_limit = ctrl->min_in_flight;
-        }
+    case ADAPTIVE_PHASE_BACKOFF: {
+        /* Multiplicative decrease: reduce by 20% (AIMD_DECREASE = 0.80).
+         * Use integer arithmetic (4/5) to avoid float truncation to 0 when
+         * in_flight_limit is small, and clamp to min_in_flight (>= 1). */
+        int reduced = (in_flight_limit * 4 + 4) / 5; /* ceil(limit * 0.80) */
+        in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
         atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
                               memory_order_relaxed);
         params_changed = true;
@@ -490,6 +490,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
         ctrl->settling_timer = 0;
         break;
+    }
 
     case ADAPTIVE_PHASE_CONVERGED:
         /* No more changes - just maintain current config */

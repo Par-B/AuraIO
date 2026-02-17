@@ -128,6 +128,7 @@ typedef struct buffer_pool {
     _Alignas(64) _Atomic(thread_cache_t *) thread_caches; /**< Lock-free list of thread caches */
     _Atomic bool destroyed;                               /**< Pool destroyed flag for safety */
     _Atomic int registrations_inflight; /**< Caches currently in registration path */
+    _Atomic int active_users; /**< Threads currently in shard slow path (alloc/free) */
 
     /* === CL 2: Write-heavy counters (slow path only) === */
     _Alignas(64) _Atomic size_t total_allocated; /**< Total bytes allocated (atomic) */

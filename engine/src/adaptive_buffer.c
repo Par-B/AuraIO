@@ -528,6 +528,7 @@ int buffer_pool_init(buffer_pool_t *pool, size_t alignment) {
     atomic_init(&pool->next_shard, 0);
     atomic_init(&pool->destroyed, false);
     atomic_init(&pool->registrations_inflight, 0);
+    atomic_init(&pool->active_users, 0);
 
     /* Allocate shards array */
     pool->shards = calloc(pool->shard_count, sizeof(buffer_shard_t));
@@ -567,6 +568,13 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
     /* Wait for in-flight cache registrations to quiesce so no new nodes can
      * be published after the final atomic_exchange(NULL) in the drain loop. */
     while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
+        sched_yield();
+    }
+
+    /* Wait for threads in the shard slow path (alloc/free) to finish.
+     * These threads have already passed the destroyed check and are
+     * accessing pool->shards — we must not free shards until they exit. */
+    while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
         sched_yield();
     }
 
@@ -670,10 +678,13 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     }
 
     /* Slow path: shard also empty, or no thread cache.
-     * Safety: callers MUST NOT call alloc after buffer_pool_destroy() begins.
-     * The destroyed flag is a diagnostic check, not a synchronization mechanism -
-     * there is no lock that atomically covers both the flag and shard access. */
+     * Acquire active_users BEFORE checking destroyed to prevent a race with
+     * buffer_pool_destroy: destroy sets destroyed=true then waits for
+     * active_users==0 before freeing shards.  By incrementing first, we
+     * guarantee destroy will wait for us to finish shard access. */
+    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         errno = ENXIO;
         return NULL;
     }
@@ -698,10 +709,12 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
         shard->free_slots = slot;
 
         pthread_mutex_unlock(&shard->lock);
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         return buf;
     }
 
     pthread_mutex_unlock(&shard->lock);
+    atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
 
     /* No buffer in shard - allocate from heap.
      * Batch-allocate to fill the thread cache so subsequent allocs avoid
@@ -774,10 +787,11 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     }
 
     /* Slow path: no thread cache or flush failed, go directly to shard.
-     * Safety: callers MUST NOT call free after buffer_pool_destroy() begins.
-     * The destroyed flag is a diagnostic check, not a synchronization mechanism -
-     * there is no lock that atomically covers both the flag and shard access. */
+     * Same active_users protocol as buffer_pool_alloc slow path — see
+     * comment there for the synchronization rationale. */
+    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         free(buf);
         return;
     }
@@ -793,6 +807,7 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         atomic_fetch_sub(&pool->total_allocated, bucket_size);
         atomic_fetch_sub(&pool->total_buffers, 1);
         pthread_mutex_unlock(&shard->lock);
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         free(buf);
         return;
     }
@@ -804,6 +819,7 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         atomic_fetch_sub(&pool->total_allocated, bucket_size);
         atomic_fetch_sub(&pool->total_buffers, 1);
         pthread_mutex_unlock(&shard->lock);
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         free(buf);
         return;
     }
@@ -820,6 +836,7 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     shard->free_count++;
 
     pthread_mutex_unlock(&shard->lock);
+    atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
 }
 
 /* ============================================================================

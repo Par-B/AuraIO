@@ -619,7 +619,7 @@ class Engine {
      */
     [[nodiscard]] Histogram get_histogram(int ring_idx) const {
         Histogram h;
-        if (aura_get_histogram(handle_, ring_idx, &h.hist_) != 0)
+        if (aura_get_histogram(handle_, ring_idx, &h.hist_, sizeof(h.hist_)) != 0)
             throw std::out_of_range("ring_idx out of range");
         return h;
     }

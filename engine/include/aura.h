@@ -1139,7 +1139,7 @@ AURA_API int aura_unregister_files(aura_engine_t *engine);
  * @param stats      Output statistics structure (may be NULL)
  * @param stats_size sizeof(aura_stats_t) from caller's compilation
  */
-AURA_API void aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
+AURA_API void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
 
 /**
  * Get the number of io_uring rings in the engine
@@ -1162,8 +1162,8 @@ AURA_API int aura_get_ring_count(const aura_engine_t *engine);
  * @param stats_size sizeof(aura_ring_stats_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/stats or invalid ring_idx)
  */
-AURA_API int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
-                                 size_t stats_size);
+AURA_API int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
+                                 aura_ring_stats_t *stats, size_t stats_size);
 
 /**
  * Get a latency histogram snapshot for a specific ring
@@ -1175,12 +1175,17 @@ AURA_API int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_
  * If engine or hist is NULL, returns -1 without modifying hist.
  * If ring_idx is out of range, returns -1 and zeroes hist.
  *
- * @param engine   Engine handle
- * @param ring_idx Ring index (0 to aura_get_ring_count()-1)
- * @param hist     Output histogram structure
+ * The hist_size parameter enables forward compatibility: pass
+ * sizeof(aura_histogram_t) so the library writes at most that many bytes.
+ *
+ * @param engine    Engine handle
+ * @param ring_idx  Ring index (0 to aura_get_ring_count()-1)
+ * @param hist      Output histogram structure
+ * @param hist_size sizeof(aura_histogram_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
  */
-AURA_API int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist);
+AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx,
+                                aura_histogram_t *hist, size_t hist_size);
 
 /**
  * Get buffer pool statistics

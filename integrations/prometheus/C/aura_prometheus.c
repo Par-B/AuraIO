@@ -185,7 +185,7 @@ int aura_metrics_prometheus(aura_engine_t *engine, char *buf, size_t buf_size) {
 
         for (int i = 0; i < ring_count; i++) {
             aura_histogram_t hist;
-            aura_get_histogram(engine, i, &hist);
+            aura_get_histogram(engine, i, &hist, sizeof(hist));
 
             /* Prometheus histograms require cumulative buckets */
             uint64_t cumulative = 0;
