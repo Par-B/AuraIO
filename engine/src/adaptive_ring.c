@@ -18,25 +18,31 @@
 #include <unistd.h>
 
 /* Feature detection: check if io_uring_prep_ftruncate exists in liburing
- * This was added in liburing 2.7 (May 2024) */
+ * This was added in liburing 2.7 (May 2024).
+ * Use version detection instead of opcode detection (opcodes are enums, not macros).
+ */
 #if defined(__has_include)
-#  if __has_include(<liburing/io_uring.h>)
-#    include <liburing/io_uring.h>
-#    ifdef IORING_OP_FTRUNCATE
-#      define HAVE_FTRUNCATE_SUPPORT 1
+#    if __has_include(<liburing/io_uring_version.h>)
+#        include <liburing/io_uring_version.h>
+#        if (IO_URING_VERSION_MAJOR > 2) || \
+            (IO_URING_VERSION_MAJOR == 2 && IO_URING_VERSION_MINOR >= 7)
+#            define HAVE_FTRUNCATE_SUPPORT 1
+#        endif
 #    endif
-#  endif
 #endif
 
-/* If liburing lacks io_uring_prep_ftruncate, provide a stub that fails */
+/* If liburing < 2.7, provide a stub that always fails with ENOSYS.
+ * The stub is only compiled when HAVE_FTRUNCATE_SUPPORT is not defined,
+ * so there's no conflict with the real function from newer liburing versions.
+ */
 #ifndef HAVE_FTRUNCATE_SUPPORT
-static inline void io_uring_prep_ftruncate(struct io_uring_sqe *sqe,
-                                            int fd, loff_t len) {
-    (void)sqe; (void)fd; (void)len;
-    /* This will never execute - we return ENOSYS before calling this */
+static inline void io_uring_prep_ftruncate(struct io_uring_sqe *sqe, int fd, loff_t len) {
+    (void)sqe;
+    (void)fd;
+    (void)len;
+    /* This will never execute - we return ENOSYS in ring_submit_ftruncate() */
 }
 #endif
-
 
 /* Per-thread callback context depth.
  * >0 means current thread is inside AuraIO completion callback(s). */
@@ -647,7 +653,8 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
 #ifndef HAVE_FTRUNCATE_SUPPORT
     /* liburing < 2.7 doesn't support ftruncate - return ENOSYS
      * The test suite will detect this and skip the test */
-    (void)ctx; (void)req;
+    (void)ctx;
+    (void)req;
     errno = ENOSYS;
     return (-1);
 #else
