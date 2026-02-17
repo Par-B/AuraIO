@@ -2,6 +2,12 @@
 
 use crate::error::{Error, Result};
 
+/// Magic number for detecting double-free or memory corruption
+///
+/// ASCII encoding of "AURACALL" provides a recognizable pattern
+/// in memory dumps while being unlikely to occur naturally.
+const CALLBACK_MAGIC: u64 = 0x4155524143414C4C;
+
 /// Type-erased callback storage
 ///
 /// We box the callback to store it as user_data in the C API.
@@ -10,6 +16,8 @@ pub(crate) type BoxedCallback = Box<dyn FnOnce(Result<usize>) + Send + 'static>;
 
 /// Context stored as user_data for each I/O operation
 pub(crate) struct CallbackContext {
+    /// Guard against double-free and memory corruption
+    magic: u64,
     pub callback: Option<BoxedCallback>,
 }
 
@@ -19,6 +27,7 @@ impl CallbackContext {
         F: FnOnce(Result<usize>) + Send + 'static,
     {
         Box::new(Self {
+            magic: CALLBACK_MAGIC,
             callback: Some(Box::new(callback)),
         })
     }
@@ -36,6 +45,10 @@ impl CallbackContext {
 /// `ptr` must be a valid pointer previously obtained from
 /// `Box::into_raw(CallbackContext::new(...))`.
 pub(crate) unsafe fn drop_context(ptr: *mut std::ffi::c_void) {
+    if !ptr.is_null() {
+        // Clear magic before dropping to prevent confusion in future checks
+        (*(ptr as *mut CallbackContext)).magic = 0;
+    }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         drop(Box::from_raw(ptr as *mut CallbackContext));
     }));
@@ -50,6 +63,7 @@ pub(crate) unsafe fn drop_context(ptr: *mut std::ffi::c_void) {
 ///
 /// - `user_data` must be a valid pointer to a `Box<CallbackContext>`
 /// - This function takes ownership of the context and drops it after invocation
+/// - Validates magic number to detect double-free or memory corruption
 pub(crate) extern "C" fn callback_trampoline(
     _req: *mut aura_sys::aura_request_t,
     result: isize,
@@ -59,7 +73,25 @@ pub(crate) extern "C" fn callback_trampoline(
         return;
     }
 
-    // Take ownership of the context
+    // Peek at magic number before taking ownership to detect double-free
+    let magic = unsafe { (*(user_data as *const CallbackContext)).magic };
+
+    if magic != CALLBACK_MAGIC {
+        // Double-free detected or corrupted memory - do NOT attempt Box::from_raw
+        eprintln!(
+            "aura: CRITICAL: callback invoked on invalid context \
+             (double-free or corruption, req={:p}, magic=0x{:x})",
+            _req, magic
+        );
+        return;
+    }
+
+    // Clear magic BEFORE taking ownership (defense in depth)
+    unsafe {
+        (*(user_data as *mut CallbackContext)).magic = 0;
+    }
+
+    // Now safe to take ownership of the context
     let ctx = unsafe { Box::from_raw(user_data as *mut CallbackContext) };
 
     if let Some(callback) = ctx.callback {
