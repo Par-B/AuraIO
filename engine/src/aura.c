@@ -1003,11 +1003,18 @@ static void destroy_phase_2_drain_io(aura_engine_t *engine) {
 static void destroy_phase_3_unregister(aura_engine_t *engine) {
     /* Unregister buffers and files (safe now that I/O is drained).
      * Call request_unregister (deferred) to avoid the aura_wait loop
-     * which can livelock post-shutdown (no new I/O). */
-    if (engine->buffers_registered && !engine->buffers_unreg_pending) {
+     * which can livelock post-shutdown (no new I/O).
+     * Read unreg_pending under reg_lock to avoid data race with the
+     * writers that set these flags under the same lock. */
+    pthread_rwlock_rdlock(&engine->reg_lock);
+    bool need_unreg_bufs = engine->buffers_registered && !engine->buffers_unreg_pending;
+    bool need_unreg_files = engine->files_registered && !engine->files_unreg_pending;
+    pthread_rwlock_unlock(&engine->reg_lock);
+
+    if (need_unreg_bufs) {
         request_unregister_buffers(engine);
     }
-    if (engine->files_registered && !engine->files_unreg_pending) {
+    if (need_unreg_files) {
         request_unregister_files(engine);
     }
     finalize_deferred_unregistration(engine);
