@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - C engine: Extracted file resolution guard pattern, eliminating ~260 lines of duplicated lock/unlock code across 6 I/O functions
   - C engine: Split large `aura_read`/`aura_write` functions (117 lines each) into focused helpers, reducing code by 33% and improving maintainability
   - C++ bindings: Added `submit_io()` helper template to eliminate callback boilerplate across all 12 I/O methods (`read`, `write`, `readv`, `writev`, `fsync`, `fdatasync`, `openat`, `close`, `statx`, `fallocate`, `ftruncate`, `sync_file_range`), reducing per-method code from 19 to 6 lines (68% reduction)
+  - C engine: Consolidated `aura_read`/`aura_write` into shared `submit_io_generic()` static inline helper, eliminating ~48 lines of duplication while preserving zero-overhead abstraction through devirtualization
 
 ## [0.4.0] - 2026-02-15
 

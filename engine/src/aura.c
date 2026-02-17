@@ -950,8 +950,14 @@ void aura_destroy(aura_engine_t *engine) {
  * ============================================================================
  */
 
-aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
-                          aura_callback_t callback, void *user_data) {
+/**
+ * Generic I/O submission helper - consolidates aura_read/aura_write logic.
+ * Static inline ensures devirtualization for zero overhead.
+ */
+static inline aura_request_t *submit_io_generic(aura_engine_t *engine, int fd, aura_buf_t buf,
+                                                size_t len, off_t offset, aura_callback_t callback,
+                                                void *user_data, ring_submit_fn_t submit_unreg,
+                                                ring_submit_fixed_fn_t submit_reg) {
     if (!engine || fd < 0 || len == 0) {
         errno = EINVAL;
         return NULL;
@@ -963,7 +969,7 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
             return NULL;
         }
         return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, callback, user_data,
-                                      ring_submit_read);
+                                      submit_unreg);
     } else if (buf.type == AURA_BUF_REGISTERED) {
         registered_buf_info_t buf_info =
             validate_registered_buffer(engine, buf.u.fixed.index, buf.u.fixed.offset, len);
@@ -972,40 +978,23 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
         }
         return submit_registered_buffer_io(engine, fd, buf_info.reg_iov, buf.u.fixed.index,
                                            buf.u.fixed.offset, len, offset, callback, user_data,
-                                           ring_submit_read_fixed);
+                                           submit_reg);
     } else {
         errno = EINVAL; /* Invalid buffer type */
         return NULL;
     }
 }
 
+aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
+                          aura_callback_t callback, void *user_data) {
+    return submit_io_generic(engine, fd, buf, len, offset, callback, user_data, ring_submit_read,
+                             ring_submit_read_fixed);
+}
+
 aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
                            aura_callback_t callback, void *user_data) {
-    if (!engine || fd < 0 || len == 0) {
-        errno = EINVAL;
-        return NULL;
-    }
-
-    if (buf.type == AURA_BUF_UNREGISTERED) {
-        if (!buf.u.ptr) {
-            errno = EINVAL;
-            return NULL;
-        }
-        return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, callback, user_data,
-                                      ring_submit_write);
-    } else if (buf.type == AURA_BUF_REGISTERED) {
-        registered_buf_info_t buf_info =
-            validate_registered_buffer(engine, buf.u.fixed.index, buf.u.fixed.offset, len);
-        if (!buf_info.reg_iov) {
-            return NULL;
-        }
-        return submit_registered_buffer_io(engine, fd, buf_info.reg_iov, buf.u.fixed.index,
-                                           buf.u.fixed.offset, len, offset, callback, user_data,
-                                           ring_submit_write_fixed);
-    } else {
-        errno = EINVAL; /* Invalid buffer type */
-        return NULL;
-    }
+    return submit_io_generic(engine, fd, buf, len, offset, callback, user_data, ring_submit_write,
+                             ring_submit_write_fixed);
 }
 
 aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
