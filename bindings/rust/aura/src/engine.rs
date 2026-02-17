@@ -1,7 +1,7 @@
 //! Core Engine type for AuraIO
 
 use crate::buffer::{Buffer, BufferRef};
-use crate::callback::{callback_trampoline, CallbackContext};
+use crate::callback::{callback_trampoline, drop_context, CallbackContext};
 use crate::error::{Error, Result};
 use crate::options::Options;
 use crate::request::RequestHandle;
@@ -308,9 +308,7 @@ impl Engine {
         if req.is_null() {
             // Capture errno before drop, which could clobber it
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
@@ -354,9 +352,7 @@ impl Engine {
 
         if req.is_null() {
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
@@ -385,9 +381,7 @@ impl Engine {
 
         if req.is_null() {
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
@@ -416,9 +410,7 @@ impl Engine {
 
         if req.is_null() {
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
@@ -463,9 +455,7 @@ impl Engine {
 
         if req.is_null() {
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))
@@ -510,9 +500,7 @@ impl Engine {
 
         if req.is_null() {
             let err = io::Error::last_os_error();
-            unsafe {
-                drop(Box::from_raw(ctx_ptr as *mut CallbackContext));
-            }
+            unsafe { drop_context(ctx_ptr) };
             Err(Error::Submission(err))
         } else {
             Ok(RequestHandle::new(req))

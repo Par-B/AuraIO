@@ -24,6 +24,23 @@ impl CallbackContext {
     }
 }
 
+/// Safely drop a CallbackContext from a raw pointer.
+///
+/// Used on submission failure paths to reclaim the boxed context.
+/// Wraps the drop in `catch_unwind` so that a panicking `Drop` impl
+/// on a captured closure variable cannot unwind through the caller
+/// and mask the original submission error.
+///
+/// # Safety
+///
+/// `ptr` must be a valid pointer previously obtained from
+/// `Box::into_raw(CallbackContext::new(...))`.
+pub(crate) unsafe fn drop_context(ptr: *mut std::ffi::c_void) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(Box::from_raw(ptr as *mut CallbackContext));
+    }));
+}
+
 /// C callback trampoline
 ///
 /// This function is passed to the C API. It converts the result and

@@ -314,13 +314,20 @@ class Buffer {
     /**
      * Release ownership of buffer
      *
-     * After calling release(), the Buffer will not free the memory
-     * on destruction. Caller becomes responsible for freeing via
-     * aura_buffer_free(released.engine, released.data).
+     * Transfers ownership to the caller. After calling release(), the
+     * Buffer will not free the memory on destruction. Caller becomes
+     * responsible for freeing via aura_buffer_free(released.engine, released.data).
+     *
+     * Only valid for owned, pool-allocated buffers. Returns a zeroed
+     * (empty) ReleasedBuffer for moved-from, default-constructed, or
+     * non-owning (wrap()) buffers.
      *
      * @return ReleasedBuffer with pointer, size, and engine needed for freeing
      */
     [[nodiscard]] ReleasedBuffer release() noexcept {
+        if (!owned_ || !ptr_) {
+            return {nullptr, 0, nullptr};
+        }
         ReleasedBuffer released{ptr_, size_, engine_};
         ptr_ = nullptr;
         size_ = 0;
