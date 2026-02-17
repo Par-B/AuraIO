@@ -180,12 +180,12 @@ void adaptive_hist_record(adaptive_histogram_t *hist, int64_t latency_us) {
     } else {
         atomic_fetch_add_explicit(&hist->buckets[bucket], 1, memory_order_relaxed);
     }
-    /* Both increments use relaxed ordering for performance. A concurrent
-     * reader of the *active* histogram (via aura_get_histogram) may briefly
-     * see total_count > sum(buckets). This is acceptable for diagnostic
-     * snapshots. The primary consumer (adaptive_hist_p99) reads the
-     * swapped-out histogram where no concurrent writes occur. */
-    atomic_fetch_add_explicit(&hist->total_count, 1, memory_order_relaxed);
+    /* Use release ordering on total_count so that a reader who does an
+     * acquire load of total_count is guaranteed to see all preceding bucket
+     * increments. On x86 (TSO) this is free; on ARM/POWER it emits a
+     * store-release barrier. Without this, bucket reads in adaptive_hist_p99
+     * could observe stale values on weak-memory architectures. */
+    atomic_fetch_add_explicit(&hist->total_count, 1, memory_order_release);
 }
 
 double adaptive_hist_p99(adaptive_histogram_t *hist) {
