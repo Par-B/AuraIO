@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - C++ bindings: Added `submit_io()` helper template to eliminate callback boilerplate across all 12 I/O methods (`read`, `write`, `readv`, `writev`, `fsync`, `fdatasync`, `openat`, `close`, `statx`, `fallocate`, `ftruncate`, `sync_file_range`), reducing per-method code from 19 to 6 lines (68% reduction)
   - C engine: Consolidated `aura_read`/`aura_write` into shared `submit_io_generic()` static inline helper, eliminating ~48 lines of duplication while preserving zero-overhead abstraction through devirtualization
   - C engine: Refactored `aura_create_with_options()` into 5 focused initialization stages (validate core, init buffer pool, init rings, register eventfd, start tick thread), reducing complexity from 160 to 30 lines while improving error handling clarity
+  - C engine: Refactored `adaptive_tick()` AIMD state machine into focused handlers (275→70 lines, CCN 25→5), extracting `tick_swap_and_compute_stats()` and 6 per-state handlers. Static inline ensures zero overhead on semi-hot path (10ms interval). Preserves exact atomic ordering and cache locality.
 
 ## [0.4.0] - 2026-02-15
 

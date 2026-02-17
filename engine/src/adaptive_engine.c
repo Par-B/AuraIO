@@ -45,6 +45,120 @@ static double window_min(const double *window, int count) {
     return min_val;
 }
 
+/**
+ * Tick statistics computed from histogram swap and sample data.
+ * Used to pass computed values from tick_swap_and_compute_stats() to state handlers.
+ */
+typedef struct {
+    int sample_count;
+    double p99_ms;
+    double throughput_bps;
+    double sqe_ratio;
+    double latency_guard_ms;
+    int64_t elapsed_ns;
+    bool have_valid_p99;
+    bool latency_rising;
+    double efficiency_ratio;
+} tick_stats_t;
+
+/**
+ * Swap histograms and compute statistics for current sample period.
+ * Static inline to avoid call overhead on semi-hot path (runs every 10ms).
+ * Preserves exact atomic ordering for correctness on weak-memory architectures.
+ */
+static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ctrl,
+                                                       int64_t now_ns) {
+    tick_stats_t stats = { 0 };
+
+    /* Calculate elapsed time */
+    int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
+    stats.elapsed_ns = now_ns - start_ns;
+
+    /* Swap histograms - O(1) atomic index flip.
+     * Returns pointer to old histogram (now inactive) for reading stats. */
+    adaptive_histogram_t *old_hist = adaptive_hist_swap(&ctrl->hist_pair);
+
+    /* Re-read sample_count from the swapped-out histogram (now inactive).
+     * This is the definitive count — no more writers after the swap. */
+    stats.sample_count = atomic_load_explicit(&old_hist->total_count, memory_order_acquire);
+
+    /* Calculate current sample statistics from the old (now inactive) histogram */
+    stats.p99_ms = adaptive_hist_p99(old_hist);
+    double elapsed_sec = (double)stats.elapsed_ns / 1e9;
+    int64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
+    stats.throughput_bps = (elapsed_sec > 0) ? (double)bytes / elapsed_sec : 0.0;
+
+    /* Calculate SQE/submit ratio for batch optimizer */
+    int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
+    int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
+    stats.sqe_ratio = (calls > 0) ? (double)sqes / (double)calls : 0.0;
+
+    /* Store current values (atomic for thread-safe stats access).
+     * Use memory_order_release so readers with acquire see consistent values,
+     * important for ARM/PowerPC with weak memory ordering. */
+    atomic_store_explicit(&ctrl->current_throughput_bps, stats.throughput_bps,
+                          memory_order_release);
+    if (stats.p99_ms >= 0) {
+        atomic_store_explicit(&ctrl->current_p99_ms, stats.p99_ms, memory_order_release);
+    }
+
+    /* Update sliding windows */
+    if (stats.p99_ms >= 0) {
+        window_add(ctrl->p99_window, &ctrl->p99_head, &ctrl->p99_count, ADAPTIVE_P99_WINDOW,
+                   stats.p99_ms);
+        window_add(ctrl->baseline_window, &ctrl->baseline_head, &ctrl->baseline_count,
+                   ADAPTIVE_BASELINE_WINDOW, stats.p99_ms);
+    }
+    window_add(ctrl->throughput_window, &ctrl->throughput_head, &ctrl->throughput_count,
+               ADAPTIVE_THROUGHPUT_WINDOW, stats.throughput_bps);
+
+    /* Update baseline (sliding minimum P99) */
+    if (ctrl->baseline_count > 0) {
+        ctrl->baseline_p99_ms = window_min(ctrl->baseline_window, ctrl->baseline_count);
+    }
+
+    /* Determine effective latency guard threshold */
+    if (ctrl->max_p99_ms > 0) {
+        stats.latency_guard_ms = ctrl->max_p99_ms;
+    } else if (ctrl->baseline_p99_ms > 0) {
+        stats.latency_guard_ms = ctrl->baseline_p99_ms * ADAPTIVE_LATENCY_GUARD_MULT;
+    } else {
+        stats.latency_guard_ms = ADAPTIVE_DEFAULT_LATENCY_GUARD; /* Default if no baseline yet */
+    }
+    ctrl->latency_rise_threshold = stats.latency_guard_ms;
+
+    /* Determine if latency is rising
+     * With low IOPS, we accept fewer samples but require minimum threshold.
+     * P99 with 20 samples is effectively P95, which is still useful.
+     */
+    stats.have_valid_p99 =
+        (stats.sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES && stats.p99_ms >= 0);
+    stats.latency_rising = stats.have_valid_p99 && stats.p99_ms > stats.latency_guard_ms;
+
+    /* Calculate efficiency ratio: change in throughput per change in in-flight */
+    int in_flight_limit =
+        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+    if (ctrl->prev_in_flight_limit > 0 && in_flight_limit != ctrl->prev_in_flight_limit) {
+        double delta_throughput = stats.throughput_bps - ctrl->prev_throughput_bps;
+        int delta_inflight = in_flight_limit - ctrl->prev_in_flight_limit;
+        if (delta_inflight != 0) {
+            stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
+        }
+    }
+
+    /* Clear the old histogram for next use using atomic stores.
+     * This avoids TSAN warnings from mixing memset with atomic operations.
+     *
+     * Known limitation: there is a brief race window between the pointer swap
+     * above and this reset where concurrent adaptive_hist_record() calls may
+     * write to old_hist. Those ~1-3 samples are lost. Fixing this requires a
+     * seq-lock or RCU approach, which is not worth the complexity for
+     * statistical metrics that tolerate minor sample loss. */
+    adaptive_hist_reset(old_hist);
+
+    return stats;
+}
+
 /* ============================================================================
  * Histogram Operations
  * ============================================================================ */
@@ -239,6 +353,157 @@ const char *adaptive_phase_name(adaptive_phase_t phase) {
 }
 
 /* ============================================================================
+ * AIMD State Machine Handlers
+ * ============================================================================ */
+
+/**
+ * Handle BASELINE phase: Collect baseline metrics during warmup.
+ */
+static inline bool handle_baseline_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    (void)stats; /* Unused in baseline phase */
+    ctrl->warmup_count++;
+    if (ctrl->warmup_count >= ADAPTIVE_WARMUP_SAMPLES) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
+        ctrl->prev_throughput_bps = stats->throughput_bps;
+        ctrl->prev_in_flight_limit =
+            atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+    }
+    return false; /* No params changed */
+}
+
+/**
+ * Handle PROBING phase: Additive increase while throughput improves.
+ */
+static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    bool params_changed = false;
+    int in_flight_limit =
+        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+
+    if (stats->latency_rising) {
+        ctrl->spike_count++;
+        if (ctrl->spike_count >= 2) {
+            /* Latency spike - back off */
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+            ctrl->spike_count = 0;
+        }
+    } else {
+        ctrl->spike_count = 0;
+
+        /* Check if we're still gaining throughput.
+         * Use relative threshold: throughput must increase by at least
+         * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
+         * relative to current throughput to be considered improvement. */
+        double er_threshold =
+            stats->throughput_bps > 0 ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO : 0.0;
+        if (stats->efficiency_ratio > er_threshold) {
+            /* Still improving - increase */
+            if (in_flight_limit < ctrl->max_queue_depth) {
+                in_flight_limit += ADAPTIVE_AIMD_INCREASE;
+                atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
+                                      memory_order_relaxed);
+                params_changed = true;
+            }
+            ctrl->plateau_count = 0;
+        } else if (ctrl->max_p99_ms > 0 && stats->have_valid_p99 &&
+                   stats->p99_ms < ctrl->max_p99_ms) {
+            /* Target-p99 mode: latency headroom remains, keep probing
+             * even though throughput has plateaued. Push depth until
+             * we approach the user's latency ceiling. */
+            if (in_flight_limit < ctrl->max_queue_depth) {
+                in_flight_limit += ADAPTIVE_AIMD_INCREASE;
+                atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
+                                      memory_order_relaxed);
+                params_changed = true;
+            }
+            ctrl->plateau_count = 0;
+        } else {
+            /* Plateau detected */
+            ctrl->plateau_count++;
+            if (ctrl->plateau_count >= 3) {
+                /* Confirmed plateau - enter steady */
+                ctrl->entered_via_backoff = false;
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
+                ctrl->settling_timer = 0;
+            }
+        }
+    }
+
+    return params_changed;
+}
+
+/**
+ * Handle SETTLING phase: Wait for metrics to stabilize.
+ */
+static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    (void)stats; /* Unused in settling phase */
+    ctrl->settling_timer++;
+    if (ctrl->settling_timer >= ADAPTIVE_SETTLING_TICKS) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_STEADY, memory_order_release);
+        ctrl->steady_count = 0;
+    }
+    return false; /* No params changed */
+}
+
+/**
+ * Handle STEADY phase: Maintain current config, monitor for changes.
+ */
+static inline bool handle_steady_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    ctrl->steady_count++;
+
+    /* Check for latency spike */
+    if (stats->latency_rising) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+        ctrl->steady_count = 0;
+    }
+    /* Re-probe after backoff: the transient spike may have passed, so
+     * try increasing in-flight again rather than staying at a reduced level. */
+    else if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
+        ctrl->entered_via_backoff = false;
+        ctrl->plateau_count = 0;
+        ctrl->spike_count = 0;
+    }
+    /* Check for sustained steady state (only from plateau, not backoff) */
+    else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
+    }
+
+    return false; /* No params changed */
+}
+
+/**
+ * Handle BACKOFF phase: Multiplicative decrease.
+ */
+static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    (void)stats; /* Unused in backoff phase */
+
+    /* Multiplicative decrease: reduce by 20% (AIMD_DECREASE = 0.80).
+     * Use integer arithmetic (4/5) to avoid float truncation to 0 when
+     * in_flight_limit is small, and clamp to min_in_flight (>= 1). */
+    int in_flight_limit =
+        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+    int reduced = (in_flight_limit * 4 + 4) / 5; /* ceil(limit * 0.80) */
+    in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
+    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_relaxed);
+
+    ctrl->plateau_count = 0;
+    ctrl->entered_via_backoff = true;
+    atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
+    ctrl->settling_timer = 0;
+
+    return true; /* Params changed */
+}
+
+/**
+ * Handle CONVERGED phase: No more changes.
+ */
+static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    (void)ctrl;
+    (void)stats;
+    return false; /* No params changed */
+}
+
+/* ============================================================================
  * Control Loop
  * ============================================================================ */
 
@@ -278,73 +543,20 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         return false; /* Skip this tick, keep accumulating */
     }
 
-    /* Swap histograms - O(1) atomic index flip.
-     * Returns pointer to old histogram (now inactive) for reading stats. */
-    adaptive_histogram_t *old_hist = adaptive_hist_swap(&ctrl->hist_pair);
-
-    /* Re-read sample_count from the swapped-out histogram (now inactive).
-     * This is the definitive count — no more writers after the swap. */
-    int sample_count = atomic_load_explicit(&old_hist->total_count, memory_order_acquire);
-
-    /* Calculate current sample statistics from the old (now inactive) histogram */
-    double p99_ms = adaptive_hist_p99(old_hist);
-    double elapsed_sec = (double)elapsed_ns / 1e9;
-    int64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
-    double throughput_bps = (elapsed_sec > 0) ? (double)bytes / elapsed_sec : 0.0;
-
-    /* Calculate SQE/submit ratio for batch optimizer */
-    double sqe_ratio = 0.0;
-    int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
-    int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
-    if (calls > 0) {
-        sqe_ratio = (double)sqes / (double)calls;
-    }
-
-    /* Store current values (atomic for thread-safe stats access).
-     * Use memory_order_release so readers with acquire see consistent values,
-     * important for ARM/PowerPC with weak memory ordering. */
-    atomic_store_explicit(&ctrl->current_throughput_bps, throughput_bps, memory_order_release);
-    if (p99_ms >= 0) {
-        atomic_store_explicit(&ctrl->current_p99_ms, p99_ms, memory_order_release);
-    }
-
-    /* Update sliding windows */
-    if (p99_ms >= 0) {
-        window_add(ctrl->p99_window, &ctrl->p99_head, &ctrl->p99_count, ADAPTIVE_P99_WINDOW,
-                   p99_ms);
-        window_add(ctrl->baseline_window, &ctrl->baseline_head, &ctrl->baseline_count,
-                   ADAPTIVE_BASELINE_WINDOW, p99_ms);
-    }
-    window_add(ctrl->throughput_window, &ctrl->throughput_head, &ctrl->throughput_count,
-               ADAPTIVE_THROUGHPUT_WINDOW, throughput_bps);
-
-    /* Update baseline (sliding minimum P99) */
-    if (ctrl->baseline_count > 0) {
-        ctrl->baseline_p99_ms = window_min(ctrl->baseline_window, ctrl->baseline_count);
-    }
-
-    /* Determine effective latency guard threshold */
-    double latency_guard_ms;
-    if (ctrl->max_p99_ms > 0) {
-        latency_guard_ms = ctrl->max_p99_ms;
-    } else if (ctrl->baseline_p99_ms > 0) {
-        latency_guard_ms = ctrl->baseline_p99_ms * ADAPTIVE_LATENCY_GUARD_MULT;
-    } else {
-        latency_guard_ms = ADAPTIVE_DEFAULT_LATENCY_GUARD; /* Default if no baseline yet */
-    }
-    ctrl->latency_rise_threshold = latency_guard_ms;
+    /* Swap histograms and compute statistics */
+    tick_stats_t stats = tick_swap_and_compute_stats(ctrl, now_ns);
 
     /* =========== INNER LOOP: Batch Optimizer =========== */
     int batch_threshold =
         atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
-    if (sqe_ratio > 0) {
-        if (sqe_ratio < ADAPTIVE_TARGET_SQE_RATIO &&
+    if (stats.sqe_ratio > 0) {
+        if (stats.sqe_ratio < ADAPTIVE_TARGET_SQE_RATIO &&
             batch_threshold < ADAPTIVE_MAX_BATCH_THRESHOLD) {
             batch_threshold++;
             atomic_store_explicit(&ctrl->current_batch_threshold, batch_threshold,
                                   memory_order_relaxed);
             params_changed = true;
-        } else if (sqe_ratio > ADAPTIVE_TARGET_SQE_RATIO * 1.5 &&
+        } else if (stats.sqe_ratio > ADAPTIVE_TARGET_SQE_RATIO * 1.5 &&
                    batch_threshold > ADAPTIVE_MIN_BATCH) {
             batch_threshold--;
             atomic_store_explicit(&ctrl->current_batch_threshold, batch_threshold,
@@ -353,163 +565,39 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         }
     }
 
-    /* =========== OUTER LOOP: AIMD State Machine =========== */
-
-    /* Determine if latency is rising
-     * With low IOPS, we accept fewer samples but require minimum threshold.
-     * P99 with 20 samples is effectively P95, which is still useful.
-     */
-    bool have_valid_p99 = (sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES && p99_ms >= 0);
-    bool latency_rising = have_valid_p99 && p99_ms > latency_guard_ms;
-
-    /* Load current in-flight limit for use in state machine */
-    int in_flight_limit =
-        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
-
-    /* Calculate efficiency ratio: change in throughput per change in in-flight */
-    double efficiency_ratio = 0.0;
-    if (ctrl->prev_in_flight_limit > 0 && in_flight_limit != ctrl->prev_in_flight_limit) {
-        double delta_throughput = throughput_bps - ctrl->prev_throughput_bps;
-        int delta_inflight = in_flight_limit - ctrl->prev_in_flight_limit;
-        if (delta_inflight != 0) {
-            efficiency_ratio = delta_throughput / (double)delta_inflight;
-        }
-    }
-
     /* Save prev_* BEFORE state machine may modify in_flight_limit,
      * so next tick's efficiency ratio sees the actual delta. */
-    ctrl->prev_throughput_bps = throughput_bps;
-    ctrl->prev_in_flight_limit = in_flight_limit;
+    ctrl->prev_throughput_bps = stats.throughput_bps;
+    ctrl->prev_in_flight_limit =
+        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
 
+    /* =========== OUTER LOOP: AIMD State Machine =========== */
+    bool state_changed_params = false;
     switch (ctrl->phase) {
     case ADAPTIVE_PHASE_BASELINE:
-        /* Collect baseline metrics */
-        ctrl->warmup_count++;
-        if (ctrl->warmup_count >= ADAPTIVE_WARMUP_SAMPLES) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
-            ctrl->prev_throughput_bps = throughput_bps;
-            ctrl->prev_in_flight_limit = in_flight_limit;
-        }
+        state_changed_params = handle_baseline_phase(ctrl, &stats);
         break;
-
     case ADAPTIVE_PHASE_PROBING:
-        /* Additive increase while throughput improves */
-        if (latency_rising) {
-            ctrl->spike_count++;
-            if (ctrl->spike_count >= 2) {
-                /* Latency spike - back off */
-                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-                ctrl->spike_count = 0;
-            }
-        } else {
-            ctrl->spike_count = 0;
-
-            /* Check if we're still gaining throughput.
-             * Use relative threshold: throughput must increase by at least
-             * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
-             * relative to current throughput to be considered improvement. */
-            double er_threshold =
-                throughput_bps > 0 ? throughput_bps * ADAPTIVE_ER_EPSILON_RATIO : 0.0;
-            if (efficiency_ratio > er_threshold) {
-                /* Still improving - increase */
-                if (in_flight_limit < ctrl->max_queue_depth) {
-                    in_flight_limit += ADAPTIVE_AIMD_INCREASE;
-                    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                          memory_order_relaxed);
-                    params_changed = true;
-                }
-                ctrl->plateau_count = 0;
-            } else if (ctrl->max_p99_ms > 0 && have_valid_p99 && p99_ms < ctrl->max_p99_ms) {
-                /* Target-p99 mode: latency headroom remains, keep probing
-                 * even though throughput has plateaued. Push depth until
-                 * we approach the user's latency ceiling. */
-                if (in_flight_limit < ctrl->max_queue_depth) {
-                    in_flight_limit += ADAPTIVE_AIMD_INCREASE;
-                    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                          memory_order_relaxed);
-                    params_changed = true;
-                }
-                ctrl->plateau_count = 0;
-            } else {
-                /* Plateau detected */
-                ctrl->plateau_count++;
-                if (ctrl->plateau_count >= 3) {
-                    /* Confirmed plateau - enter steady */
-                    ctrl->entered_via_backoff = false;
-                    atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING,
-                                          memory_order_release);
-                    ctrl->settling_timer = 0;
-                }
-            }
-        }
+        state_changed_params = handle_probing_phase(ctrl, &stats);
         break;
-
     case ADAPTIVE_PHASE_SETTLING:
-        /* Wait for metrics to stabilize */
-        ctrl->settling_timer++;
-        if (ctrl->settling_timer >= ADAPTIVE_SETTLING_TICKS) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_STEADY, memory_order_release);
-            ctrl->steady_count = 0;
-        }
+        state_changed_params = handle_settling_phase(ctrl, &stats);
         break;
-
     case ADAPTIVE_PHASE_STEADY:
-        /* Maintain current config, monitor for changes */
-        ctrl->steady_count++;
-
-        /* Check for latency spike */
-        if (latency_rising) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-            ctrl->steady_count = 0;
-        }
-        /* Re-probe after backoff: the transient spike may have passed, so
-         * try increasing in-flight again rather than staying at a reduced level. */
-        else if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
-            ctrl->entered_via_backoff = false;
-            ctrl->plateau_count = 0;
-            ctrl->spike_count = 0;
-        }
-        /* Check for sustained steady state (only from plateau, not backoff) */
-        else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
-        }
+        state_changed_params = handle_steady_phase(ctrl, &stats);
         break;
-
-    case ADAPTIVE_PHASE_BACKOFF: {
-        /* Multiplicative decrease: reduce by 20% (AIMD_DECREASE = 0.80).
-         * Use integer arithmetic (4/5) to avoid float truncation to 0 when
-         * in_flight_limit is small, and clamp to min_in_flight (>= 1). */
-        int reduced = (in_flight_limit * 4 + 4) / 5; /* ceil(limit * 0.80) */
-        in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
-        atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                              memory_order_relaxed);
-        params_changed = true;
-        ctrl->plateau_count = 0;
-        ctrl->entered_via_backoff = true;
-        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
-        ctrl->settling_timer = 0;
+    case ADAPTIVE_PHASE_BACKOFF:
+        state_changed_params = handle_backoff_phase(ctrl, &stats);
         break;
-    }
-
     case ADAPTIVE_PHASE_CONVERGED:
-        /* No more changes - just maintain current config */
+        state_changed_params = handle_converged_phase(ctrl, &stats);
         break;
     }
-
-    /* Clear the old histogram for next use using atomic stores.
-     * This avoids TSAN warnings from mixing memset with atomic operations.
-     *
-     * Known limitation: there is a brief race window between the pointer swap
-     * above and this reset where concurrent adaptive_hist_record() calls may
-     * write to old_hist. Those ~1-3 samples are lost. Fixing this requires a
-     * seq-lock or RCU approach, which is not worth the complexity for
-     * statistical metrics that tolerate minor sample loss. */
-    adaptive_hist_reset(old_hist);
+    params_changed = params_changed || state_changed_params;
 
     /* Reset sample start for next period.
-     * submit_calls, sqes_submitted, and sample_bytes are already reset
-     * by atomic_exchange at the top of this function. */
+     * submit_calls, sqes_submitted, sample_bytes, and histogram are already reset
+     * by tick_swap_and_compute_stats(). */
     atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
 
 #ifndef NDEBUG
