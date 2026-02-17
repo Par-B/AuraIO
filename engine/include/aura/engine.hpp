@@ -176,23 +176,10 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        // Set up O(1) cleanup BEFORE submission — the trampoline can fire
-        // on another thread as soon as the C API returns.
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_read(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_read");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_read", [&](auto *ctx) {
+            return aura_read(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline,
+                             ctx);
+        });
     }
 
     /**
@@ -209,21 +196,10 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req =
-            aura_write(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_write");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_write", [&](auto *ctx) {
+            return aura_write(handle_, fd, buf.c_buf(), len, offset,
+                              aura_detail_callback_trampoline, ctx);
+        });
     }
 
     /**
@@ -247,21 +223,10 @@ class Engine {
         if (iov.size() > static_cast<size_t>(INT_MAX)) {
             throw Error(EINVAL, "iov count exceeds INT_MAX");
         }
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()),
-                                         offset, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_readv");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_readv", [&](auto *ctx) {
+            return aura_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
+                              aura_detail_callback_trampoline, ctx);
+        });
     }
 
     /**
@@ -284,21 +249,10 @@ class Engine {
         if (iov.size() > static_cast<size_t>(INT_MAX)) {
             throw Error(EINVAL, "iov count exceeds INT_MAX");
         }
-        auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
-
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
-
-        aura_request_t *req = aura_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()),
-                                          offset, aura_detail_callback_trampoline, ctx);
-
-        if (!req) {
-            pool_->release(ctx);
-            throw Error(errno, "aura_writev");
-        }
-
-        return Request(req);
+        return submit_io(std::forward<F>(callback), "aura_writev", [&](auto *ctx) {
+            return aura_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
+                               aura_detail_callback_trampoline, ctx);
+        });
     }
 
     /**
@@ -404,16 +358,14 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F>
-    [[nodiscard]] Request close(int fd, F &&callback) {
+    template <Callback F> [[nodiscard]] Request close(int fd, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req =
-            aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
+        aura_request_t *req = aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -483,8 +435,8 @@ class Engine {
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req = aura_fallocate(handle_, fd, mode, offset, len,
-                                             aura_detail_callback_trampoline, ctx);
+        aura_request_t *req =
+            aura_fallocate(handle_, fd, mode, offset, len, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -506,16 +458,15 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F>
-    [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback) {
+    template <Callback F> [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback) {
         auto *ctx = pool_->allocate();
         ctx->callback = std::forward<F>(callback);
 
         auto *pool_ptr = pool_.get();
         ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
 
-        aura_request_t *req = aura_ftruncate(handle_, fd, length,
-                                             aura_detail_callback_trampoline, ctx);
+        aura_request_t *req =
+            aura_ftruncate(handle_, fd, length, aura_detail_callback_trampoline, ctx);
 
         if (!req) {
             pool_->release(ctx);
@@ -628,8 +579,8 @@ class Engine {
      * @return Awaitable (co_await returns void, fills statxbuf, or throws aura::Error)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline StatxAwaitable async_statx(int dirfd, const char *pathname, int flags,
-                                      unsigned int mask, struct statx *statxbuf);
+    inline StatxAwaitable async_statx(int dirfd, const char *pathname, int flags, unsigned int mask,
+                                      struct statx *statxbuf);
 #endif
 
     /**
@@ -946,9 +897,7 @@ class Engine {
      *
      * @return true if inside a completion callback, false otherwise
      */
-    [[nodiscard]] static bool in_callback_context() noexcept {
-        return aura_in_callback_context();
-    }
+    [[nodiscard]] static bool in_callback_context() noexcept { return aura_in_callback_context(); }
 
     // =========================================================================
     // Raw Access
@@ -973,6 +922,35 @@ class Engine {
     [[nodiscard]] explicit operator bool() const noexcept { return handle_ != nullptr; }
 
   private:
+    /**
+     * Generic I/O submission helper - eliminates callback boilerplate
+     *
+     * @tparam F Callback type
+     * @tparam CApiCall Callable that invokes C API and returns aura_request_t*
+     * @param callback User callback
+     * @param op_name Operation name for error messages (e.g., "aura_read")
+     * @param c_api_call Lambda that calls C API with callback context
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F, typename CApiCall>
+    [[nodiscard]] Request submit_io(F &&callback, const char *op_name, CApiCall &&c_api_call) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = std::forward<CApiCall>(c_api_call)(ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, op_name);
+        }
+
+        return Request(req);
+    }
+
     void destroy() noexcept {
         if (handle_) {
             /* Mark engine as dead BEFORE destroying the C handle.
@@ -1006,13 +984,17 @@ class Engine {
  * Get library version string
  * @return Version string (e.g., "0.4.0")
  */
-[[nodiscard]] inline const char *version() noexcept { return aura_version(); }
+[[nodiscard]] inline const char *version() noexcept {
+    return aura_version();
+}
 
 /**
  * Get library version as integer
  * @return Version integer (major * 10000 + minor * 100 + patch)
  */
-[[nodiscard]] inline int version_int() noexcept { return aura_version_int(); }
+[[nodiscard]] inline int version_int() noexcept {
+    return aura_version_int();
+}
 
 } // namespace aura
 
