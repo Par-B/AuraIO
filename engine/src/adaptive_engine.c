@@ -448,7 +448,15 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
  * Handle SETTLING phase: Wait for metrics to stabilize.
  */
 static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
-    (void)stats; /* Unused in settling phase */
+    /* If latency is still elevated during settling, re-enter BACKOFF immediately
+     * rather than waiting for the settling timer to expire. Without this check,
+     * sustained congestion causes a BACKOFF->SETTLING->STEADY->BACKOFF thrash
+     * loop where each SETTLING window (100ms) is wasted ignoring the problem. */
+    if (stats->latency_rising) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+        ctrl->settling_timer = 0;
+        return false;
+    }
     ctrl->settling_timer++;
     if (ctrl->settling_timer >= ADAPTIVE_SETTLING_TICKS) {
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_STEADY, memory_order_release);
