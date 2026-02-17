@@ -259,10 +259,16 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
             /* Old pool still alive — flush cached buffers back to it.
              * The cache is still in the old pool's thread_caches list,
              * so we can't free the struct (pool destroy will do that).
-             * Mark cleaned_up so pool destroy skips the redundant flush. */
+             * Mark cleaned_up so pool destroy skips the redundant flush.
+             * If old pool is being destroyed concurrently, fall through to
+             * FREE mode (direct free) to avoid dereferencing freed shards. */
             buffer_pool_t *old_pool = cache->pool;
             pthread_mutex_lock(&cache->cleanup_mutex);
-            cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FLUSH);
+            if (atomic_load_explicit(&old_pool->destroyed, memory_order_acquire)) {
+                cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FREE);
+            } else {
+                cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FLUSH);
+            }
             pthread_mutex_unlock(&cache->cleanup_mutex);
         }
         tls_cache = NULL;
@@ -826,9 +832,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Pool destroyed — shards are gone, just free the buffer directly.
      * This can happen when a late callback frees a buffer after destroy. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        size_t bucket_size = class_to_size(size_to_class(size));
-        atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
-        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
+        /* Counters were already zeroed during destroy — don't subtract
+         * from 0, which would wrap the unsigned atomics. */
         free(buf);
         return;
     }
@@ -942,6 +947,9 @@ void buf_size_map_destroy(buf_size_map_t *map) {
 static int buf_map_grow(buf_size_map_t *map) {
     size_t old_cap = map->capacity;
     size_t new_cap = old_cap * 2;
+    if (new_cap > BUF_MAP_MAX_CAPACITY) {
+        return -1;
+    }
     buf_map_entry_t *old = map->entries;
     buf_map_entry_t *new_entries = calloc(new_cap, sizeof(buf_map_entry_t));
     if (!new_entries) return -1;

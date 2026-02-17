@@ -260,6 +260,8 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
         return -1;
     }
 
+    if (initial_inflight > max_queue_depth) initial_inflight = max_queue_depth;
+
     /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
      * On platforms where _Atomic types use internal locks, memset would
      * destroy the lock state. Instead, init atomics first, then zero

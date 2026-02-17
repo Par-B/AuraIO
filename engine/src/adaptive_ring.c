@@ -523,6 +523,10 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
         errno = EINVAL;
         return (-1);
     }
+    if (req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
 
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) {
@@ -552,6 +556,10 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
 
 int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
+        errno = EINVAL;
+        return (-1);
+    }
+    if (req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }

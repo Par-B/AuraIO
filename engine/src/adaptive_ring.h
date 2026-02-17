@@ -88,6 +88,8 @@ struct aura_request {
     char _cacheline_pad[128 - 124];
 };
 
+_Static_assert(sizeof(struct aura_request) == 128, "aura_request must be 128 bytes");
+
 /**
  * Ring initialization options
  */

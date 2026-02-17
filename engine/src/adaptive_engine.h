@@ -224,10 +224,11 @@ typedef struct {
     _Atomic int64_t sample_bytes;          /**< Bytes completed this sample */
     _Atomic double current_p99_ms;         /**< Current sample P99 */
     _Atomic double current_throughput_bps; /**< Current throughput */
-    _Atomic adaptive_phase_t phase;        /**< Current phase */
-    int max_queue_depth;                   /**< Upper bound on in-flight */
-    int min_in_flight;                     /**< Lower bound on in-flight */
-    int prev_in_flight_limit;              /**< Previous limit for efficiency ratio */
+    /* _Atomic double requires lock-free 64-bit atomics on the target platform. */
+    _Atomic adaptive_phase_t phase; /**< Current phase */
+    int max_queue_depth;            /**< Upper bound on in-flight */
+    int min_in_flight;              /**< Lower bound on in-flight */
+    int prev_in_flight_limit;       /**< Previous limit for efficiency ratio */
 
     /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
     double baseline_p99_ms;        /**< Minimum observed P99 */
@@ -258,6 +259,9 @@ typedef struct {
     _Atomic int tick_entered; /**< Debug: detect concurrent adaptive_tick calls */
 #endif
 } adaptive_controller_t;
+
+_Static_assert(sizeof(double) == sizeof(int64_t),
+               "_Atomic double assumes 64-bit double matching int64_t width");
 
 /* ============================================================================
  * Functions
@@ -363,7 +367,7 @@ void adaptive_hist_pair_init(adaptive_histogram_pair_t *pair);
  * Swap active histogram and clear the old one
  *
  * O(1) operation - just swaps the active index and clears the
- * now-inactive histogram with memset (not atomic stores).
+ * the caller clears the now-inactive histogram with adaptive_hist_reset (atomic stores).
  *
  * @param pair Histogram pair
  * @return Pointer to the histogram that was just deactivated (for reading)

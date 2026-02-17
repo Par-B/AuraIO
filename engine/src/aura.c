@@ -1115,6 +1115,10 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
         errno = EINVAL;
         return NULL;
     }
+    if (flags & ~(unsigned)AURA_FSYNC_DATASYNC) {
+        errno = EINVAL;
+        return NULL;
+    }
 
     file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
@@ -2268,7 +2272,10 @@ int aura_get_ring_count(const aura_engine_t *engine) {
 
 int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
                         size_t stats_size) {
-    if (!engine || !stats || stats_size == 0) return -1;
+    if (!engine || !stats || stats_size == 0) {
+        errno = EINVAL;
+        return -1;
+    }
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(stats, 0, stats_size < sizeof(*stats) ? stats_size : sizeof(*stats));
         return -1;
@@ -2304,7 +2311,10 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
 
 int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
                        size_t hist_size) {
-    if (!engine || !hist || hist_size == 0) return -1;
+    if (!engine || !hist || hist_size == 0) {
+        errno = EINVAL;
+        return -1;
+    }
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(hist, 0, hist_size < sizeof(*hist) ? hist_size : sizeof(*hist));
         return -1;
