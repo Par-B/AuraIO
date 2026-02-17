@@ -58,43 +58,37 @@ static size_t get_page_size(void) {
  * Contains one ring per CPU core plus shared state.
  */
 struct aura_engine {
-    /* Hot path: ring selection (every I/O submission) */
+    /* === Cache line 0: submission hot path (every I/O submission) === */
     ring_ctx_t *rings; /**< Array of ring contexts */
     int ring_count; /**< Number of rings */
+    int queue_depth; /**< Queue depth per ring */
     _Atomic unsigned int next_ring; /**< Round-robin ring selector (randomized init) */
     _Atomic int avg_ring_pending; /**< Tick-updated average pending across rings */
-
-    /* Hot path: shutdown check (every I/O submission) */
     atomic_bool shutting_down; /**< Shutdown in progress - reject new submissions */
-    atomic_bool running; /**< Event loop active flag */
-    atomic_bool stop_requested; /**< Stop signal */
-    atomic_bool tick_running; /**< Tick thread active */
-
-    /* Configuration (read-only after init, packs with bools above) */
-    int queue_depth; /**< Queue depth per ring */
-    int event_fd; /**< Unified eventfd for all rings */
     aura_ring_select_t ring_select; /**< Ring selection mode */
-    bool adaptive_enabled; /**< Adaptive tuning enabled */
-    _Atomic bool buffers_registered; /**< True if buffers are registered */
+    _Atomic int fatal_submit_errno; /**< Latched fatal submit error from ring_flush */
+
+    /* === Cache line 1+: registration path === */
+    _Alignas(64) _Atomic bool buffers_registered; /**< True if buffers are registered */
     _Atomic bool files_registered; /**< True if files are registered */
     bool buffers_unreg_pending; /**< Deferred buffer unregister requested */
     bool files_unreg_pending; /**< Deferred file unregister requested */
-    bool sqpoll_enabled; /**< True if SQPOLL is active on any ring */
-
-    /* 8-byte aligned fields */
-    size_t buffer_alignment; /**< Buffer alignment */
-    pthread_t tick_thread; /**< Tick thread handle */
-
-    /* Aggregated statistics */
-    _Atomic uint64_t adaptive_spills; /**< Count of ADAPTIVE ring spills */
-    _Atomic int fatal_submit_errno; /**< Latched fatal submit error from ring_flush */
-
-    /* Registered buffers and files (protected by reg_lock) */
     pthread_rwlock_t reg_lock; /**< Protects registered_buffers/files access */
     struct iovec *registered_buffers; /**< Copy of registered buffer iovecs */
     int *registered_files; /**< Copy of registered file descriptors */
     int registered_buffer_count; /**< Number of registered buffers */
     int registered_file_count; /**< Number of registered files */
+
+    /* === Cold: init-only or rarely accessed === */
+    _Alignas(64) atomic_bool running; /**< Event loop active flag */
+    atomic_bool stop_requested; /**< Stop signal */
+    atomic_bool tick_running; /**< Tick thread active */
+    bool adaptive_enabled; /**< Adaptive tuning enabled */
+    bool sqpoll_enabled; /**< True if SQPOLL is active on any ring */
+    int event_fd; /**< Unified eventfd for all rings */
+    size_t buffer_alignment; /**< Buffer alignment */
+    pthread_t tick_thread; /**< Tick thread handle */
+    _Atomic uint64_t adaptive_spills; /**< Count of ADAPTIVE ring spills */
 
     /* Buffer pool (largest member, placed last) */
     buffer_pool_t buffer_pool; /**< Aligned buffer pool */

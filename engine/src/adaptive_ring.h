@@ -140,6 +140,10 @@ typedef struct {
     int64_t ops_completed;               /**< Total ops completed */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
 
+    /* CQE drain batch size, derived from queue depth at init time.
+     * Keeps lock hold time bounded while amortizing lock overhead. */
+    int poll_batch_size;
+
     /* Single-thread fast path: skip mutexes when caller guarantees
      * single-thread access. Set during init, const after. */
     bool single_thread;

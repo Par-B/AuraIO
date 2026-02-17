@@ -297,7 +297,8 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     }
 
     /* Assign shard via round-robin for load balancing */
-    cache->shard_id = atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask;
+    cache->shard_id =
+        atomic_fetch_add_explicit(&pool->next_shard, 1, memory_order_relaxed) & pool->shard_mask;
 
     /* Lock-free registration with pool's cache list using CAS */
     thread_cache_t *old_head;
@@ -406,11 +407,13 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
     while (transferred < THREAD_CACHE_BATCH_SIZE && cache->counts[class_idx] > 0) {
         /* Check high-water mark */
         if (shard->max_free_count > 0 && shard->free_count >= shard->max_free_count) {
-            /* Shard at capacity - collect remaining buffers for deferred free */
+            /* Shard at capacity - release lock early since the drain
+             * below only touches the thread-local cache (no shared state). */
+            pthread_mutex_unlock(&shard->lock);
             while (cache->counts[class_idx] > 0) {
                 to_free[free_count++] = cache->buffers[class_idx][--cache->counts[class_idx]];
             }
-            break;
+            goto free_path;
         }
 
         /* Get a metadata slot */
@@ -438,10 +441,12 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
 
     pthread_mutex_unlock(&shard->lock);
 
+free_path:
     /* Free collected buffers outside the lock (no lock churn) */
     if (free_count > 0) {
-        atomic_fetch_sub(&pool->total_allocated, bucket_size * free_count);
-        atomic_fetch_sub(&pool->total_buffers, free_count);
+        atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size * free_count,
+                                  memory_order_relaxed);
+        atomic_fetch_sub_explicit(&pool->total_buffers, free_count, memory_order_relaxed);
         for (int i = 0; i < free_count; i++) {
             free(to_free[i]);
         }
@@ -743,8 +748,9 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     }
 
     /* Pick a shard - use cache's shard or round-robin for no-cache case */
-    int shard_id =
-        cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
+    int shard_id = cache ? cache->shard_id
+                         : (atomic_fetch_add_explicit(&pool->next_shard, 1, memory_order_relaxed) &
+                            pool->shard_mask);
     buffer_shard_t *shard = &pool->shards[shard_id];
 
     pthread_mutex_lock(&shard->lock);
@@ -780,8 +786,8 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
         return NULL;
     }
 
-    atomic_fetch_add(&pool->total_allocated, bucket_size);
-    atomic_fetch_add(&pool->total_buffers, 1);
+    atomic_fetch_add_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
+    atomic_fetch_add_explicit(&pool->total_buffers, 1, memory_order_relaxed);
 
     /* Pre-fill thread cache with extra buffers to avoid future heap trips */
     if (cache) {
@@ -796,8 +802,9 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
             prefill++;
         }
         if (prefill > 0) {
-            atomic_fetch_add(&pool->total_allocated, bucket_size * prefill);
-            atomic_fetch_add(&pool->total_buffers, prefill);
+            atomic_fetch_add_explicit(&pool->total_allocated, bucket_size * prefill,
+                                      memory_order_relaxed);
+            atomic_fetch_add_explicit(&pool->total_buffers, prefill, memory_order_relaxed);
         }
     }
 
@@ -812,8 +819,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Pool destroyed — shards are gone, just free the buffer directly.
      * This can happen when a late callback frees a buffer after destroy. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        atomic_fetch_sub(&pool->total_allocated, size);
-        atomic_fetch_sub(&pool->total_buffers, 1);
+        atomic_fetch_sub_explicit(&pool->total_allocated, size, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         free(buf);
         return;
     }
@@ -849,16 +856,17 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         return;
     }
 
-    int shard_id =
-        cache ? cache->shard_id : (atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask);
+    int shard_id = cache ? cache->shard_id
+                         : (atomic_fetch_add_explicit(&pool->next_shard, 1, memory_order_relaxed) &
+                            pool->shard_mask);
     buffer_shard_t *shard = &pool->shards[shard_id];
 
     pthread_mutex_lock(&shard->lock);
 
     /* Check high-water mark - if at capacity, just free the buffer */
     if (shard->max_free_count > 0 && shard->free_count >= shard->max_free_count) {
-        atomic_fetch_sub(&pool->total_allocated, bucket_size);
-        atomic_fetch_sub(&pool->total_buffers, 1);
+        atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         pthread_mutex_unlock(&shard->lock);
         atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         free(buf);
@@ -869,8 +877,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     buffer_slot_t *slot = shard->free_slots;
     if (!slot) {
         /* All slots in use - just free the buffer */
-        atomic_fetch_sub(&pool->total_allocated, bucket_size);
-        atomic_fetch_sub(&pool->total_buffers, 1);
+        atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         pthread_mutex_unlock(&shard->lock);
         atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
         free(buf);

@@ -163,6 +163,12 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     ctx->free_request_count = queue_depth;
     atomic_init(&ctx->fixed_buf_inflight, 0);
 
+    /* Set CQE drain batch size based on queue depth */
+    int batch = queue_depth >> 2;
+    if (batch < 16) batch = 16;
+    if (batch > 128) batch = 128;
+    ctx->poll_batch_size = batch;
+
     /* Initialize adaptive controller */
     int initial_inflight = queue_depth / 4;
     if (initial_inflight < 4) initial_inflight = 4;
@@ -831,10 +837,6 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
     ring_unlock(ctx);
 }
 
-/** Max CQEs to extract per lock acquisition in ring_poll().
- *  Keeps lock hold time bounded while amortizing lock overhead. */
-#define RING_POLL_BATCH 32
-
 /**
  * Drain all available CQEs in batches.
  *
@@ -842,21 +844,26 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
  * Extracts CQEs under cq_lock, processes callbacks without locks, then retires
  * the batch under ring->lock.
  *
+ * Batch size is per-ring, derived from queue depth at init time
+ * (queue_depth/4, clamped to [16, 128]). This keeps lock hold time bounded
+ * while amortizing lock overhead proportionally to ring capacity.
+ *
  * @param ctx Ring context
  * @return Number of completions processed
  */
 static int ring_drain_cqes(ring_ctx_t *ctx) {
+    const int batch_size = ctx->poll_batch_size;
     struct {
         aura_request_t *req;
         ssize_t result;
-    } batch[RING_POLL_BATCH];
-    retire_entry_t retire[RING_POLL_BATCH];
+    } batch[batch_size];
+    retire_entry_t retire[batch_size];
     int completed = 0;
 
     while (1) {
         int n = 0;
         ring_cq_lock(ctx);
-        while (n < RING_POLL_BATCH) {
+        while (n < batch_size) {
             struct io_uring_cqe *cqe;
             if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
                 break;
