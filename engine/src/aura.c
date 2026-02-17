@@ -733,14 +733,11 @@ aura_engine_t *aura_create(void) {
     return aura_create_with_options(NULL);
 }
 
-aura_engine_t *aura_create_with_options(const aura_options_t *options) {
-    /* Use defaults if no options provided */
-    aura_options_t default_opts;
-    if (!options) {
-        aura_options_init(&default_opts);
-        options = &default_opts;
-    }
-
+/**
+ * Stage 1: Validate options and initialize engine core state.
+ * Returns NULL on failure with errno set.
+ */
+static aura_engine_t *validate_and_init_engine_core(const aura_options_t *options) {
     /* Validate struct_size for ABI forward-compatibility */
     if (options->struct_size != sizeof(aura_options_t)) {
         errno = EINVAL;
@@ -798,20 +795,34 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
         return NULL;
     }
 
-    /* Initialize buffer pool and size map */
+    return engine;
+}
+
+/**
+ * Stage 2: Initialize buffer pool and size tracking map.
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+static int init_engine_buffer_pool(aura_engine_t *engine) {
     if (buffer_pool_init(&engine->buffer_pool, engine->buffer_alignment) != 0) {
-        goto cleanup_engine;
+        return -1;
     }
     if (buf_size_map_init(&engine->buf_size_map) != 0) {
         buffer_pool_destroy(&engine->buffer_pool);
-        goto cleanup_engine;
+        return -1;
     }
+    return 0;
+}
 
+/**
+ * Stage 3: Initialize io_uring rings.
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+static int init_engine_rings(aura_engine_t *engine, const aura_options_t *options) {
     /* Create rings */
     engine->ring_count = options->ring_count > 0 ? options->ring_count : get_cpu_count();
     engine->rings = calloc(engine->ring_count, sizeof(ring_ctx_t));
     if (!engine->rings) {
-        goto cleanup_buffer_pool;
+        return -1;
     }
 
     /* Prepare ring options */
@@ -826,7 +837,9 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
             for (int j = 0; j < i; j++) {
                 ring_destroy(&engine->rings[j]);
             }
-            goto cleanup_rings;
+            free(engine->rings);
+            engine->rings = NULL;
+            return -1;
         }
         engine->rings[i].ring_idx = i;
         engine->rings[i].single_thread = options->single_thread;
@@ -849,12 +862,20 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
         }
     }
 
+    return 0;
+}
+
+/**
+ * Stage 4: Create unified eventfd and register with all rings.
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+static int register_eventfd_with_rings(aura_engine_t *engine) {
     /* Create unified eventfd for event loop integration.
      * This single fd is registered with all io_uring rings, so any ring
      * completion will wake up the user's event loop (epoll/select/etc). */
     engine->event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (engine->event_fd < 0) {
-        goto cleanup_rings_full;
+        return -1;
     }
 
     /* Register eventfd with each ring */
@@ -862,28 +883,77 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
         int ret = io_uring_register_eventfd(&engine->rings[i].ring, engine->event_fd);
         if (ret != 0) {
             errno = -ret;
-            goto cleanup_eventfd;
+            close(engine->event_fd);
+            engine->event_fd = -1;
+            return -1;
         }
     }
 
-    /* Start tick thread if adaptive is enabled */
-    if (engine->adaptive_enabled) {
-        atomic_store(&engine->tick_running, true);
-        if (pthread_create(&engine->tick_thread, NULL, tick_thread_func, engine) != 0) {
-            atomic_store(&engine->tick_running, false);
-            goto cleanup_eventfd; /* Don't skip eventfd cleanup */
-        }
+    return 0;
+}
+
+/**
+ * Stage 5: Start adaptive tick thread.
+ * Returns 0 on success, -1 on failure with errno set.
+ */
+static int start_tick_thread(aura_engine_t *engine) {
+    if (!engine->adaptive_enabled) {
+        return 0; /* Not an error - adaptive is disabled */
+    }
+
+    atomic_store(&engine->tick_running, true);
+    if (pthread_create(&engine->tick_thread, NULL, tick_thread_func, engine) != 0) {
+        atomic_store(&engine->tick_running, false);
+        return -1;
+    }
+
+    return 0;
+}
+
+aura_engine_t *aura_create_with_options(const aura_options_t *options) {
+    /* Use defaults if no options provided */
+    aura_options_t default_opts;
+    if (!options) {
+        aura_options_init(&default_opts);
+        options = &default_opts;
+    }
+
+    /* Stage 1: Validate options and initialize engine core */
+    aura_engine_t *engine = validate_and_init_engine_core(options);
+    if (!engine) {
+        return NULL;
+    }
+
+    /* Stage 2: Initialize buffer pool */
+    if (init_engine_buffer_pool(engine) != 0) {
+        goto cleanup_engine;
+    }
+
+    /* Stage 3: Initialize rings */
+    if (init_engine_rings(engine, options) != 0) {
+        goto cleanup_buffer_pool;
+    }
+
+    /* Stage 4: Register eventfd */
+    if (register_eventfd_with_rings(engine) != 0) {
+        goto cleanup_rings;
+    }
+
+    /* Stage 5: Start tick thread */
+    if (start_tick_thread(engine) != 0) {
+        goto cleanup_eventfd;
     }
 
     return engine;
 
 cleanup_eventfd:
-    close(engine->event_fd);
-cleanup_rings_full:
+    if (engine->event_fd >= 0) {
+        close(engine->event_fd);
+    }
+cleanup_rings:
     for (int i = 0; i < engine->ring_count; i++) {
         ring_destroy(&engine->rings[i]);
     }
-cleanup_rings:
     free(engine->rings);
 cleanup_buffer_pool:
     buf_size_map_destroy(&engine->buf_size_map);
