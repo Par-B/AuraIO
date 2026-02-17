@@ -30,7 +30,7 @@
  * ============================================================================
  */
 
-#define DEFAULT_QUEUE_DEPTH 256 /**< Default ring queue depth */
+#define DEFAULT_QUEUE_DEPTH 1024 /**< Default ring queue depth */
 static size_t get_page_size(void) {
     long ps = sysconf(_SC_PAGESIZE);
     return (ps > 0) ? (size_t)ps : 4096;

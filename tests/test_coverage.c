@@ -997,7 +997,7 @@ TEST(options_init_null) {
 TEST(options_defaults) {
     aura_options_t opts;
     aura_options_init(&opts);
-    assert(opts.queue_depth == 256); /* DEFAULT_QUEUE_DEPTH */
+    assert(opts.queue_depth == 1024); /* DEFAULT_QUEUE_DEPTH */
     assert(opts.ring_count == 0); /* 0 = auto */
     assert(opts.disable_adaptive == false);
     assert(opts.enable_sqpoll == false);

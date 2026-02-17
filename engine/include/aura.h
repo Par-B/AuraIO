@@ -349,7 +349,7 @@ typedef enum {
 typedef struct {
     size_t struct_size;        /**< Set by aura_options_init(); for ABI
                                   forward-compatibility */
-    int queue_depth;           /**< Queue depth per ring (0 = default: 256) */
+    int queue_depth;           /**< Queue depth per ring (0 = default: 1024) */
     int ring_count;            /**< Number of rings, 0 = auto (one per CPU) */
     int initial_in_flight;     /**< Initial in-flight limit (default: queue_depth/4)
                                 */

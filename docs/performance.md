@@ -65,7 +65,7 @@ Performance is not just about raw speed but about **consistent latency**. AuraIO
     - Uses **AIMD** (Additive Increase Multiplicative Decrease) logic.
     - Tuned for I/O patterns consistent with both local NVMe and network latencies. Self-adapts to the hardware it runs on — works equally well with high-performance NVMe and 7200 RPM magnetic platter storage.
     - Self-adjusting variable-width sample windows based on IOPS rate to avoid low-IOPS workloads skewing the sample results.
-    - **P99 Guard Logic**: It continuously samples the 99th percentile latency. If latency exceeds the guard threshold (default 10ms jitter), it immediately slashes concurrency. This prevents "Bufferbloat" at the device level, keeping the I/O piping full but not overflowing.
+    - **P99 Guard Logic**: It continuously samples the 99th percentile latency. By default, the guard threshold is auto-derived at 10x the measured baseline P99 (with a 10ms hard ceiling before baseline is established). If latency exceeds this threshold, it immediately slashes concurrency. This prevents "Bufferbloat" at the device level, keeping the I/O piping full but not overflowing.
 
 ## 5. Performance Tips for Users
 
@@ -87,7 +87,7 @@ To fully leverage this architecture:
 
     // At shutdown: free once
     for (int i = 0; i < DEPTH; i++)
-        aura_buffer_free(engine, bufs[i], BUF_SIZE);
+        aura_buffer_free(engine, bufs[i]);
     ```
 
 5.  **Use `aura_poll()` in Hot Loops**: Prefer the non-blocking `aura_poll()` over `aura_wait(engine, timeout_ms)` when your thread is actively submitting I/O. `aura_wait()` with even a 1ms timeout can stall the pipeline on fast media (tmpfs, Optane, NVMe) where completions arrive in microseconds. Use `aura_wait()` only when you need to block (drain loops, idle event loops).
@@ -149,7 +149,7 @@ aura_register_files(engine, fds, count);
 aura_update_file(engine, index, new_fd);
 
 // At shutdown:
-aura_unregister_files(engine);
+aura_unregister(engine, AURA_REG_FILES);
 ```
 
 **How to use (C++)**:
@@ -165,7 +165,7 @@ engine.read(fd1, buf, len, offset, callback);
 engine.update_file(0, new_fd);
 
 // Cleanup:
-engine.unregister_files();
+engine.unregister(AURA_REG_FILES);
 ```
 
 **Guidelines**:
@@ -202,7 +202,7 @@ aura_read(engine, fd, aura_buf_fixed(0, 0), BUF_SIZE, offset, cb, data);
 aura_read(engine, fd, aura_buf_fixed(0, 2048), 2048, offset, cb, data);
 
 // At shutdown:
-aura_unregister_buffers(engine);
+aura_unregister(engine, AURA_REG_BUFFERS);
 for (int i = 0; i < NUM_BUFFERS; i++) free(bufs[i]);
 ```
 
@@ -221,13 +221,13 @@ engine.register_buffers(iovs);
 engine.read(fd, aura::BufferRef::fixed(0), 4096, offset, callback);
 
 // Cleanup:
-engine.unregister_buffers();
+engine.unregister(AURA_REG_BUFFERS);
 ```
 
 **Guidelines**:
 - Register buffers for your hottest I/O paths (metadata reads, index lookups, small random I/O).
 - Registered buffers must remain valid and at the same address for the lifetime of the registration.
-- No in-flight operations may reference registered buffers when calling `unregister_buffers`.
+- `aura_unregister()` blocks until all in-flight fixed-buffer operations complete, then frees the buffers from the kernel. Buffers are safe to free after it returns.
 - You can mix registered and unregistered buffers freely — use `aura_buf()` for regular buffers and `aura_buf_fixed()` for registered ones.
 
 ### SQPOLL — Kernel-Side Submission Polling

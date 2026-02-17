@@ -182,7 +182,7 @@ TEST(options_default_values) {
     const auto &c = opts.c_options();
 
     // Verify defaults match aura_options_init
-    ASSERT_EQ(c.queue_depth, 256);
+    ASSERT_EQ(c.queue_depth, 1024);
     ASSERT_EQ(c.ring_count, 0); // 0 = auto-detect
     ASSERT_EQ(c.disable_adaptive, false);
 }

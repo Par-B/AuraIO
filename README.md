@@ -131,7 +131,7 @@ fn main() -> Result<()> {
     let buf = engine.allocate_buffer(4096)?;
 
     unsafe {
-        engine.read(fd, &buf, 4096, 0, |result| {
+        engine.read(fd, (&buf).into(), 4096, 0, |result| {
             match result {
                 Ok(n) => println!("Read {} bytes", n),
                 Err(e) => eprintln!("Error: {}", e),
@@ -184,7 +184,7 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> aura::Result<()> {
 - **Triple API** — C for systems, C++ for applications, Rust for safety
 - **Coroutine Support** — C++20 `co_await` and Rust async/await
 - **Thread-Safe** — Multiple threads can submit concurrently
-- **Event Loop Integration** — Pollable fd for epoll/kqueue
+- **Event Loop Integration** — Pollable fd for epoll
 - **Prometheus Metrics** — Built-in exporter with per-ring stats, latency histograms, AIMD phase
 
 ## Quick Start
@@ -215,7 +215,7 @@ int main(void) {
 
     printf("Content: %s", (char *)buf);
 
-    aura_buffer_free(engine, buf, 4096);
+    aura_buffer_free(engine, buf);
     close(fd);
     aura_destroy(engine);
 }
@@ -265,7 +265,7 @@ fn main() -> Result<()> {
     let done_cb = done.clone();
 
     unsafe {
-        engine.read(fd, &buf, 4096, 0, move |result| {
+        engine.read(fd, (&buf).into(), 4096, 0, move |result| {
             match result {
                 Ok(n) => println!("Read {} bytes", n),
                 Err(e) => eprintln!("Error: {}", e),
@@ -306,7 +306,7 @@ See [`examples/`](examples/) for more: bulk readers, write modes, coroutines, as
 **AIMD Self-Tuning:**
 1. **Baseline** — Measures P99 latency at low concurrency (depth 4)
 2. **Probe** — Increases in-flight limit by +1 per tick (10ms) while throughput improves
-3. **Back off** — Cuts limit by ×0.80 if P99 latency spikes (see `LATENCY_SPIKE_THRESHOLD` in `engine/src/adaptive_engine.h`)
+3. **Back off** — Cuts limit by ×0.80 if P99 latency spikes (see `ADAPTIVE_LATENCY_GUARD_MULT` and `ADAPTIVE_AIMD_DECREASE` in `engine/src/adaptive_engine.h`)
 4. **Converge** — Settles at the depth that maximizes throughput without blowing latency
 5. **Re-probe** — Periodically re-tests to track changing conditions
 
@@ -456,6 +456,7 @@ See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and 
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
+- [API Quickstart](docs/API-Quickstart.md) — Get started with C, C++, or Rust in minutes
 - [API Reference](docs/api_reference.md) — Full function documentation
 - [Async Lifecycle](docs/ASYNC_LIFECYCLE.md) — Submission vs completion semantics
 - [Observability Guide](docs/observability.md) — Stats API, Prometheus integration, sampling costs

@@ -10,7 +10,7 @@ AuraIO is designed as a **ring-per-core** asynchronous I/O runtime. Unlike tradi
 ### 1. Engine (`aura_engine_t`)
 The high-level container that manages the lifecycle of the entire runtime.
 - **Topology**: Automatically detects CPU core count (`sysconf(_SC_NPROCESSORS_ONLN)`) and creates a corresponding number of Rings.
-- **Unified EventFD**: Maintains a single `eventfd` registered with *all* rings. This allows integration with external event loops (like `epoll` or `kqueue`); when any ring processes a completion, this file descriptor becomes readable.
+- **Unified EventFD**: Maintains a single `eventfd` registered with *all* rings. This allows integration with external event loops (e.g., `epoll`); when any ring processes a completion, this file descriptor becomes readable.
 
 ### 2. Rings (`ring_ctx_t`)
 A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
@@ -23,7 +23,7 @@ A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 
 ### 3. Adaptive Controller (`adaptive_controller_t`)
 A robust control system embedded within each ring that tunes in-flight limits and batching behavior in real-time.
-- **Goal**: Maximize throughput while maintaining latency within a defined P99 envelope (default 10ms).
+- **Goal**: Maximize throughput while maintaining latency within a P99 envelope. By default, the controller auto-derives the threshold at 10x the measured baseline P99 (with a 10ms hard ceiling before baseline is established). Users can set an explicit ceiling via `max_p99_latency_ms`.
 - **Algorithm**: **AIMD (Additive Increase Multiplicative Decrease)** — a six-phase state machine:
     1. *Baseline*: Collects initial latency samples (~100ms warmup) to establish the P99 floor.
     2. *Probing*: Linearly increases in-flight limit (`+1` per 10ms tick) while throughput improves.
@@ -89,23 +89,23 @@ UNREGISTERED ──register──> REGISTERED ──request_unregister──> DR
 
 **This is the critical safety question:** after requesting unregistration, when can you free or modify the underlying buffer memory?
 
-**Synchronous path** (non-callback context): Use `aura_unregister_buffers()`. It blocks internally — calling `aura_wait()` in a loop — until every in-flight fixed-buffer operation has completed and the kernel has unregistered the pages. When it returns 0, the buffers are fully detached from the kernel and safe to free, reuse, or modify.
+**Synchronous path** (non-callback context): Use `aura_unregister(engine, AURA_REG_BUFFERS)`. It blocks internally — calling `aura_wait()` in a loop — until every in-flight fixed-buffer operation has completed and the kernel has unregistered the pages. When it returns 0, the buffers are fully detached from the kernel and safe to free, reuse, or modify.
 
 ```c
 // Main thread (not in a callback):
-aura_unregister_buffers(engine);  // blocks until all fixed-buf I/O completes
+aura_unregister(engine, AURA_REG_BUFFERS);  // blocks until all fixed-buf I/O completes
 free(buf1);  // safe — kernel no longer references these pages
 free(buf2);
 ```
 
-**Deferred path** (from callbacks): Use `aura_request_unregister_buffers()`. It marks buffers as draining and returns immediately. Finalization happens automatically during subsequent `aura_poll()` / `aura_wait()` / `aura_run()` calls: once the per-ring `fixed_buf_inflight` counters all reach zero, the library calls `io_uring_unregister_buffers()` and clears the registration state.
+**Deferred path** (from callbacks): Use `aura_request_unregister(engine, AURA_REG_BUFFERS)`. It marks buffers as draining and returns immediately. Finalization happens automatically during subsequent `aura_poll()` / `aura_wait()` / `aura_run()` calls: once the per-ring `fixed_buf_inflight` counters all reach zero, the library calls `io_uring_unregister_buffers()` and clears the registration state.
 
 There is no explicit completion callback for deferred unregistration. You know it is safe to free the buffers when you can successfully call `aura_register_buffers()` with new buffers (which fails with `EBUSY` if the old set is still draining). The intended pattern is:
 
 ```c
 void my_callback(aura_request_t *req, ssize_t result, void *ctx) {
     // Last operation done — request deferred unregister
-    aura_request_unregister_buffers(engine);
+    aura_request_unregister(engine, AURA_REG_BUFFERS);
     // Do NOT free buffers here — other fixed-buf ops may still be in-flight
 }
 
@@ -117,7 +117,7 @@ free(buf1);
 free(buf2);
 ```
 
-**If called from a callback**, `aura_unregister_buffers()` automatically degrades to deferred mode (equivalent to `aura_request_unregister_buffers()`). This prevents deadlock since the callback is already on the `aura_wait()` call stack.
+**If called from a callback**, `aura_unregister()` automatically degrades to deferred mode (equivalent to `aura_request_unregister()`). This prevents deadlock since the callback is already on the `aura_wait()` call stack.
 
 #### Registered Files
 
@@ -237,7 +237,7 @@ void read_file(int fd, std::vector<char>& buf) {
 
 **After (AuraIO with lambdas):**
 ```cpp
-void read_file_async(auraio::Engine& engine, int fd, std::vector<char>& buf) {
+void read_file_async(aura::Engine& engine, int fd, std::vector<char>& buf) {
     auto buffer = engine.allocate_buffer(buf.size());
 
     engine.read(fd, buffer, buf.size(), 0, [&](auto& req, ssize_t n) {
@@ -253,7 +253,7 @@ void read_file_async(auraio::Engine& engine, int fd, std::vector<char>& buf) {
 
 **After (AuraIO with coroutines - C++20):**
 ```cpp
-auraio::Task<std::vector<char>> read_file_async(auraio::Engine& engine, int fd, size_t size) {
+aura::Task<std::vector<char>> read_file_async(aura::Engine& engine, int fd, size_t size) {
     auto buf = engine.allocate_buffer(size);
     ssize_t n = co_await engine.async_read(fd, buf, size, 0);
     co_return std::vector<char>(static_cast<char*>(buf.data()),
@@ -261,17 +261,17 @@ auraio::Task<std::vector<char>> read_file_async(auraio::Engine& engine, int fd, 
 }
 ```
 
-**Migration effort:** Add `#include <auraio.hpp>`, create an `Engine`, replace blocking calls with async equivalents. The C++ compiler catches type errors, and RAII handles cleanup automatically.
+**Migration effort:** Add `#include <aura.hpp>`, create an `Engine`, replace blocking calls with async equivalents. The C++ compiler catches type errors, and RAII handles cleanup automatically.
 
 ### Rust API: Safe Systems Programming
 
-The Rust bindings provide memory-safe access to AuraIO through two crates: `auraio-sys` (raw FFI bindings generated by bindgen) and `auraio` (safe wrapper crate). The safe crate exposes an idiomatic Rust API with `Result<T>` error handling, RAII buffer management, `FnOnce` callbacks, and optional `async`/`await` support via the `async` feature flag.
+The Rust bindings provide memory-safe access to AuraIO through two crates: `aura-sys` (raw FFI bindings generated by bindgen) and `aura` (safe wrapper crate). The safe crate exposes an idiomatic Rust API with `Result<T>` error handling, RAII buffer management, `FnOnce` callbacks, and optional `async`/`await` support via the `async` feature flag.
 
 #### Crate Structure
 
 ```
-auraio-sys          (raw FFI - auto-generated, not meant for direct use)
-  └── auraio        (safe wrapper crate)
+aura-sys            (raw FFI - auto-generated, not meant for direct use)
+  └── aura          (safe wrapper crate)
        ├── Engine         Arc<EngineInner> ownership, Send + Sync
        ├── Buffer         RAII, returned to pool on Drop
        ├── BufferRef      Copy, no lifetime (unsafe constructors)
@@ -281,13 +281,13 @@ auraio-sys          (raw FFI - auto-generated, not meant for direct use)
        └── async_io       AsyncEngine trait + IoFuture (feature = "async")
 ```
 
-The `Engine` internally holds an `Arc<EngineInner>` that wraps a `NonNull<aura_engine_t>`. This Arc is cloned into every `Buffer`, ensuring the C engine outlives all buffers even if the user drops the `Engine` value first. The engine is `Send + Sync`; submissions from multiple threads are safe. Polling (`poll`/`wait`/`run`) is serialized by an internal `Mutex<()>` to prevent concurrent CQ access.
+The `Engine` internally holds an `Arc<EngineInner>` that wraps a `NonNull<aura_engine_t>`. This `Arc` is cloned into every `Buffer`, ensuring the C engine outlives all buffers even if the user drops the `Engine` value first. The engine is `Send + Sync`; submissions from multiple threads are safe. Polling (`poll`/`wait`/`run`) is serialized by an internal `Mutex<()>` to prevent concurrent CQ access.
 
 #### Key Differences from C++
 
 | Aspect | C++ API | Rust API |
 |--------|---------|----------|
-| **Error handling** | Exceptions | `Result<T, auraio::Error>` with typed variants |
+| **Error handling** | Exceptions | `Result<T, aura::Error>` with typed variants |
 | **Engine lifetime** | RAII (unique ownership) | `Arc<EngineInner>` (shared ownership, cloneable) |
 | **Callback signature** | `void(Request&, ssize_t)` | `FnOnce(Result<usize>) + Send + 'static` |
 | **Buffer I/O methods** | Safe methods | `unsafe fn read()` / `unsafe fn write()` |
@@ -312,7 +312,7 @@ The `read()` and `write()` methods on `Engine` are `unsafe fn` specifically beca
 When the `async` feature is enabled, the `AsyncEngine` trait extends `Engine` with future-returning methods:
 
 ```rust
-use auraio::{Engine, async_io::AsyncEngine};
+use aura::{Engine, async_io::AsyncEngine};
 
 // Returns IoFuture which implements Future<Output = Result<usize>>
 let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
@@ -391,7 +391,7 @@ while !done.load(Ordering::SeqCst) {
 
 **After (AuraIO Rust, async/await with `async` feature):**
 ```rust
-use auraio::{Engine, async_io::AsyncEngine};
+use aura::{Engine, async_io::AsyncEngine};
 
 let engine = Engine::new()?;
 let buf = engine.allocate_buffer(4096)?;
@@ -400,7 +400,7 @@ let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
 let content = &buf.as_slice()[..n];
 ```
 
-**Migration effort:** Add `auraio` to `Cargo.toml`, create an `Engine`, replace blocking calls with async submissions. The `unsafe` blocks around buffer I/O operations serve as explicit documentation of the lifetime contract. Error handling uses idiomatic `?` propagation with typed `auraio::Error` variants.
+**Migration effort:** Add `aura` to `Cargo.toml`, create an `Engine`, replace blocking calls with async submissions. The `unsafe` blocks around buffer I/O operations serve as explicit documentation of the lifetime contract. Error handling uses idiomatic `?` propagation with typed `aura::Error` variants.
 
 ### Choosing C vs C++ vs Rust
 
@@ -411,7 +411,7 @@ let content = &buf.as_slice()[..n];
 | **Memory management** | Manual (or use buffer pool) | RAII (automatic) | RAII `Buffer` + `unsafe` for raw buffer ops |
 | **Callback style** | Function pointers + void* | Lambdas with captures | `FnOnce(Result<usize>) + Send + 'static` closures |
 | **Async pattern** | Callbacks only | Callbacks or coroutines | Callbacks or `async`/`await` (any executor) |
-| **Dependencies** | libc, liburing | libc, liburing, C++20 stdlib | libc, liburing (via auraio-sys FFI) |
+| **Dependencies** | libc, liburing | libc, liburing, C++20 stdlib | libc, liburing (via aura-sys FFI) |
 | **Binary size** | Minimal | Moderate (templates) | Moderate (monomorphization) |
 | **Thread safety** | Manual | Manual | `Send + Sync` enforced by compiler |
 
