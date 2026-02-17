@@ -182,6 +182,10 @@ BFFIO-baseline: BFFIO
 auracp: engine
 	$(MAKE) -C tools/auracp
 
+# Build C++ auracp file copy tool
+auracp-cpp: engine
+	$(MAKE) -C tools/auracp_cpp
+
 # Build all examples (C + C++ + Rust)
 examples: c-examples cpp-examples rust-examples
 
@@ -290,6 +294,7 @@ clean: rust-clean
 	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	-$(MAKE) -C tools/auracp clean 2>/dev/null || true
+	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
 	rm -f integrations/prometheus/C/prometheus_example
 	rm -f integrations/opentelemetry/C/otel_example
 	rm -f integrations/syslog/C/syslog_example
@@ -619,6 +624,7 @@ help:
 	@echo ""
 	@echo "auracp (async file copy):"
 	@echo "  make auracp         Build auracp async file copy tool"
+	@echo "  make auracp-cpp     Build auracp C++ async file copy tool"
 	@echo ""
 	@echo "Integrations:"
 	@echo "  make integrations   Build integrations (Prometheus + OpenTelemetry + Syslog)"
@@ -636,4 +642,4 @@ help:
 	        coverage coverage-check \
 	        integrations \
 	        BFFIO BFFIO-test BFFIO-baseline \
-	        auracp
+	        auracp auracp-cpp

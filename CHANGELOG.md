@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **auracp file copy tool** (`tools/auracp/`): Production-quality async pipelined file copy with cross-file I/O pipeline, recursive directory support, O_DIRECT mode, progress bar, and AIMD stats reporting
+- **C++ auracp tool** (`tools/auracp_cpp/`): C++20 port of auracp with RAII, lambda callbacks, and identical CLI
 - **C++ lifecycle bindings**: `Engine::openat()`, `close()`, `statx()`, `fallocate()`, `ftruncate()`, `sync_file_range()` with callback and coroutine variants (`async_openat`, `async_close`, `async_statx`, `async_fallocate`, `async_ftruncate`, `async_sync_file_range`)
 - **C++ accessor completions**: `Request::op_type()`, `Options::single_thread()`, `Stats::peak_in_flight()`, `RingStats::peak_in_flight()`, `aura::version()`, `aura::version_int()`
 - **Rust lifecycle bindings**: `Engine::openat()`, `close()`, `statx()`, `fallocate()`, `ftruncate()`, `sync_file_range()`, `drain()`
