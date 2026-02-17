@@ -182,7 +182,7 @@ fn main() -> Result<()> {
     }
 
     // Engine tuning results
-    let stats = engine.stats();
+    let stats = engine.stats()?;
     println!("\nAdaptive tuning results:");
     println!("  Optimal in-flight: {}", stats.optimal_in_flight());
     println!("  Optimal batch:     {}", stats.optimal_batch_size());

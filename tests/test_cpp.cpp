@@ -151,10 +151,20 @@ TEST(engine_with_options) {
     ASSERT(engine.handle() != nullptr);
 }
 
-TEST(engine_not_movable) {
-    static_assert(!std::is_move_constructible_v<aura::Engine>,
-                  "Engine must not be move-constructible");
-    static_assert(!std::is_move_assignable_v<aura::Engine>, "Engine must not be move-assignable");
+TEST(engine_movable) {
+    static_assert(std::is_move_constructible_v<aura::Engine>,
+                  "Engine must be move-constructible");
+    static_assert(std::is_move_assignable_v<aura::Engine>, "Engine must be move-assignable");
+    static_assert(!std::is_copy_constructible_v<aura::Engine>,
+                  "Engine must not be copy-constructible");
+    static_assert(!std::is_copy_assignable_v<aura::Engine>, "Engine must not be copy-assignable");
+
+    // Verify move constructor works
+    aura::Engine engine1;
+    auto *handle = engine1.handle();
+    aura::Engine engine2(std::move(engine1));
+    ASSERT(engine2.handle() == handle);
+    ASSERT(engine1.handle() == nullptr);
 }
 
 TEST(engine_poll_fd_valid) {
@@ -374,7 +384,7 @@ TEST(stats_all_fields) {
 // Registration Tests
 // =============================================================================
 
-TEST(request_unregister_buffers) {
+TEST(request_unregister_reg_buffers) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
@@ -391,7 +401,7 @@ TEST(request_unregister_buffers) {
                           completed.store(true, std::memory_order_seq_cst);
                       });
 
-    engine.request_unregister_buffers();
+    engine.request_unregister(AURA_REG_BUFFERS);
 
     bool rejected_during_drain = false;
     try {
@@ -417,10 +427,10 @@ TEST(request_unregister_buffers) {
     ASSERT(got_not_found);
 
     /* No-op once already finalized */
-    engine.unregister_buffers();
+    engine.unregister(AURA_REG_BUFFERS);
 }
 
-TEST(request_unregister_files) {
+TEST(request_unregister_reg_files) {
     TempFile file(4096);
     file.reopen(O_RDONLY);
 
@@ -428,7 +438,7 @@ TEST(request_unregister_files) {
     std::array<int, 1> fds = {file.fd()};
     engine.register_files(fds);
 
-    engine.request_unregister_files();
+    engine.request_unregister(AURA_REG_FILES);
 
     bool rejected_update = false;
     try {
@@ -439,11 +449,11 @@ TEST(request_unregister_files) {
     ASSERT(rejected_update);
 
     /* No-op once already finalized */
-    engine.unregister_files();
+    engine.unregister(AURA_REG_FILES);
 
     /* Registration should still work after deferred path */
     engine.register_files(fds);
-    engine.unregister_files();
+    engine.unregister(AURA_REG_FILES);
 }
 
 // =============================================================================
@@ -901,7 +911,7 @@ int main() {
 
     RUN_TEST(engine_default_construct);
     RUN_TEST(engine_with_options);
-    RUN_TEST(engine_not_movable);
+    RUN_TEST(engine_movable);
     RUN_TEST(engine_poll_fd_valid);
     RUN_TEST(options_default_values);
     RUN_TEST(options_builder_chain);
@@ -920,8 +930,8 @@ int main() {
     RUN_TEST(error_predicates);
     RUN_TEST(request_null_handle);
     RUN_TEST(stats_all_fields);
-    RUN_TEST(request_unregister_buffers);
-    RUN_TEST(request_unregister_files);
+    RUN_TEST(request_unregister_reg_buffers);
+    RUN_TEST(request_unregister_reg_files);
     RUN_TEST(read_basic);
     RUN_TEST(read_with_capture);
     RUN_TEST(write_basic);

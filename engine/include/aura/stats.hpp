@@ -135,6 +135,16 @@ class Histogram {
         return (idx + 1) * hist_.bucket_width_us;
     }
 
+    /**
+     * Compute a latency percentile from the histogram
+     * @param pct Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99)
+     * @return Latency in microseconds, or -1.0 if histogram is empty or
+     *         percentile is out of range
+     */
+    [[nodiscard]] double percentile(double pct) const noexcept {
+        return aura_histogram_percentile(&hist_, pct);
+    }
+
     [[nodiscard]] const aura_histogram_t &c_histogram() const & noexcept { return hist_; }
     [[nodiscard]] aura_histogram_t c_histogram() const && noexcept { return hist_; }
 

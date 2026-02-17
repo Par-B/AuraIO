@@ -246,6 +246,10 @@ typedef struct {
     int op_idx;
 } submit_ctx_t;
 
+/* Forward declarations for internal helpers used by aura_destroy() */
+static int request_unregister_buffers(aura_engine_t *engine);
+static int request_unregister_files(aura_engine_t *engine);
+
 static bool flush_error_is_fatal(int err) {
     return err != EAGAIN && err != EBUSY && err != EINTR;
 }
@@ -723,13 +727,13 @@ void aura_destroy(aura_engine_t *engine) {
     aura_drain(engine, -1);
 
     /* Unregister buffers and files (safe now that I/O is drained).
-     * Call finalize directly instead of aura_unregister_* to avoid the
-     * aura_wait loop which can livelock post-shutdown (no new I/O). */
+     * Call request_unregister (deferred) to avoid the aura_wait loop
+     * which can livelock post-shutdown (no new I/O). */
     if (engine->buffers_registered && !engine->buffers_unreg_pending) {
-        aura_request_unregister_buffers(engine);
+        request_unregister_buffers(engine);
     }
     if (engine->files_registered && !engine->files_unreg_pending) {
-        aura_request_unregister_files(engine);
+        request_unregister_files(engine);
     }
     finalize_deferred_unregistration(engine);
 
@@ -1889,12 +1893,12 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
     return (0);
 }
 
-int aura_request_unregister_buffers(aura_engine_t *engine) {
-    if (!engine) {
-        errno = EINVAL;
-        return (-1);
-    }
+/* ============================================================================
+ * Unified Registration Lifecycle
+ * ============================================================================
+ */
 
+static int request_unregister_buffers(aura_engine_t *engine) {
     pthread_rwlock_wrlock(&engine->reg_lock);
 
     if (!engine->buffers_registered && !engine->buffers_unreg_pending) {
@@ -1908,7 +1912,38 @@ int aura_request_unregister_buffers(aura_engine_t *engine) {
     return finalize_deferred_unregistration(engine);
 }
 
-int aura_unregister_buffers(aura_engine_t *engine) {
+static int request_unregister_files(aura_engine_t *engine) {
+    pthread_rwlock_wrlock(&engine->reg_lock);
+
+    if (!engine->files_registered && !engine->files_unreg_pending) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        return (0); /* Nothing to unregister */
+    }
+
+    engine->files_unreg_pending = true;
+    pthread_rwlock_unlock(&engine->reg_lock);
+
+    return finalize_deferred_unregistration(engine);
+}
+
+int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type) {
+    if (!engine) {
+        errno = EINVAL;
+        return (-1);
+    }
+
+    switch (type) {
+    case AURA_REG_BUFFERS:
+        return request_unregister_buffers(engine);
+    case AURA_REG_FILES:
+        return request_unregister_files(engine);
+    default:
+        errno = EINVAL;
+        return (-1);
+    }
+}
+
+int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
     if (!engine) {
         errno = EINVAL;
         return (-1);
@@ -1916,17 +1951,28 @@ int aura_unregister_buffers(aura_engine_t *engine) {
 
     if (ring_in_callback_context()) {
         /* Callback-safe path: request deferred unregister and return. */
-        return aura_request_unregister_buffers(engine);
+        return aura_request_unregister(engine, type);
     }
 
-    if (aura_request_unregister_buffers(engine) != 0) {
+    if (aura_request_unregister(engine, type) != 0) {
         return (-1);
     }
 
+    /* Wait for the deferred unregister to complete */
     for (;;) {
         bool done;
         pthread_rwlock_rdlock(&engine->reg_lock);
-        done = !engine->buffers_registered && !engine->buffers_unreg_pending;
+        switch (type) {
+        case AURA_REG_BUFFERS:
+            done = !engine->buffers_registered && !engine->buffers_unreg_pending;
+            break;
+        case AURA_REG_FILES:
+            done = !engine->files_registered && !engine->files_unreg_pending;
+            break;
+        default:
+            done = true;
+            break;
+        }
         pthread_rwlock_unlock(&engine->reg_lock);
         if (done) {
             return (0);
@@ -2052,55 +2098,6 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
     return (0);
 }
 
-int aura_request_unregister_files(aura_engine_t *engine) {
-    if (!engine) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    pthread_rwlock_wrlock(&engine->reg_lock);
-
-    if (!engine->files_registered && !engine->files_unreg_pending) {
-        pthread_rwlock_unlock(&engine->reg_lock);
-        return (0); /* Nothing to unregister */
-    }
-
-    engine->files_unreg_pending = true;
-    pthread_rwlock_unlock(&engine->reg_lock);
-
-    return finalize_deferred_unregistration(engine);
-}
-
-int aura_unregister_files(aura_engine_t *engine) {
-    if (!engine) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    if (ring_in_callback_context()) {
-        /* Callback-safe path: request deferred unregister and return. */
-        return aura_request_unregister_files(engine);
-    }
-
-    if (aura_request_unregister_files(engine) != 0) {
-        return (-1);
-    }
-
-    for (;;) {
-        bool done;
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        done = !engine->files_registered && !engine->files_unreg_pending;
-        pthread_rwlock_unlock(&engine->reg_lock);
-        if (done) {
-            return (0);
-        }
-
-        int n = aura_wait(engine, 100);
-        if (n < 0) {
-            return (-1);
-        }
-    }
-}
 
 /* ============================================================================
  * Statistics
@@ -2115,9 +2112,10 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
-        return;
+        errno = EINVAL;
+        return (-1);
     }
 
     /* Zero the caller's buffer (may be smaller than our struct) */
@@ -2175,6 +2173,7 @@ void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t sta
     /* Copy only as many bytes as the caller's struct can hold */
     size_t copy_size = stats_size < sizeof(tmp) ? stats_size : sizeof(tmp);
     memcpy(stats, &tmp, copy_size);
+    return (0);
 }
 
 /* Verify public and internal histogram constants stay in sync */
@@ -2291,4 +2290,47 @@ int aura_request_op_type(const aura_request_t *req) {
 
 const char *aura_phase_name(int phase) {
     return adaptive_phase_name((adaptive_phase_t)phase);
+}
+
+/* ============================================================================
+ * Diagnostics
+ * ============================================================================
+ */
+
+int aura_get_fatal_error(const aura_engine_t *engine) {
+    if (!engine) {
+        errno = EINVAL;
+        return (-1);
+    }
+    return get_fatal_submit_errno(engine);
+}
+
+bool aura_in_callback_context(void) {
+    return ring_in_callback_context();
+}
+
+double aura_histogram_percentile(const aura_histogram_t *hist, double percentile) {
+    if (!hist || percentile < 0.0 || percentile > 100.0) {
+        return -1.0;
+    }
+    if (hist->total_count == 0) {
+        return -1.0;
+    }
+
+    uint64_t target = (uint64_t)((percentile / 100.0) * hist->total_count);
+    if (target == 0) {
+        target = 1;
+    }
+
+    uint64_t cumulative = 0;
+    for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
+        cumulative += hist->buckets[i];
+        if (cumulative >= target) {
+            /* Return the upper edge of this bucket */
+            return (double)((i + 1) * hist->bucket_width_us);
+        }
+    }
+
+    /* All samples in overflow — return max tracked value */
+    return (double)hist->max_tracked_us;
 }

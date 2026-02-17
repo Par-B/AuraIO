@@ -56,6 +56,43 @@
 #endif
 
 /* ============================================================================
+ * Threading Model
+ * ============================================================================
+ *
+ * SUBMISSIONS (aura_read, aura_write, aura_fsync, aura_readv, aura_writev,
+ * aura_openat, aura_close, aura_statx, aura_fallocate, aura_ftruncate,
+ * aura_sync_file_range, aura_cancel):
+ *   Thread-safe. Multiple threads may submit I/O concurrently. Each
+ *   submission acquires a per-ring mutex briefly; contention is low because
+ *   the ADAPTIVE ring selector distributes load across rings.
+ *
+ * EVENT LOOP (aura_poll, aura_wait, aura_run, aura_drain):
+ *   Single-threaded. These functions must NOT be called concurrently on the
+ *   same engine. Designate one thread as the event loop thread. Submissions
+ *   from other threads are safe during event loop processing.
+ *
+ * CALLBACKS:
+ *   Execute on the thread that calls aura_poll() / aura_wait() / aura_run().
+ *   Within a single poll/wait call, callbacks are invoked sequentially (never
+ *   concurrently). See the aura_callback_t documentation for what is safe to
+ *   call from within a callback.
+ *
+ * STATISTICS (aura_get_stats, aura_get_ring_stats, aura_get_histogram,
+ * aura_get_buffer_stats):
+ *   Thread-safe. Reads atomic counters and briefly locks each ring.
+ *
+ * REGISTRATION (aura_register_buffers, aura_register_files, aura_update_file,
+ * aura_unregister, aura_request_unregister):
+ *   Registration operations must be serialized (no concurrent register/
+ *   unregister calls). I/O submissions from other threads are safe during
+ *   registration.
+ *
+ * BUFFER POOL (aura_buffer_alloc, aura_buffer_free):
+ *   Thread-safe. Uses per-thread caching for fast allocation. Buffers may
+ *   be freed from a different thread than they were allocated on.
+ */
+
+/* ============================================================================
  * Symbol Visibility
  * ============================================================================
  *
@@ -107,14 +144,16 @@ typedef struct aura_engine aura_engine_t;
  * or query request state while in-flight.
  *
  * LIFETIME: The request handle is valid from submission until the completion
- * callback BEGINS execution. Once the callback starts, the handle becomes
- * invalid and must not be used. This applies whether the operation completed
- * normally, with an error, or was cancelled (callback receives -ECANCELED).
+ * callback RETURNS. Inside the callback, the req parameter is valid and may
+ * be passed to aura_request_fd(), aura_request_user_data(), etc. After the
+ * callback returns, the handle is recycled and must not be used. This applies
+ * whether the operation completed normally, with an error, or was cancelled
+ * (callback receives -ECANCELED).
  *
  * THREAD SAFETY: It is safe to call aura_cancel() or aura_request_pending()
  * on a request handle from any thread, as long as the callback has not yet
- * started. If aura_request_pending() returns false, the handle is about to
- * become invalid.
+ * returned. If aura_request_pending() returns false, the request has completed
+ * but may still be inside its callback.
  */
 typedef struct aura_request aura_request_t;
 
@@ -150,7 +189,7 @@ typedef enum {
  *
  * Called when an async operation completes.
  *
- * @param req       Request handle (valid only during callback)
+ * @param req       Request handle (valid for the duration of the callback)
  * @param result    Bytes transferred on success, negative errno on failure
  *                  -ECANCELED if the operation was cancelled
  * @param user_data User pointer passed to aura_read/write/fsync
@@ -162,13 +201,32 @@ typedef enum {
  * by the submission function can still be used with aura_request_pending()
  * and aura_cancel().
  *
- * RESTRICTIONS:
- * - The callback executes in the context of aura_poll() or aura_wait()
- * - Callbacks may submit new I/O operations (aura_read, aura_write, etc.)
- * - Callbacks MUST NOT call aura_destroy() - this will cause undefined
- * behavior
- * - Callbacks should complete quickly to avoid blocking other completions
- * - The request handle (req) becomes invalid after the callback returns
+ * CALLBACK SAFETY:
+ *
+ * The callback executes on the thread that called aura_poll(), aura_wait(),
+ * or aura_run(). Callbacks within a single poll/wait call are sequential.
+ * The request handle (req) is valid for the duration of the callback and
+ * becomes invalid after the callback returns.
+ *
+ * Allowed in callbacks:
+ * - All I/O submission functions (aura_read, aura_write, aura_fsync, etc.)
+ * - aura_cancel()
+ * - aura_stop()
+ * - aura_request_unregister() (deferred unregister)
+ * - All aura_request_*() introspection functions
+ * - All aura_get_*() statistics functions
+ * - aura_buffer_alloc() / aura_buffer_free()
+ *
+ * Forbidden in callbacks:
+ * - aura_destroy() — undefined behavior
+ * - aura_poll() / aura_wait() / aura_run() / aura_drain() — deadlock
+ *
+ * Auto-deferred in callbacks:
+ * - aura_unregister() — detects callback context and automatically degrades
+ *   to the deferred (non-blocking) path
+ *
+ * Callbacks must not block for extended periods. They run on the event loop
+ * thread, so a slow callback delays processing of all other completions.
  */
 typedef void (*aura_callback_t)(aura_request_t *req, ssize_t result, void *user_data);
 
@@ -571,8 +629,14 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  * @param offset    File offset to read from
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle on success, NULL on error (errno set to EINVAL,
- *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
+ * @return Request handle on success, NULL on error with errno set:
+ *         - EINVAL:    NULL engine, invalid fd, zero length, or NULL buffer
+ *         - EAGAIN:    All rings at capacity. Poll completions and retry.
+ *         - ESHUTDOWN: Engine is shutting down or has a fatal error
+ *         - ENOENT:    Registered buffer requested but none are registered
+ *         - EOVERFLOW: Registered buffer offset+length exceeds buffer bounds
+ *         - EBUSY:     Buffer/file unregistration is in progress
+ *         - ENOMEM:    No free request slots available
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf,
                                                     size_t len, off_t offset,
@@ -601,8 +665,14 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int f
  * @param offset    File offset to write to
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle on success, NULL on error (errno set to EINVAL,
- *         EAGAIN, ESHUTDOWN, ENOENT, EOVERFLOW, or ENOMEM)
+ * @return Request handle on success, NULL on error with errno set:
+ *         - EINVAL:    NULL engine, invalid fd, zero length, or NULL buffer
+ *         - EAGAIN:    All rings at capacity. Poll completions and retry.
+ *         - ESHUTDOWN: Engine is shutting down or has a fatal error
+ *         - ENOENT:    Registered buffer requested but none are registered
+ *         - EOVERFLOW: Registered buffer offset+length exceeds buffer bounds
+ *         - EBUSY:     Buffer/file unregistration is in progress
+ *         - ENOMEM:    No free request slots available
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf,
                                                      size_t len, off_t offset,
@@ -969,7 +1039,9 @@ AURA_API void aura_stop(aura_engine_t *engine);
  * aura_run() on the same engine (see aura_poll() threading model note).
  *
  * New submissions are NOT blocked during drain; if other threads submit
- * operations concurrently, drain will process those as well.
+ * operations concurrently, drain will process those as well. To guarantee
+ * all operations complete, stop submitting from other threads before calling
+ * drain (e.g., signal workers to stop, join them, then drain).
  *
  * On timeout, returns -1 with errno=ETIMEDOUT. Operations that completed
  * before the timeout are still processed (callbacks invoked).
@@ -1055,8 +1127,8 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
  * use aura_buf_fixed() to reference buffers by index.
  *
  * Submissions using aura_buf_fixed() fail with errno=EBUSY while a deferred
- * unregister is draining. Use aura_request_unregister_buffers() from callback
- * contexts, or aura_unregister_buffers() for a synchronous wait.
+ * unregister is draining. Use aura_request_unregister() from callback
+ * contexts, or aura_unregister() for a synchronous wait.
  *
  * Not thread-safe with other registration operations. I/O submissions
  * may proceed concurrently.
@@ -1069,35 +1141,6 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
  */
 AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs,
                                                     int count);
-
-/**
- * Request deferred unregister of registered buffers (callback-safe)
- *
- * Marks registered buffers as draining and returns immediately. New
- * fixed-buffer submissions fail with errno=EBUSY while draining. Final
- * unregister is completed lazily once in-flight fixed-buffer operations reach
- * zero.
- *
- * Thread-safe: safe to call from completion callbacks or any thread.
- *
- * @param engine Engine handle
- * @return 0 on success, -1 on error (errno set to EINVAL)
- */
-AURA_API int aura_request_unregister_buffers(aura_engine_t *engine);
-
-/**
- * Unregister previously registered buffers (synchronous)
- *
- * For non-callback callers, this waits until in-flight fixed-buffer operations
- * drain and unregister completes. If called from a callback, it degrades to
- * aura_request_unregister_buffers() and returns immediately.
- *
- * Thread-safe: safe to call from any thread.
- *
- * @param engine Engine handle
- * @return 0 on success, -1 on error (errno set to EINVAL)
- */
-AURA_API int aura_unregister_buffers(aura_engine_t *engine);
 
 /* ============================================================================
  * Registered Files (Advanced)
@@ -1133,9 +1176,10 @@ AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const i
  * Use -1 to unregister a slot without replacing it.
  *
  * PARTIAL UPDATE WARNING: This function updates each io_uring ring
- * sequentially. If an error occurs on ring N, rings 0..N-1 will have the new fd
- * while rings N..max will retain the old fd. On failure, the caller should
- * unregister all files with aura_unregister_files() and re-register them.
+ * sequentially. On failure, the library attempts to roll back already-updated
+ * rings to the old fd. If the rollback itself fails (rare kernel error), the
+ * file table may be inconsistent across rings. Recovery: call
+ * aura_unregister(engine, AURA_REG_FILES) and re-register.
  *
  * Not thread-safe with other registration operations.
  *
@@ -1148,30 +1192,53 @@ AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const i
  */
 AURA_API AURA_WARN_UNUSED int aura_update_file(aura_engine_t *engine, int index, int fd);
 
-/**
- * Request deferred unregister of registered files (callback-safe)
- *
- * Marks registered files for unregister and returns immediately.
- * Thread-safe: safe to call from completion callbacks or any thread.
- *
- * @param engine Engine handle
- * @return 0 on success, -1 on error (errno set to EINVAL)
+/* ============================================================================
+ * Unified Registration Lifecycle
+ * ============================================================================
  */
-AURA_API int aura_request_unregister_files(aura_engine_t *engine);
 
 /**
- * Unregister previously registered files
+ * Registration resource type
  *
- * For non-callback callers, this waits until unregister completes. If called
- * from a callback, it degrades to aura_request_unregister_files() and
- * returns immediately.
+ * Identifies the type of registered resource for aura_unregister() and
+ * aura_request_unregister().
+ */
+typedef enum {
+    AURA_REG_BUFFERS = 0, /**< Registered buffers (see aura_register_buffers) */
+    AURA_REG_FILES = 1    /**< Registered files (see aura_register_files) */
+} aura_reg_type_t;
+
+/**
+ * Unregister previously registered buffers or files (synchronous)
+ *
+ * For non-callback callers, this waits until in-flight operations using
+ * registered resources drain and unregister completes. If called from a
+ * completion callback, it automatically degrades to the deferred
+ * (non-blocking) path — equivalent to aura_request_unregister().
  *
  * Thread-safe: safe to call from any thread.
  *
  * @param engine Engine handle
+ * @param type   Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)
  * @return 0 on success, -1 on error (errno set to EINVAL)
  */
-AURA_API int aura_unregister_files(aura_engine_t *engine);
+AURA_API int aura_unregister(aura_engine_t *engine, aura_reg_type_t type);
+
+/**
+ * Request deferred unregister (callback-safe, non-blocking)
+ *
+ * Marks registered resources as draining and returns immediately.
+ * For buffers: new fixed-buffer submissions fail with errno=EBUSY while
+ * draining. Final unregister completes lazily once in-flight fixed-buffer
+ * operations reach zero.
+ *
+ * Thread-safe: safe to call from completion callbacks or any thread.
+ *
+ * @param engine Engine handle
+ * @param type   Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)
+ * @return 0 on success, -1 on error (errno set to EINVAL)
+ */
+AURA_API int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type);
 
 /* ============================================================================
  * Statistics (Optional)
@@ -1182,7 +1249,6 @@ AURA_API int aura_unregister_files(aura_engine_t *engine);
  * Get current engine statistics
  *
  * Retrieves throughput, latency, and tuning parameters for monitoring.
- * If engine or stats is NULL, returns without modifying stats.
  *
  * The stats_size parameter enables forward compatibility: pass
  * sizeof(aura_stats_t) so the library writes at most that many bytes.
@@ -1191,11 +1257,13 @@ AURA_API int aura_unregister_files(aura_engine_t *engine);
  *
  * Thread-safe: reads atomic counters and locks each ring briefly.
  *
- * @param engine     Engine handle (may be NULL)
- * @param stats      Output statistics structure (may be NULL)
+ * @param engine     Engine handle
+ * @param stats      Output statistics structure
  * @param stats_size sizeof(aura_stats_t) from caller's compilation
+ * @return 0 on success, -1 on error (errno set to EINVAL if engine, stats,
+ *         or stats_size is invalid)
  */
-AURA_API void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
+AURA_API int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
 
 /**
  * Get the number of io_uring rings in the engine
@@ -1277,6 +1345,52 @@ AURA_API const char *aura_phase_name(int phase);
  * @return Version string (e.g., "0.3.0")
  */
 AURA_API const char *aura_version(void);
+
+/* ============================================================================
+ * Diagnostics
+ * ============================================================================
+ */
+
+/**
+ * Check if the engine has a fatal error
+ *
+ * Once a fatal error is latched (e.g., io_uring ring fd becomes invalid),
+ * all subsequent submissions fail with ESHUTDOWN. Use this to distinguish
+ * a permanently broken engine from transient EAGAIN.
+ *
+ * Thread-safe.
+ *
+ * @param engine Engine handle
+ * @return 0 if healthy, positive errno value if fatally broken, -1 if
+ *         engine is NULL (errno set to EINVAL)
+ */
+AURA_API int aura_get_fatal_error(const aura_engine_t *engine);
+
+/**
+ * Check if the current thread is inside a completion callback
+ *
+ * Useful for libraries building on AuraIO to choose between synchronous
+ * and deferred code paths (e.g., aura_unregister vs aura_request_unregister).
+ *
+ * Thread-safe (uses thread-local state).
+ *
+ * @return true if the calling thread is currently inside a completion
+ *         callback, false otherwise
+ */
+AURA_API bool aura_in_callback_context(void);
+
+/**
+ * Compute a latency percentile from a histogram snapshot
+ *
+ * Iterates histogram buckets to find the requested percentile value.
+ * The histogram must have been obtained via aura_get_histogram().
+ *
+ * @param hist       Histogram snapshot
+ * @param percentile Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99)
+ * @return Latency in microseconds, or -1.0 if histogram is empty or
+ *         percentile is out of range
+ */
+AURA_API double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
 
 /* ============================================================================
  * Logging (Optional)

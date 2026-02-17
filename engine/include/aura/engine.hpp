@@ -40,7 +40,13 @@ concept Callback = std::invocable<F, Request &, ssize_t>;
  * Main AuraIO engine class
  *
  * Manages io_uring rings and provides async I/O operations.
- * Move-only (cannot be copied).
+ * Move-only (cannot be copied). Movable when no event loop methods
+ * (poll/wait/run/drain) are executing on another thread.
+ *
+ * @par Exception Safety in Callbacks
+ * Exceptions thrown from completion callbacks will call std::terminate().
+ * The C FFI trampoline cannot propagate exceptions across the C boundary.
+ * Always catch all exceptions inside callbacks.
  *
  * @par Destruction Behavior
  * The destructor waits for all pending I/O operations to complete before
@@ -80,6 +86,7 @@ class Engine {
         try {
             engine_alive_ = std::make_shared<std::atomic<bool>>(true);
             pool_ = std::make_unique<detail::CallbackPool>(handle_);
+            event_loop_mutex_ = std::make_unique<std::mutex>();
         } catch (...) {
             aura_destroy(handle_);
             handle_ = nullptr;
@@ -101,6 +108,7 @@ class Engine {
         try {
             engine_alive_ = std::make_shared<std::atomic<bool>>(true);
             pool_ = std::make_unique<detail::CallbackPool>(handle_);
+            event_loop_mutex_ = std::make_unique<std::mutex>();
         } catch (...) {
             aura_destroy(handle_);
             handle_ = nullptr;
@@ -109,14 +117,41 @@ class Engine {
         }
     }
 
-    // Non-copyable and non-movable.
-    // std::mutex is not movable; moving while run()/poll()/wait() is active
-    // would destroy a locked mutex (UB). Use std::unique_ptr<Engine> for
-    // heap allocation.
+    // Non-copyable.
     Engine(const Engine &) = delete;
     Engine &operator=(const Engine &) = delete;
-    Engine(Engine &&) = delete;
-    Engine &operator=(Engine &&) = delete;
+
+    /**
+     * Move constructor
+     *
+     * The source engine is left in a valid but empty state (handle_ == nullptr).
+     * Must NOT be called while event loop methods (poll/wait/run/drain) are
+     * executing on another thread — the moved-from mutex becomes null.
+     */
+    Engine(Engine &&other) noexcept
+        : handle_(other.handle_), pool_(std::move(other.pool_)),
+          engine_alive_(std::move(other.engine_alive_)),
+          event_loop_mutex_(std::move(other.event_loop_mutex_)) {
+        other.handle_ = nullptr;
+    }
+
+    /**
+     * Move assignment operator
+     *
+     * Destroys the current engine (draining pending I/O) before taking
+     * ownership of the source. Same threading constraint as move constructor.
+     */
+    Engine &operator=(Engine &&other) noexcept {
+        if (this != &other) {
+            destroy();
+            handle_ = other.handle_;
+            pool_ = std::move(other.pool_);
+            engine_alive_ = std::move(other.engine_alive_);
+            event_loop_mutex_ = std::move(other.event_loop_mutex_);
+            other.handle_ = nullptr;
+        }
+        return *this;
+    }
 
     /**
      * Destructor
@@ -333,6 +368,7 @@ class Engine {
      * @param offset File offset
      * @return Awaitable (co_await yields ssize_t bytes read, or throws aura::Error on failure)
      */
+    [[nodiscard("must be immediately co_await-ed")]]
     inline IoAwaitable async_read(int fd, BufferRef buf, size_t len, off_t offset);
 
     /**
@@ -344,6 +380,7 @@ class Engine {
      * @param offset File offset
      * @return Awaitable (co_await yields ssize_t bytes written, or throws aura::Error on failure)
      */
+    [[nodiscard("must be immediately co_await-ed")]]
     inline IoAwaitable async_write(int fd, BufferRef buf, size_t len, off_t offset);
 
     /**
@@ -352,6 +389,7 @@ class Engine {
      * @param fd File descriptor
      * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
+    [[nodiscard("must be immediately co_await-ed")]]
     inline FsyncAwaitable async_fsync(int fd);
 
     /**
@@ -403,7 +441,7 @@ class Engine {
      * @return Number of completions processed
      */
     int poll() {
-        std::lock_guard<std::mutex> lock(event_loop_mutex_);
+        std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_poll(handle_);
         if (n < 0) {
             throw Error(errno, "aura_poll");
@@ -419,7 +457,7 @@ class Engine {
      * @throws Error on failure
      */
     int wait(int timeout_ms = -1) {
-        std::lock_guard<std::mutex> lock(event_loop_mutex_);
+        std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_wait(handle_, timeout_ms);
         if (n < 0) {
             throw Error(errno, "aura_wait");
@@ -434,7 +472,7 @@ class Engine {
      * or another thread to exit.
      */
     void run() {
-        std::unique_lock<std::mutex> lock(event_loop_mutex_);
+        std::unique_lock<std::mutex> lock(*event_loop_mutex_);
         aura_run(handle_);
     }
 
@@ -455,7 +493,7 @@ class Engine {
      * @throws Error on timeout or failure
      */
     int drain(int timeout_ms = -1) {
-        std::lock_guard<std::mutex> lock(event_loop_mutex_);
+        std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_drain(handle_, timeout_ms);
         if (n < 0) {
             throw Error(errno, "aura_drain");
@@ -498,27 +536,36 @@ class Engine {
     }
 
     /**
-     * Unregister buffers
+     * Unregister previously registered buffers or files (synchronous)
      *
+     * For non-callback callers, waits until in-flight operations using
+     * registered resources drain and unregister completes. If called from
+     * a completion callback, automatically degrades to the deferred
+     * (non-blocking) path.
+     *
+     * @param type Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)
      * @throws Error on failure
      */
-    void unregister_buffers() {
-        if (aura_unregister_buffers(handle_) != 0) {
-            throw Error(errno, "aura_unregister_buffers");
+    void unregister(aura_reg_type_t type) {
+        if (aura_unregister(handle_, type) != 0) {
+            throw Error(errno, "aura_unregister");
         }
     }
 
     /**
-     * Request deferred unregister of registered buffers (callback-safe)
+     * Request deferred unregister (callback-safe, non-blocking)
      *
-     * Marks registered buffers for lazy unregister and returns immediately.
-     * New fixed-buffer submissions fail with EBUSY while draining.
+     * Marks registered resources as draining and returns immediately.
+     * For buffers: new fixed-buffer submissions fail with EBUSY while
+     * draining. Final unregister completes lazily once in-flight
+     * operations reach zero.
      *
+     * @param type Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)
      * @throws Error on failure
      */
-    void request_unregister_buffers() {
-        if (aura_request_unregister_buffers(handle_) != 0) {
-            throw Error(errno, "aura_request_unregister_buffers");
+    void request_unregister(aura_reg_type_t type) {
+        if (aura_request_unregister(handle_, type) != 0) {
+            throw Error(errno, "aura_request_unregister");
         }
     }
 
@@ -554,28 +601,6 @@ class Engine {
         }
     }
 
-    /**
-     * Unregister all files
-     *
-     * @throws Error on failure
-     */
-    void unregister_files() {
-        if (aura_unregister_files(handle_) != 0) {
-            throw Error(errno, "aura_unregister_files");
-        }
-    }
-
-    /**
-     * Request deferred unregister of registered files (callback-safe)
-     *
-     * @throws Error on failure
-     */
-    void request_unregister_files() {
-        if (aura_request_unregister_files(handle_) != 0) {
-            throw Error(errno, "aura_request_unregister_files");
-        }
-    }
-
     // =========================================================================
     // Statistics
     // =========================================================================
@@ -584,10 +609,13 @@ class Engine {
      * Get engine statistics snapshot
      *
      * @return Stats object with current metrics
+     * @throws Error on failure (NULL engine)
      */
-    [[nodiscard]] Stats get_stats() const noexcept {
+    [[nodiscard]] Stats get_stats() const {
         Stats stats;
-        aura_get_stats(handle_, &stats.stats_, sizeof(stats.stats_));
+        if (aura_get_stats(handle_, &stats.stats_, sizeof(stats.stats_)) != 0) {
+            throw Error(errno, "aura_get_stats");
+        }
         return stats;
     }
 
@@ -635,6 +663,40 @@ class Engine {
     }
 
     // =========================================================================
+    // Diagnostics
+    // =========================================================================
+
+    /**
+     * Check if the engine has a fatal error
+     *
+     * Once a fatal error is latched, all subsequent submissions fail with
+     * ESHUTDOWN. Use this to distinguish a permanently broken engine from
+     * transient EAGAIN.
+     *
+     * @return 0 if healthy, positive errno value if fatally broken
+     * @throws Error if engine handle is NULL
+     */
+    [[nodiscard]] int get_fatal_error() const {
+        int err = aura_get_fatal_error(handle_);
+        if (err < 0) {
+            throw Error(errno, "aura_get_fatal_error");
+        }
+        return err;
+    }
+
+    /**
+     * Check if the current thread is inside a completion callback
+     *
+     * Useful for choosing between synchronous and deferred code paths
+     * (e.g., unregister vs request_unregister).
+     *
+     * @return true if inside a completion callback, false otherwise
+     */
+    [[nodiscard]] static bool in_callback_context() noexcept {
+        return aura_in_callback_context();
+    }
+
+    // =========================================================================
     // Raw Access
     // =========================================================================
 
@@ -679,7 +741,7 @@ class Engine {
     aura_engine_t *handle_ = nullptr;
     std::unique_ptr<detail::CallbackPool> pool_;
     std::shared_ptr<std::atomic<bool>> engine_alive_;
-    std::mutex event_loop_mutex_;
+    std::unique_ptr<std::mutex> event_loop_mutex_;
 };
 
 } // namespace aura

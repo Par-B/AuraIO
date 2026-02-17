@@ -195,6 +195,26 @@ impl Histogram {
             0
         }
     }
+
+    /// Compute a latency percentile from this histogram
+    ///
+    /// # Arguments
+    ///
+    /// * `percentile` - Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99)
+    ///
+    /// # Returns
+    ///
+    /// Latency in microseconds, or `None` if the histogram is empty or
+    /// the percentile is out of range.
+    pub fn percentile(&self, percentile: f64) -> Option<f64> {
+        let result =
+            unsafe { aura_sys::aura_histogram_percentile(&self.inner, percentile) };
+        if result < 0.0 {
+            None
+        } else {
+            Some(result)
+        }
+    }
 }
 
 /// Buffer pool statistics snapshot

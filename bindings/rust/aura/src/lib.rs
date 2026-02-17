@@ -85,7 +85,7 @@ mod stats;
 pub mod async_io;
 
 pub use buffer::{Buffer, BufferRef};
-pub use engine::{version, version_int, Engine};
+pub use engine::{in_callback_context, version, version_int, Engine};
 pub use log::{clear_log_handler, log_emit, set_log_handler, LogLevel};
 pub use error::{Error, Result};
 pub use options::{Options, RingSelect};
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn test_stats_initial() {
         let engine = Engine::new().unwrap();
-        let stats = engine.stats();
+        let stats = engine.stats().unwrap();
         // Initial stats should be zero or reasonable defaults
         assert!(stats.ops_completed() >= 0);
         assert!(stats.bytes_transferred() >= 0);
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_stats_clone() {
         let engine = Engine::new().unwrap();
-        let stats1 = engine.stats();
+        let stats1 = engine.stats().unwrap();
         let stats2 = stats1.clone();
         assert_eq!(stats1.ops_completed(), stats2.ops_completed());
     }
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn test_stats_debug() {
         let engine = Engine::new().unwrap();
-        let stats = engine.stats();
+        let stats = engine.stats().unwrap();
         let debug_str = format!("{:?}", stats);
         assert!(debug_str.contains("Stats"));
     }
@@ -903,7 +903,7 @@ mod tests {
             engine.wait(100).unwrap();
         }
 
-        let stats = engine.stats();
+        let stats = engine.stats().unwrap();
         assert!(stats.ops_completed() >= 1);
     }
 

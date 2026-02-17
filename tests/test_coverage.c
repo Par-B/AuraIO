@@ -798,7 +798,7 @@ TEST(register_buffers_and_use) {
     assert(cb_result == 4096);
 
     /* Unregister */
-    rc = aura_unregister_buffers(engine);
+    rc = aura_unregister(engine, AURA_REG_BUFFERS);
     assert(rc == 0);
 
     /* Post-unregister: fixed buffers should fail with ENOENT */
@@ -811,12 +811,12 @@ TEST(register_buffers_and_use) {
     io_teardown();
 }
 
-TEST(unregister_buffers_not_registered) {
+TEST(unregister_reg_buffers_not_registered) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     /* Unregister when nothing is registered */
-    int rc = aura_unregister_buffers(engine);
+    int rc = aura_unregister(engine, AURA_REG_BUFFERS);
     /* Should return error or be a no-op */
     (void)rc;
 
@@ -871,7 +871,7 @@ TEST(register_files_and_io) {
 
     aura_buffer_free(engine, buf);
 
-    rc = aura_unregister_files(engine);
+    rc = aura_unregister(engine, AURA_REG_FILES);
     assert(rc == 0);
 
     aura_destroy(engine);
@@ -909,16 +909,16 @@ TEST(update_file_out_of_range) {
     assert(rc == -1);
     assert(errno == EINVAL);
 
-    rc = aura_unregister_files(engine);
+    rc = aura_unregister(engine, AURA_REG_FILES);
     assert(rc == 0);
     aura_destroy(engine);
     io_teardown();
 }
 
-TEST(unregister_files_not_registered) {
+TEST(unregister_reg_files_not_registered) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
-    int rc = aura_unregister_files(engine);
+    int rc = aura_unregister(engine, AURA_REG_FILES);
     (void)rc;
     aura_destroy(engine);
 }
@@ -927,13 +927,13 @@ TEST(unregister_files_not_registered) {
  * Deferred Unregister Tests
  * ============================================================================ */
 
-TEST(request_unregister_buffers_null) {
-    assert(aura_request_unregister_buffers(NULL) == -1);
+TEST(request_unregister_null_buffers) {
+    assert(aura_request_unregister(NULL, AURA_REG_BUFFERS) == -1);
     assert(errno == EINVAL);
 }
 
-TEST(request_unregister_files_null) {
-    assert(aura_request_unregister_files(NULL) == -1);
+TEST(request_unregister_null_files) {
+    assert(aura_request_unregister(NULL, AURA_REG_FILES) == -1);
     assert(errno == EINVAL);
 }
 
@@ -951,7 +951,7 @@ TEST(deferred_unregister_buffers) {
     assert(rc == 0);
 
     /* Request deferred unregister */
-    rc = aura_request_unregister_buffers(engine);
+    rc = aura_request_unregister(engine, AURA_REG_BUFFERS);
     assert(rc == 0);
 
     /* Poll to finalize the deferred unregistration (no in-flight ops) */
@@ -975,7 +975,7 @@ TEST(deferred_unregister_files) {
     int rc = aura_register_files(engine, &test_fd, 1);
     assert(rc == 0);
 
-    rc = aura_request_unregister_files(engine);
+    rc = aura_request_unregister(engine, AURA_REG_FILES);
     assert(rc == 0);
 
     /* Poll to finalize */
@@ -2152,18 +2152,18 @@ int main(void) {
     RUN_TEST(read_fixed_no_registration);
     RUN_TEST(write_fixed_no_registration);
     RUN_TEST(register_buffers_and_use);
-    RUN_TEST(unregister_buffers_not_registered);
+    RUN_TEST(unregister_reg_buffers_not_registered);
 
     /* Registered files */
     RUN_TEST(register_files_null_args);
     RUN_TEST(register_files_and_io);
     RUN_TEST(update_file_null_args);
     RUN_TEST(update_file_out_of_range);
-    RUN_TEST(unregister_files_not_registered);
+    RUN_TEST(unregister_reg_files_not_registered);
 
     /* Deferred unregister */
-    RUN_TEST(request_unregister_buffers_null);
-    RUN_TEST(request_unregister_files_null);
+    RUN_TEST(request_unregister_null_buffers);
+    RUN_TEST(request_unregister_null_files);
     RUN_TEST(deferred_unregister_buffers);
     RUN_TEST(deferred_unregister_files);
 

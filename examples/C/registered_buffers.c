@@ -235,8 +235,8 @@ int main(void) {
     printf("This pattern allows safe unregister from callback context...\n");
 
     /* Request deferred unregister (returns immediately) */
-    if (aura_request_unregister_buffers(engine_reg) < 0) {
-        perror("aura_request_unregister_buffers");
+    if (aura_request_unregister(engine_reg, AURA_REG_BUFFERS) < 0) {
+        perror("aura_request_unregister");
     } else {
         printf("  Unregister requested (will complete when in-flight ops drain)\n");
     }

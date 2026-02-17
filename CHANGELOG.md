@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- **Registration API consolidated**: Removed `aura_unregister_buffers()`, `aura_unregister_files()`, `aura_request_unregister_buffers()`, `aura_request_unregister_files()`. Use `aura_unregister(engine, type)` and `aura_request_unregister(engine, type)` with `aura_reg_type_t` enum (`AURA_REG_BUFFERS`, `AURA_REG_FILES`)
+- **`aura_get_stats()` returns `int`**: Was `void`. Now returns `0` on success, `-1` with `errno=EINVAL` on NULL/invalid input
+
+### Added
+- **Diagnostic APIs**: `aura_get_fatal_error()` (check if engine has latched fatal error), `aura_in_callback_context()` (detect if current thread is inside a completion callback), `aura_histogram_percentile()` (compute latency percentiles from histogram data)
+- **C++ Engine movability**: `aura::Engine` is now move-constructible and move-assignable (must not move while event loop methods are executing on another thread)
+- **C++ wrappers**: `Engine::fatal_error()`, `Engine::in_callback_context()`, `Engine::unregister()`, `Engine::request_unregister()`, `Histogram::percentile()`
+- **`[[nodiscard]]`** on `async_read`, `async_write`, `async_fsync`, `async_fdatasync` return types — prevents accidentally discarding awaitables
+
+### Changed
+- **Documentation overhaul**: Added THREADING MODEL section, CALLBACK SAFETY section (allowed/forbidden operations), per-errno documentation for submission functions, corrected request handle lifetime docs, improved `aura_drain()` and `aura_update_file()` partial-failure docs
+- C++ `Engine::get_stats()` now throws `Error` on failure instead of silently succeeding on invalid input
+- Rust `Engine::stats()` now returns `Result<Stats>` instead of `Stats`
+
 ## [0.4.0] - 2026-02-15
 
 ### Breaking Changes

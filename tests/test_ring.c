@@ -181,7 +181,7 @@ static void unregister_in_callback(aura_request_t *req, ssize_t result, void *us
     callback_called = 1;
     callback_result = result;
 
-    ctx->unregister_rc = aura_unregister_buffers(ctx->engine);
+    ctx->unregister_rc = aura_unregister(ctx->engine, AURA_REG_BUFFERS);
 
     aura_request_t *nested =
         aura_read(ctx->engine, ctx->fd, aura_buf_fixed(0, 0), 64, 0, NULL, NULL);
@@ -223,7 +223,7 @@ static void request_unregister_files_in_callback(aura_request_t *req, ssize_t re
     callback_called = 1;
     callback_result = result;
 
-    ctx->request_rc = aura_request_unregister_files(ctx->engine);
+    ctx->request_rc = aura_request_unregister(ctx->engine, AURA_REG_FILES);
     ctx->update_rc = aura_update_file(ctx->engine, 0, -1);
     ctx->update_errno = (ctx->update_rc == 0) ? 0 : errno;
 }
@@ -653,11 +653,11 @@ TEST(registered_buffers_basic) {
     assert(((char *)buf1)[0] == 'A'); /* Verify data was read into buf1 */
 
     /* Unregister */
-    ret = aura_unregister_buffers(engine);
+    ret = aura_unregister(engine, AURA_REG_BUFFERS);
     assert(ret == 0);
 
     /* Unregister again should be no-op */
-    ret = aura_unregister_buffers(engine);
+    ret = aura_unregister(engine, AURA_REG_BUFFERS);
     assert(ret == 0);
 
     free(buf1);
@@ -751,7 +751,7 @@ TEST(registered_buffers_request_deferred_unregister) {
     assert(r1 != NULL);
     assert(r2 != NULL);
 
-    ret = aura_request_unregister_buffers(engine);
+    ret = aura_request_unregister(engine, AURA_REG_BUFFERS);
     assert(ret == 0);
 
     errno = 0;
@@ -816,7 +816,7 @@ TEST(registered_buffers_write_fixed) {
     assert(read(test_fd, verify, 4096) > 0);
     assert(verify[0] == 'Z');
 
-    aura_unregister_buffers(engine);
+    aura_unregister(engine, AURA_REG_BUFFERS);
     free(buf);
     aura_destroy(engine);
     teardown();
@@ -852,7 +852,7 @@ TEST(registered_buffers_offset) {
     assert(((char *)buf)[0] == 0);
     assert(((char *)buf)[1024] == 'A');
 
-    aura_unregister_buffers(engine);
+    aura_unregister(engine, AURA_REG_BUFFERS);
     free(buf);
     aura_destroy(engine);
     teardown();
@@ -881,7 +881,7 @@ TEST(registered_buffers_invalid) {
     req = aura_read(engine, 0, aura_buf_fixed(0, 1024), 4096, 0, NULL, NULL);
     assert(req == NULL && errno == EOVERFLOW);
 
-    aura_unregister_buffers(engine);
+    aura_unregister(engine, AURA_REG_BUFFERS);
     free(buf);
     aura_destroy(engine);
 }
@@ -921,11 +921,11 @@ TEST(registered_files_basic) {
     assert(ret == -1 && errno == EBUSY);
 
     /* Unregister */
-    ret = aura_unregister_files(engine);
+    ret = aura_unregister(engine, AURA_REG_FILES);
     assert(ret == 0);
 
     /* Unregister again should be no-op */
-    ret = aura_unregister_files(engine);
+    ret = aura_unregister(engine, AURA_REG_FILES);
     assert(ret == 0);
 
     aura_destroy(engine);
@@ -961,7 +961,7 @@ TEST(registered_files_update) {
     ret = aura_update_file(engine, -1, test_fd);
     assert(ret == -1 && errno == EINVAL);
 
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     aura_destroy(engine);
     teardown();
 }
@@ -1032,7 +1032,7 @@ TEST(registered_files_callback_request_unregister) {
     /* File table should be unregistered after callback path. */
     ret = aura_register_files(engine, fds, 1);
     assert(ret == 0);
-    ret = aura_unregister_files(engine);
+    ret = aura_unregister(engine, AURA_REG_FILES);
     assert(ret == 0);
 
     free(buf);
@@ -1062,7 +1062,7 @@ TEST(register_buffers_overflow_count) {
     assert(large_iovs != NULL);
     ret = aura_register_buffers(engine, large_iovs, large_count);
     if (ret == 0) {
-        aura_unregister_buffers(engine);
+        aura_unregister(engine, AURA_REG_BUFFERS);
     }
     free(large_iovs);
 
@@ -1088,7 +1088,7 @@ TEST(register_files_overflow_count) {
     assert(large_fds != NULL);
     ret = aura_register_files(engine, large_fds, large_count);
     if (ret == 0) {
-        aura_unregister_files(engine);
+        aura_unregister(engine, AURA_REG_FILES);
     }
     free(large_fds);
 

@@ -168,8 +168,13 @@ impl Engine {
     }
 
     /// Unregister previously registered buffers
+    ///
+    /// If called from a completion callback, automatically degrades to the
+    /// deferred (non-blocking) path.
     pub fn unregister_buffers(&self) -> Result<()> {
-        let ret = unsafe { aura_sys::aura_unregister_buffers(self.inner.raw()) };
+        let ret = unsafe {
+            aura_sys::aura_unregister(self.inner.raw(), aura_sys::aura_reg_type_t_AURA_REG_BUFFERS)
+        };
         if ret == 0 {
             Ok(())
         } else {
@@ -179,8 +184,12 @@ impl Engine {
 
     /// Request deferred unregister of registered buffers (callback-safe)
     pub fn request_unregister_buffers(&self) -> Result<()> {
-        let ret =
-            unsafe { aura_sys::aura_request_unregister_buffers(self.inner.raw()) };
+        let ret = unsafe {
+            aura_sys::aura_request_unregister(
+                self.inner.raw(),
+                aura_sys::aura_reg_type_t_AURA_REG_BUFFERS,
+            )
+        };
         if ret == 0 {
             Ok(())
         } else {
@@ -219,8 +228,13 @@ impl Engine {
     }
 
     /// Unregister previously registered files
+    ///
+    /// If called from a completion callback, automatically degrades to the
+    /// deferred (non-blocking) path.
     pub fn unregister_files(&self) -> Result<()> {
-        let ret = unsafe { aura_sys::aura_unregister_files(self.inner.raw()) };
+        let ret = unsafe {
+            aura_sys::aura_unregister(self.inner.raw(), aura_sys::aura_reg_type_t_AURA_REG_FILES)
+        };
         if ret == 0 {
             Ok(())
         } else {
@@ -230,8 +244,12 @@ impl Engine {
 
     /// Request deferred unregister of registered files (callback-safe)
     pub fn request_unregister_files(&self) -> Result<()> {
-        let ret =
-            unsafe { aura_sys::aura_request_unregister_files(self.inner.raw()) };
+        let ret = unsafe {
+            aura_sys::aura_request_unregister(
+                self.inner.raw(),
+                aura_sys::aura_reg_type_t_AURA_REG_FILES,
+            )
+        };
         if ret == 0 {
             Ok(())
         } else {
@@ -643,10 +661,20 @@ impl Engine {
     // =========================================================================
 
     /// Get current engine statistics
-    pub fn stats(&self) -> Stats {
+    pub fn stats(&self) -> Result<Stats> {
         let mut inner: aura_sys::aura_stats_t = unsafe { std::mem::zeroed() };
-        unsafe { aura_sys::aura_get_stats(self.inner.raw(), &mut inner, std::mem::size_of::<aura_sys::aura_stats_t>()) };
-        Stats::new(inner)
+        let ret = unsafe {
+            aura_sys::aura_get_stats(
+                self.inner.raw(),
+                &mut inner,
+                std::mem::size_of::<aura_sys::aura_stats_t>(),
+            )
+        };
+        if ret == 0 {
+            Ok(Stats::new(inner))
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
     }
 
     /// Get number of rings in the engine
@@ -700,10 +728,34 @@ impl Engine {
     }
 
     /// Get buffer pool statistics
-    pub fn buffer_stats(&self) -> crate::stats::BufferStats {
+    pub fn buffer_stats(&self) -> Result<crate::stats::BufferStats> {
         let mut inner: aura_sys::aura_buffer_stats_t = unsafe { std::mem::zeroed() };
-        unsafe { aura_sys::aura_get_buffer_stats(self.inner.raw(), &mut inner) };
-        crate::stats::BufferStats::new(inner)
+        let ret = unsafe { aura_sys::aura_get_buffer_stats(self.inner.raw(), &mut inner) };
+        if ret == 0 {
+            Ok(crate::stats::BufferStats::new(inner))
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
+    // =========================================================================
+    // Diagnostics
+    // =========================================================================
+
+    /// Check if the engine has a fatal error
+    ///
+    /// Once a fatal error is latched (e.g., io_uring ring fd becomes invalid),
+    /// all subsequent submissions fail with `ESHUTDOWN`. Use this to distinguish
+    /// a permanently broken engine from transient `EAGAIN`.
+    ///
+    /// Returns `Ok(0)` if healthy, `Ok(errno)` if fatally broken.
+    pub fn get_fatal_error(&self) -> Result<i32> {
+        let ret = unsafe { aura_sys::aura_get_fatal_error(self.inner.raw()) };
+        if ret >= 0 {
+            Ok(ret)
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
     }
 }
 
@@ -725,4 +777,12 @@ pub fn version() -> &'static str {
 /// Format: (major * 10000 + minor * 100 + patch)
 pub fn version_int() -> i32 {
     unsafe { aura_sys::aura_version_int() }
+}
+
+/// Check if the current thread is inside a completion callback
+///
+/// Useful for libraries building on AuraIO to choose between synchronous
+/// and deferred code paths (e.g., `unregister_buffers` vs `request_unregister_buffers`).
+pub fn in_callback_context() -> bool {
+    unsafe { aura_sys::aura_in_callback_context() }
 }

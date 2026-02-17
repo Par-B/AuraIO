@@ -104,7 +104,7 @@ fn run_write_test(filename: &str, use_direct: bool) -> Result<()> {
     println!("Total: {:.2} MB, Throughput: {:.2} MB/s", total_mb, throughput);
 
     // Get engine stats
-    let stats = engine.stats();
+    let stats = engine.stats()?;
     println!("P99 latency: {:.2} ms", stats.p99_latency_ms());
     println!("Optimal in-flight: {}", stats.optimal_in_flight());
 

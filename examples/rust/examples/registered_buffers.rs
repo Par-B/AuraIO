@@ -129,7 +129,7 @@ fn main() -> Result<()> {
 
         unreg_time = run_benchmark(&engine_unreg, fd, false, &unreg_buffers)?;
 
-        let unreg_stats = engine_unreg.stats();
+        let unreg_stats = engine_unreg.stats()?;
 
         println!("  Time: {:.2} ms", unreg_time);
         println!(
@@ -174,7 +174,7 @@ fn main() -> Result<()> {
 
         reg_time = run_benchmark(&engine_reg, fd, true, &reg_buffers)?;
 
-        let reg_stats = engine_reg.stats();
+        let reg_stats = engine_reg.stats()?;
 
         println!("  Time: {:.2} ms", reg_time);
         println!(

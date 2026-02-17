@@ -203,7 +203,7 @@ int main() {
             std::cout << "This pattern allows safe unregister from callback context...\n";
 
             // Request deferred unregister (returns immediately)
-            engine_reg.request_unregister_buffers();
+            engine_reg.request_unregister(AURA_REG_BUFFERS);
             std::cout << "  Unregister requested (will complete when in-flight ops drain)\n";
 
             // Wait a bit to ensure unregister completes

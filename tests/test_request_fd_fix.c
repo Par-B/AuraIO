@@ -144,7 +144,7 @@ static void test_request_fd_with_registered_files(void) {
         fail(test_name, "Failed to submit reads");
         if (rbuf1) aura_buffer_free(engine, rbuf1);
         if (rbuf2) aura_buffer_free(engine, rbuf2);
-        aura_unregister_files(engine);
+        aura_unregister(engine, AURA_REG_FILES);
         close(fd1);
         close(fd2);
         unlink(template1);
@@ -193,7 +193,7 @@ static void test_request_fd_with_registered_files(void) {
     aura_drain(engine, 1000);
     aura_buffer_free(engine, rbuf1);
     aura_buffer_free(engine, rbuf2);
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     close(fd1);
     close(fd2);
     unlink(template1);
@@ -238,7 +238,7 @@ static void test_request_fd_fsync_registered(void) {
 
     if (!req) {
         fail(test_name, "Failed to submit fsync");
-        aura_unregister_files(engine);
+        aura_unregister(engine, AURA_REG_FILES);
         close(fd);
         unlink(template);
         aura_destroy(engine);
@@ -252,7 +252,7 @@ static void test_request_fd_fsync_registered(void) {
         snprintf(msg, sizeof(msg), "Expected fd %d, got %d", fd, returned_fd);
         fail(test_name, msg);
         aura_drain(engine, 1000);
-        aura_unregister_files(engine);
+        aura_unregister(engine, AURA_REG_FILES);
         close(fd);
         unlink(template);
         aura_destroy(engine);
@@ -260,7 +260,7 @@ static void test_request_fd_fsync_registered(void) {
     }
 
     aura_drain(engine, 1000);
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     close(fd);
     unlink(template);
     aura_destroy(engine);

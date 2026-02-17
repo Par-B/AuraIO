@@ -110,7 +110,7 @@ cd examples/rust && cargo build --examples
 **[registered_buffers.c](C/registered_buffers.c)** ⭐ NEW - Zero-copy optimization
 - Pre-registers buffers with `aura_register_buffers()`
 - Uses `aura_buf_fixed()` for zero-copy I/O
-- Demonstrates deferred unregister pattern (`aura_request_unregister_buffers()`)
+- Demonstrates deferred unregister pattern (`aura_request_unregister(engine, AURA_REG_BUFFERS)`)
 - Includes performance comparison vs unregistered buffers
 - **When to use**:
   - ✓ Same buffers reused 1000+ times
@@ -200,7 +200,7 @@ cd examples/rust && cargo build --examples
 **[registered_buffers.cpp](cpp/registered_buffers.cpp)** ⭐ NEW - Zero-copy optimization (C++)
 - Pre-registers buffers with `engine.register_buffers(std::span<const iovec>)`
 - Uses `auraio::buf_fixed(idx, offset)` for zero-copy I/O
-- Demonstrates deferred unregister pattern (`engine.request_unregister_buffers()`)
+- Demonstrates deferred unregister pattern (`engine.request_unregister(AURA_REG_BUFFERS)`)
 - Includes performance comparison vs unregistered buffers
 - RAII automatic cleanup when `Engine` and `Buffer` objects go out of scope
 - **When to use**:
@@ -459,7 +459,7 @@ All examples automatically benefit from recent performance optimizations in Aura
 - **Never** call `aura_destroy()` from a callback
 - **Never** use request handle after callback starts
 - **Always** keep buffers valid until callback completes
-- **Prefer** `aura_request_unregister_buffers()` over `aura_unregister_buffers()` in callbacks
+- **Prefer** `aura_request_unregister(engine, AURA_REG_BUFFERS)` over `aura_unregister(engine, AURA_REG_BUFFERS)` in callbacks
 
 ---
 

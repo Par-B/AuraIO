@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     log_emit(LogLevel::Info, "read completed successfully");
 
     // --- Step 4: Show stats ----------------------------------------------
-    let stats = engine.stats();
+    let stats = engine.stats()?;
     println!("\nEngine stats:");
     println!("  Operations completed: {}", stats.ops_completed());
     println!("  P99 latency: {:.3} ms", stats.p99_latency_ms());

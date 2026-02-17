@@ -20,7 +20,7 @@ const NUM_OPS: usize = 20;
 const CONCURRENT_BUFS: usize = 16;
 
 fn print_stats(config_name: &str, engine: &Engine, elapsed_ms: f64) {
-    let stats = engine.stats();
+    let stats = engine.stats().unwrap();
 
     println!("\n{} Configuration:", config_name);
     println!("  Elapsed time: {:.2} ms", elapsed_ms);

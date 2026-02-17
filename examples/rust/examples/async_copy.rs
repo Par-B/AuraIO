@@ -100,7 +100,7 @@ fn main() -> Result<()> {
     }
 
     // Engine stats
-    let stats = engine.stats();
+    let stats = engine.stats()?;
     println!("\nEngine statistics:");
     println!("  Ops completed:     {}", stats.ops_completed());
     println!("  P99 latency:       {:.2} ms", stats.p99_latency_ms());

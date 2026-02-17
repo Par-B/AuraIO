@@ -398,7 +398,7 @@ TEST(close_registered_file) {
     assert(st.result == 0);
 
     close(dummy_fd);
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     aura_destroy(engine);
 }
 
@@ -428,7 +428,7 @@ TEST(fallocate_registered_file) {
     assert(fstat(fd, &sb) == 0);
     assert(sb.st_size == 64 * 1024);
 
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     close(fd);
     aura_destroy(engine);
 }
@@ -465,7 +465,7 @@ TEST(ftruncate_registered_file) {
         assert(sb.st_size == 512);
     }
 
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     close(fd);
     aura_destroy(engine);
 }
@@ -495,7 +495,7 @@ TEST(sync_file_range_registered_file) {
     run_until_done(engine, &st);
     assert(st.result == 0);
 
-    aura_unregister_files(engine);
+    aura_unregister(engine, AURA_REG_FILES);
     close(fd);
     aura_destroy(engine);
 }

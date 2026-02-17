@@ -92,7 +92,7 @@ fn main() -> Result<()> {
     }
 
     // Get statistics
-    let stats = engine.stats();
+    let stats = engine.stats()?;
     println!("\nEngine statistics:");
     println!("  Ops completed:     {}", stats.ops_completed());
     println!("  Bytes transferred: {}", stats.bytes_transferred());
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
     }
 
     // Buffer pool statistics (demonstrates buffer_stats())
-    let buf_stats = engine.buffer_stats();
+    let buf_stats = engine.buffer_stats()?;
     println!("\nBuffer Pool Statistics:");
     println!("  Total allocated:  {} bytes", buf_stats.total_allocated_bytes());
     println!("  Buffer count:     {}", buf_stats.total_buffers());
