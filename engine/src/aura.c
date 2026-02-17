@@ -246,9 +246,25 @@ typedef struct {
     int op_idx;
 } submit_ctx_t;
 
+/*
+ * File resolution guard for RAII-style handling of registered file lookup.
+ * Used by I/O functions to manage rwlock acquisition/release around file resolution.
+ */
+typedef struct {
+    aura_engine_t *engine;
+    int submit_fd;
+    bool uses_registered_file;
+    bool locked;
+} file_resolve_guard_t;
+
 /* Forward declarations for internal helpers used by aura_destroy() */
 static int request_unregister_buffers(aura_engine_t *engine);
 static int request_unregister_files(aura_engine_t *engine);
+
+/* Forward declarations for submit context helpers */
+static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll);
+static void submit_end(submit_ctx_t *ctx);
+static void submit_abort(submit_ctx_t *ctx);
 
 static bool flush_error_is_fatal(int err) {
     return err != EAGAIN && err != EBUSY && err != EINTR;
@@ -297,6 +313,179 @@ static bool resolve_registered_file_locked(const aura_engine_t *engine, int fd, 
     }
 
     return false;
+}
+
+/*
+ * Begin file resolution: check if fd is registered, acquire lock if needed.
+ * Returns a guard that must be cleaned up with resolve_file_end().
+ */
+static file_resolve_guard_t resolve_file_begin(aura_engine_t *engine, int fd) {
+    file_resolve_guard_t guard = {
+        .engine = engine, .submit_fd = fd, .uses_registered_file = false, .locked = false
+    };
+
+    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        pthread_rwlock_rdlock(&engine->reg_lock);
+        guard.locked = true;
+        guard.uses_registered_file = resolve_registered_file_locked(engine, fd, &guard.submit_fd);
+
+        /* If file not registered, release lock immediately */
+        if (!guard.uses_registered_file) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+            guard.locked = false;
+        }
+    }
+
+    return guard;
+}
+
+/*
+ * End file resolution: release lock if still held.
+ */
+static void resolve_file_end(file_resolve_guard_t *guard) {
+    if (guard->locked) {
+        pthread_rwlock_unlock(&guard->engine->reg_lock);
+        guard->locked = false;
+    }
+}
+
+/*
+ * Function pointer types for ring submit operations.
+ */
+typedef int (*ring_submit_fn_t)(ring_ctx_t *ctx, aura_request_t *req);
+typedef int (*ring_submit_fixed_fn_t)(ring_ctx_t *ctx, aura_request_t *req);
+
+/*
+ * Helper for unregistered buffer I/O (used by aura_read and aura_write).
+ */
+static aura_request_t *submit_unregistered_io(aura_engine_t *engine, int fd, void *buffer,
+                                              size_t len, off_t offset, aura_callback_t callback,
+                                              void *user_data, ring_submit_fn_t submit_fn) {
+
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
+
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
+    if (!ctx.req) {
+        resolve_file_end(&file_guard);
+        return NULL;
+    }
+
+    ctx.req->fd = file_guard.submit_fd;
+    ctx.req->original_fd = fd;
+    ctx.req->len = len;
+    ctx.req->offset = offset;
+    ctx.req->callback = callback;
+    ctx.req->user_data = user_data;
+    ctx.req->ring_idx = ctx.ring->ring_idx;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
+
+    ctx.req->buffer = buffer;
+    if (submit_fn(ctx.ring, ctx.req) != 0) {
+        submit_abort(&ctx);
+        resolve_file_end(&file_guard);
+        return NULL;
+    }
+
+    submit_end(&ctx);
+    resolve_file_end(&file_guard);
+    return ctx.req;
+}
+
+/*
+ * Registered buffer info returned by validation.
+ */
+typedef struct {
+    struct iovec *reg_iov;
+} registered_buf_info_t;
+
+/*
+ * Validate registered buffer bounds (used by aura_read and aura_write).
+ * Returns reg_iov on success, NULL on error (with errno set and lock released).
+ */
+static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, int buf_index,
+                                                        size_t buf_offset, size_t len) {
+
+    registered_buf_info_t info = { .reg_iov = NULL };
+
+    pthread_rwlock_rdlock(&engine->reg_lock);
+
+    if (!engine->buffers_registered) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        errno = ENOENT; /* No buffers registered */
+        return info;
+    }
+
+    if (engine->buffers_unreg_pending) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        errno = EBUSY; /* Unregister in progress */
+        return info;
+    }
+
+    if (buf_index < 0 || buf_index >= engine->registered_buffer_count) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        errno = EINVAL;
+        return info;
+    }
+
+    struct iovec *reg_iov = &engine->registered_buffers[buf_index];
+
+    /* Overflow-safe bounds check: avoid offset + len which can wrap */
+    if (buf_offset >= reg_iov->iov_len || len > reg_iov->iov_len - buf_offset) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        errno = EOVERFLOW;
+        return info;
+    }
+
+    /* Success: keep lock held, return iov */
+    info.reg_iov = reg_iov;
+    return info;
+}
+
+/*
+ * Submit registered buffer I/O (used by aura_read and aura_write).
+ * Assumes engine->reg_lock is already held (from validate_registered_buffer).
+ */
+static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd,
+                                                   struct iovec *reg_iov, int buf_index,
+                                                   size_t buf_offset, size_t len, off_t offset,
+                                                   aura_callback_t callback, void *user_data,
+                                                   ring_submit_fixed_fn_t submit_fn) {
+
+    submit_ctx_t ctx = submit_begin(engine, false);
+    if (!ctx.req) {
+        pthread_rwlock_unlock(&engine->reg_lock);
+        return NULL;
+    }
+
+    int submit_fd = fd;
+    bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+
+    ctx.req->fd = submit_fd;
+    ctx.req->original_fd = fd;
+    ctx.req->len = len;
+    ctx.req->offset = offset;
+    ctx.req->callback = callback;
+    ctx.req->user_data = user_data;
+    ctx.req->ring_idx = ctx.ring->ring_idx;
+    ctx.req->uses_registered_buffer = true;
+    ctx.req->uses_registered_file = use_registered_file;
+
+    atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+
+    ctx.req->buffer = (char *)reg_iov->iov_base + buf_offset;
+    ctx.req->buf_index = buf_index;
+    ctx.req->buf_offset = buf_offset;
+
+    if (submit_fn(ctx.ring, ctx.req) != 0) {
+        atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+        submit_abort(&ctx);
+        pthread_rwlock_unlock(&engine->reg_lock);
+        return NULL;
+    }
+
+    submit_end(&ctx);
+    pthread_rwlock_unlock(&engine->reg_lock);
+    return ctx.req;
 }
 
 static uint32_t fixed_buf_inflight_total(const aura_engine_t *engine) {
@@ -773,106 +962,17 @@ aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t 
             errno = EINVAL;
             return NULL;
         }
-
-        int submit_fd = fd;
-        bool use_registered_file = false;
-        if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-            pthread_rwlock_rdlock(&engine->reg_lock);
-            use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-            if (!use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-        }
-
-        submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
-        if (!ctx.req) {
-            if (use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-            return NULL;
-        }
-
-        ctx.req->fd = submit_fd;
-        ctx.req->original_fd = fd;
-        ctx.req->len = len;
-        ctx.req->offset = offset;
-        ctx.req->callback = callback;
-        ctx.req->user_data = user_data;
-        ctx.req->ring_idx = ctx.ring->ring_idx;
-        ctx.req->uses_registered_file = use_registered_file;
-
-        ctx.req->buffer = buf.u.ptr;
-        if (ring_submit_read(ctx.ring, ctx.req) != 0) {
-            submit_abort(&ctx);
-            if (use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-            return NULL;
-        }
-
-        submit_end(&ctx);
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-        return ctx.req;
+        return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, callback, user_data,
+                                      ring_submit_read);
     } else if (buf.type == AURA_BUF_REGISTERED) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        if (!engine->buffers_registered) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = ENOENT; /* No buffers registered */
+        registered_buf_info_t buf_info =
+            validate_registered_buffer(engine, buf.u.fixed.index, buf.u.fixed.offset, len);
+        if (!buf_info.reg_iov) {
             return NULL;
         }
-        if (engine->buffers_unreg_pending) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EBUSY; /* Unregister in progress */
-            return NULL;
-        }
-        if (buf.u.fixed.index < 0 || buf.u.fixed.index >= engine->registered_buffer_count) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EINVAL;
-            return NULL;
-        }
-        struct iovec *reg_iov = &engine->registered_buffers[buf.u.fixed.index];
-        /* Overflow-safe bounds check: avoid offset + len which can wrap */
-        if (buf.u.fixed.offset >= reg_iov->iov_len || len > reg_iov->iov_len - buf.u.fixed.offset) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EOVERFLOW;
-            return NULL;
-        }
-        submit_ctx_t ctx = submit_begin(engine, false);
-        if (!ctx.req) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            return NULL;
-        }
-
-        int submit_fd = fd;
-        bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-
-        ctx.req->fd = submit_fd;
-        ctx.req->original_fd = fd;
-        ctx.req->len = len;
-        ctx.req->offset = offset;
-        ctx.req->callback = callback;
-        ctx.req->user_data = user_data;
-        ctx.req->ring_idx = ctx.ring->ring_idx;
-        ctx.req->uses_registered_buffer = true;
-        ctx.req->uses_registered_file = use_registered_file;
-
-        atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-
-        ctx.req->buffer = (char *)reg_iov->iov_base + buf.u.fixed.offset;
-        ctx.req->buf_index = buf.u.fixed.index;
-        ctx.req->buf_offset = buf.u.fixed.offset;
-        if (ring_submit_read_fixed(ctx.ring, ctx.req) != 0) {
-            atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-            submit_abort(&ctx);
-            pthread_rwlock_unlock(&engine->reg_lock);
-            return NULL;
-        }
-
-        submit_end(&ctx);
-        pthread_rwlock_unlock(&engine->reg_lock);
-        return ctx.req;
+        return submit_registered_buffer_io(engine, fd, buf_info.reg_iov, buf.u.fixed.index,
+                                           buf.u.fixed.offset, len, offset, callback, user_data,
+                                           ring_submit_read_fixed);
     } else {
         errno = EINVAL; /* Invalid buffer type */
         return NULL;
@@ -891,106 +991,17 @@ aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t
             errno = EINVAL;
             return NULL;
         }
-
-        int submit_fd = fd;
-        bool use_registered_file = false;
-        if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-            pthread_rwlock_rdlock(&engine->reg_lock);
-            use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-            if (!use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-        }
-
-        submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
-        if (!ctx.req) {
-            if (use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-            return NULL;
-        }
-
-        ctx.req->fd = submit_fd;
-        ctx.req->original_fd = fd;
-        ctx.req->len = len;
-        ctx.req->offset = offset;
-        ctx.req->callback = callback;
-        ctx.req->user_data = user_data;
-        ctx.req->ring_idx = ctx.ring->ring_idx;
-        ctx.req->uses_registered_file = use_registered_file;
-
-        ctx.req->buffer = buf.u.ptr;
-        if (ring_submit_write(ctx.ring, ctx.req) != 0) {
-            submit_abort(&ctx);
-            if (use_registered_file) {
-                pthread_rwlock_unlock(&engine->reg_lock);
-            }
-            return NULL;
-        }
-
-        submit_end(&ctx);
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-        return ctx.req;
+        return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, callback, user_data,
+                                      ring_submit_write);
     } else if (buf.type == AURA_BUF_REGISTERED) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        if (!engine->buffers_registered) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = ENOENT; /* No buffers registered */
+        registered_buf_info_t buf_info =
+            validate_registered_buffer(engine, buf.u.fixed.index, buf.u.fixed.offset, len);
+        if (!buf_info.reg_iov) {
             return NULL;
         }
-        if (engine->buffers_unreg_pending) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EBUSY; /* Unregister in progress */
-            return NULL;
-        }
-        if (buf.u.fixed.index < 0 || buf.u.fixed.index >= engine->registered_buffer_count) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EINVAL;
-            return NULL;
-        }
-        struct iovec *reg_iov = &engine->registered_buffers[buf.u.fixed.index];
-        /* Overflow-safe bounds check: avoid offset + len which can wrap */
-        if (buf.u.fixed.offset >= reg_iov->iov_len || len > reg_iov->iov_len - buf.u.fixed.offset) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            errno = EOVERFLOW;
-            return NULL;
-        }
-        submit_ctx_t ctx = submit_begin(engine, false);
-        if (!ctx.req) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-            return NULL;
-        }
-
-        int submit_fd = fd;
-        bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-
-        ctx.req->fd = submit_fd;
-        ctx.req->original_fd = fd;
-        ctx.req->len = len;
-        ctx.req->offset = offset;
-        ctx.req->callback = callback;
-        ctx.req->user_data = user_data;
-        ctx.req->ring_idx = ctx.ring->ring_idx;
-        ctx.req->uses_registered_buffer = true;
-        ctx.req->uses_registered_file = use_registered_file;
-
-        atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-
-        ctx.req->buffer = (char *)reg_iov->iov_base + buf.u.fixed.offset;
-        ctx.req->buf_index = buf.u.fixed.index;
-        ctx.req->buf_offset = buf.u.fixed.offset;
-        if (ring_submit_write_fixed(ctx.ring, ctx.req) != 0) {
-            atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-            submit_abort(&ctx);
-            pthread_rwlock_unlock(&engine->reg_lock);
-            return NULL;
-        }
-
-        submit_end(&ctx);
-        pthread_rwlock_unlock(&engine->reg_lock);
-        return ctx.req;
+        return submit_registered_buffer_io(engine, fd, buf_info.reg_iov, buf.u.fixed.index,
+                                           buf.u.fixed.offset, len, offset, callback, user_data,
+                                           ring_submit_write_fixed);
     } else {
         errno = EINVAL; /* Invalid buffer type */
         return NULL;
@@ -1004,30 +1015,20 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     int ret;
     if (flags & AURA_FSYNC_DATASYNC) {
@@ -1038,16 +1039,12 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
 
     if (ret != 0) {
         submit_abort(&ctx);
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
-    }
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -1150,23 +1147,15 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->offset = offset;
     ctx.req->len = (size_t)len;
@@ -1174,16 +1163,16 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_fallocate(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -1194,35 +1183,27 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->len = (size_t)length;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_ftruncate(ctx.ring, ctx.req) != 0) {
         /* If liburing doesn't support ftruncate (ENOSYS), complete immediately with error */
         if (errno == ENOSYS) {
-            submit_end(&ctx);  /* Keep the request */
-            if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+            submit_end(&ctx); /* Keep the request */
+            resolve_file_end(&file_guard);
             /* Invoke callback immediately with ENOSYS */
             if (callback) {
                 callback(ctx.req, -ENOSYS, user_data);
@@ -1230,12 +1211,12 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
             return ctx.req;
         }
         submit_abort(&ctx);
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -1247,23 +1228,15 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->offset = offset;
     ctx.req->len = (size_t)nbytes;
@@ -1271,16 +1244,16 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_sync_file_range(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
-        if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) pthread_rwlock_unlock(&engine->reg_lock);
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -1296,25 +1269,15 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
@@ -1322,20 +1285,16 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_readv(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
-    }
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -1346,25 +1305,15 @@ aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *i
         return NULL;
     }
 
-    int submit_fd = fd;
-    bool use_registered_file = false;
-    if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
-        if (!use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
-    }
+    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
 
-    submit_ctx_t ctx = submit_begin(engine, !use_registered_file);
+    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
-    ctx.req->fd = submit_fd;
+    ctx.req->fd = file_guard.submit_fd;
     ctx.req->original_fd = fd;
     ctx.req->iov = iov;
     ctx.req->iovcnt = iovcnt;
@@ -1372,20 +1321,16 @@ aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *i
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
     ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = use_registered_file;
+    ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_writev(ctx.ring, ctx.req) != 0) {
         submit_abort(&ctx);
-        if (use_registered_file) {
-            pthread_rwlock_unlock(&engine->reg_lock);
-        }
+        resolve_file_end(&file_guard);
         return NULL;
     }
 
     submit_end(&ctx);
-    if (use_registered_file) {
-        pthread_rwlock_unlock(&engine->reg_lock);
-    }
+    resolve_file_end(&file_guard);
     return ctx.req;
 }
 
@@ -2098,7 +2043,6 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
     return (0);
 }
 
-
 /* ============================================================================
  * Statistics
  * ============================================================================
@@ -2237,8 +2181,8 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
     return 0;
 }
 
-int aura_get_histogram(const aura_engine_t *engine, int ring_idx,
-                       aura_histogram_t *hist, size_t hist_size) {
+int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
+                       size_t hist_size) {
     if (!engine || !hist || hist_size == 0) return -1;
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(hist, 0, hist_size < sizeof(*hist) ? hist_size : sizeof(*hist));
