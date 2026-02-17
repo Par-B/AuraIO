@@ -258,6 +258,46 @@ impl Engine {
     }
 
     // =========================================================================
+    // Private Helpers
+    // =========================================================================
+
+    /// Submit an I/O operation with callback handling (internal helper).
+    ///
+    /// Eliminates boilerplate for callback context creation, error handling,
+    /// and resource cleanup across all I/O submission methods.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - User callback to wrap in CallbackContext
+    /// * `ffi_call` - Closure that calls the FFI function with ctx_ptr
+    ///
+    /// # Returns
+    ///
+    /// `Ok(RequestHandle)` on successful submission, `Err(Error::Submission)` on failure.
+    fn submit_with_callback<F>(
+        &self,
+        callback: F,
+        ffi_call: impl FnOnce(*mut std::ffi::c_void) -> *mut aura_sys::aura_request_t,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = ffi_call(ctx_ptr);
+
+        if req.is_null() {
+            // Capture errno before drop, which could clobber it
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    // =========================================================================
     // Core I/O Operations
     // =========================================================================
 
@@ -308,10 +348,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_read(
                 self.inner.raw(),
                 fd,
@@ -321,16 +358,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            // Capture errno before drop, which could clobber it
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async write operation
@@ -353,10 +381,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_write(
                 self.inner.raw(),
                 fd,
@@ -366,15 +391,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async fsync operation
@@ -384,10 +401,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_fsync(
                 self.inner.raw(),
                 fd,
@@ -395,15 +409,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async fdatasync operation
@@ -413,10 +419,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_fsync(
                 self.inner.raw(),
                 fd,
@@ -424,15 +427,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async vectored read operation
@@ -456,10 +451,7 @@ impl Engine {
         if iovecs.len() > i32::MAX as usize {
             return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
         }
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_readv(
                 self.inner.raw(),
                 fd,
@@ -469,15 +461,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async vectored write operation
@@ -501,10 +485,7 @@ impl Engine {
         if iovecs.len() > i32::MAX as usize {
             return Err(Error::Io(io::Error::from_raw_os_error(libc::EINVAL)));
         }
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_writev(
                 self.inner.raw(),
                 fd,
@@ -514,15 +495,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     // =========================================================================
@@ -552,10 +525,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_openat(
                 self.inner.raw(),
                 dirfd,
@@ -565,15 +535,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async close operation
@@ -584,25 +546,9 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
-            aura_sys::aura_close(
-                self.inner.raw(),
-                fd,
-                Some(callback_trampoline),
-                ctx_ptr,
-            )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
+            aura_sys::aura_close(self.inner.raw(), fd, Some(callback_trampoline), ctx_ptr)
+        })
     }
 
     /// Submit an async statx operation
@@ -627,10 +573,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_statx(
                 self.inner.raw(),
                 dirfd,
@@ -641,15 +584,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async fallocate operation
@@ -674,10 +609,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_fallocate(
                 self.inner.raw(),
                 fd,
@@ -687,15 +619,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async ftruncate operation
@@ -711,10 +635,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_ftruncate(
                 self.inner.raw(),
                 fd,
@@ -722,15 +643,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     /// Submit an async sync_file_range operation
@@ -755,10 +668,7 @@ impl Engine {
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
-        let ctx = CallbackContext::new(callback);
-        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
-
-        let req = unsafe {
+        self.submit_with_callback(callback, |ctx_ptr| unsafe {
             aura_sys::aura_sync_file_range(
                 self.inner.raw(),
                 fd,
@@ -768,15 +678,7 @@ impl Engine {
                 Some(callback_trampoline),
                 ctx_ptr,
             )
-        };
-
-        if req.is_null() {
-            let err = io::Error::last_os_error();
-            unsafe { drop_context(ctx_ptr) };
-            Err(Error::Submission(err))
-        } else {
-            Ok(RequestHandle::new(req))
-        }
+        })
     }
 
     // =========================================================================

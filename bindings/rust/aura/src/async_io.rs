@@ -284,6 +284,31 @@ pub trait AsyncEngine {
 }
 
 impl AsyncEngine for Engine {
+    /// Submit an I/O operation with async Future handling (internal helper).
+    ///
+    /// Eliminates boilerplate for Future creation across all async methods.
+    ///
+    /// # Arguments
+    ///
+    /// * `submit_fn` - Closure that calls the sync submission method with the callback
+    ///
+    /// # Returns
+    ///
+    /// `Ok(IoFuture)` on successful submission, `Err(...)` on failure.
+    fn submit_async<F>(&self, submit_fn: F) -> Result<IoFuture>
+    where
+        F: FnOnce(Box<dyn FnOnce(Result<usize>) + Send + 'static>) -> Result<RequestHandle>,
+    {
+        let (callback, state, request_consumed) = create_io_callback();
+        let handle = submit_fn(callback)?;
+        Ok(IoFuture {
+            state,
+            engine: Arc::clone(&self.inner),
+            request: handle.as_ptr(),
+            request_consumed,
+        })
+    }
+
     unsafe fn async_read(
         &self,
         fd: RawFd,
@@ -291,14 +316,8 @@ impl AsyncEngine for Engine {
         len: usize,
         offset: i64,
     ) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = unsafe { self.read(fd, buf.into(), len, offset, callback)? };
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        let buf = buf.into();
+        self.submit_async(|callback| unsafe { self.read(fd, buf, len, offset, callback) })
     }
 
     unsafe fn async_write(
@@ -308,36 +327,16 @@ impl AsyncEngine for Engine {
         len: usize,
         offset: i64,
     ) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = unsafe { self.write(fd, buf.into(), len, offset, callback)? };
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        let buf = buf.into();
+        self.submit_async(|callback| unsafe { self.write(fd, buf, len, offset, callback) })
     }
 
     fn async_fsync(&self, fd: RawFd) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = self.fsync(fd, callback)?;
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        self.submit_async(|callback| self.fsync(fd, callback))
     }
 
     fn async_fdatasync(&self, fd: RawFd) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = self.fdatasync(fd, callback)?;
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        self.submit_async(|callback| self.fdatasync(fd, callback))
     }
 
     unsafe fn async_readv(
@@ -346,14 +345,7 @@ impl AsyncEngine for Engine {
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = unsafe { self.readv(fd, iovecs, offset, callback)? };
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        self.submit_async(|callback| unsafe { self.readv(fd, iovecs, offset, callback) })
     }
 
     unsafe fn async_writev(
@@ -362,14 +354,7 @@ impl AsyncEngine for Engine {
         iovecs: &[libc::iovec],
         offset: i64,
     ) -> Result<IoFuture> {
-        let (callback, state, request_consumed) = create_io_callback();
-        let handle = unsafe { self.writev(fd, iovecs, offset, callback)? };
-        Ok(IoFuture {
-            state,
-            engine: Arc::clone(&self.inner),
-            request: handle.as_ptr(),
-            request_consumed,
-        })
+        self.submit_async(|callback| unsafe { self.writev(fd, iovecs, offset, callback) })
     }
 }
 
