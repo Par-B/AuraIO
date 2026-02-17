@@ -552,11 +552,15 @@ int buffer_pool_init(buffer_pool_t *pool, size_t alignment) {
     return 0;
 }
 
-void buffer_pool_destroy(buffer_pool_t *pool) {
-    if (!pool) {
-        return;
-    }
-
+/**
+ * Phase 1: Mark pool destroyed and wait for in-flight operations to quiesce.
+ *
+ * Sets destroyed flag with memory_order_release to ensure all prior pool
+ * modifications are visible to threads checking the flag. Then waits for:
+ * - registrations_inflight: threads currently registering new caches
+ * - active_users: threads currently in shard alloc/free slow path
+ */
+static void cleanup_phase_1_mark_destroyed(buffer_pool_t *pool) {
     /* Mark pool as destroyed FIRST so new get_thread_cache() calls bail out.
      *
      * Known limitation: a thread that has already passed the destroyed check
@@ -577,7 +581,17 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
     while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
         sched_yield();
     }
+}
 
+/**
+ * Phase 2: Process all thread caches and coordinate cleanup.
+ *
+ * For each cache, coordinate with the TLS destructor via cleanup_mutex:
+ * - If thread exited: destructor handled cleanup, we just free the struct
+ * - If thread alive: we handle cleanup, orphan the cache (pool=NULL)
+ * - Racing with destructor: cleanup_mutex serializes, first one wins
+ */
+static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
     /* Process all thread caches.
      *
      * For each cache, coordinate with the TLS destructor via cleanup_mutex:
@@ -637,7 +651,15 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
             cache = next;
         }
     }
+}
 
+/**
+ * Phase 3: Destroy all shards and reset pool metadata.
+ *
+ * Safe to call after phase 2 completes - all caches have been processed
+ * and any racing destructors have finished flushing to shards.
+ */
+static void cleanup_phase_3_destroy_shards(buffer_pool_t *pool) {
     /* Destroy all shards (safe: any racing destructor that held cleanup_mutex
      * has already released it and finished flushing to shards above). */
     if (pool->shards) {
@@ -652,6 +674,16 @@ void buffer_pool_destroy(buffer_pool_t *pool) {
     pool->shard_mask = 0;
     atomic_store(&pool->total_allocated, 0);
     atomic_store(&pool->total_buffers, 0);
+}
+
+void buffer_pool_destroy(buffer_pool_t *pool) {
+    if (!pool) {
+        return;
+    }
+
+    cleanup_phase_1_mark_destroyed(pool);
+    cleanup_phase_2_process_caches(pool);
+    cleanup_phase_3_destroy_shards(pool);
 }
 
 void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
