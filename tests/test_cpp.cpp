@@ -900,7 +900,269 @@ TEST(coroutine_sequential) {
     ASSERT_EQ(total, 3072);
 }
 
+// --- Lifecycle coroutine tests ---
+
+aura::Task<int> async_openat_task(aura::Engine &engine, const char *path) {
+    int fd = co_await engine.async_openat(AT_FDCWD, path, O_RDONLY, 0);
+    co_return fd;
+}
+
+TEST(async_openat_basic) {
+    TempFile file(4096);
+
+    aura::Engine engine;
+    auto task = async_openat_task(engine, file.path());
+
+    task.resume();
+    while (!task.done()) {
+        engine.wait(100);
+    }
+
+    int fd = task.get();
+    ASSERT_GE(fd, 0);
+    ::close(fd);
+}
+
+aura::Task<void> async_close_task(aura::Engine &engine, int fd) {
+    co_await engine.async_close(fd);
+}
+
+TEST(async_close_basic) {
+    TempFile file(4096);
+    int fd = ::open(file.path(), O_RDONLY);
+    ASSERT_GE(fd, 0);
+
+    aura::Engine engine;
+    auto task = async_close_task(engine, fd);
+
+    task.resume();
+    while (!task.done()) {
+        engine.wait(100);
+    }
+
+    task.get();
+    // fd should now be closed - verify by trying to fstat
+    struct stat st;
+    ASSERT_EQ(fstat(fd, &st), -1);
+}
+
+aura::Task<void> async_fallocate_task(aura::Engine &engine, int fd, off_t len) {
+    co_await engine.async_fallocate(fd, 0, 0, len);
+}
+
+TEST(async_fallocate_basic) {
+    TempFile file(0); // start empty
+    file.reopen(O_RDWR);
+
+    aura::Engine engine;
+    auto task = async_fallocate_task(engine, file.fd(), 8192);
+
+    task.resume();
+    while (!task.done()) {
+        engine.wait(100);
+    }
+
+    task.get();
+
+    // Verify allocation
+    struct stat st;
+    ASSERT_EQ(fstat(file.fd(), &st), 0);
+    ASSERT_GE(st.st_size, 8192);
+}
+
 #endif // __has_include(<coroutine>)
+
+// =============================================================================
+// Lifecycle callback tests
+// =============================================================================
+
+TEST(openat_close_callback) {
+    TempFile file(4096);
+
+    aura::Engine engine;
+    bool open_done = false;
+    int opened_fd = -1;
+
+    (void)engine.openat(AT_FDCWD, file.path(), O_RDONLY, 0,
+                        [&](aura::Request &, ssize_t result) {
+                            opened_fd = static_cast<int>(result);
+                            open_done = true;
+                        });
+
+    while (!open_done) {
+        engine.wait(100);
+    }
+    ASSERT_GE(opened_fd, 0);
+
+    // Now close it async
+    bool close_done = false;
+    ssize_t close_result = -1;
+    (void)engine.close(opened_fd, [&](aura::Request &, ssize_t result) {
+        close_result = result;
+        close_done = true;
+    });
+
+    while (!close_done) {
+        engine.wait(100);
+    }
+    ASSERT_EQ(close_result, 0);
+}
+
+TEST(statx_callback) {
+    TempFile file(4096);
+
+    aura::Engine engine;
+    bool done = false;
+    struct statx stx {};
+
+    (void)engine.statx(AT_FDCWD, file.path(), 0, AURA_STATX_SIZE, &stx,
+                       [&](aura::Request &, ssize_t result) {
+                           (void)result;
+                           done = true;
+                       });
+
+    while (!done) {
+        engine.wait(100);
+    }
+    ASSERT_EQ(static_cast<off_t>(stx.stx_size), 4096);
+}
+
+TEST(fallocate_callback) {
+    TempFile file(0);
+    file.reopen(O_RDWR);
+
+    aura::Engine engine;
+    bool done = false;
+    ssize_t alloc_result = -1;
+
+    (void)engine.fallocate(file.fd(), 0, 0, 16384,
+                           [&](aura::Request &, ssize_t result) {
+                               alloc_result = result;
+                               done = true;
+                           });
+
+    while (!done) {
+        engine.wait(100);
+    }
+    ASSERT_EQ(alloc_result, 0);
+
+    struct stat st;
+    ASSERT_EQ(fstat(file.fd(), &st), 0);
+    ASSERT_GE(st.st_size, 16384);
+}
+
+TEST(ftruncate_callback) {
+    TempFile file(4096);
+    file.reopen(O_RDWR);
+
+    aura::Engine engine;
+    bool done = false;
+    ssize_t trunc_result = -1;
+
+    (void)engine.ftruncate(file.fd(), 1024,
+                           [&](aura::Request &, ssize_t result) {
+                               trunc_result = result;
+                               done = true;
+                           });
+
+    while (!done) {
+        engine.wait(100);
+    }
+
+    // ftruncate requires kernel 6.9+; allow ENOSYS
+    if (trunc_result == 0) {
+        struct stat st;
+        ASSERT_EQ(fstat(file.fd(), &st), 0);
+        ASSERT_EQ(st.st_size, 1024);
+    } else {
+        // Accept -ENOSYS on older kernels
+        ASSERT_EQ(trunc_result, -static_cast<ssize_t>(ENOSYS));
+    }
+}
+
+TEST(sync_file_range_callback) {
+    TempFile file(4096);
+    file.reopen(O_RDWR);
+
+    aura::Engine engine;
+    auto buffer = engine.allocate_buffer(4096);
+    std::memset(buffer.data(), 'X', 4096);
+
+    // Write some data first
+    bool write_done = false;
+    (void)engine.write(file.fd(), buffer, 4096, 0,
+                       [&](aura::Request &, ssize_t) { write_done = true; });
+    while (!write_done) {
+        engine.wait(100);
+    }
+
+    // Now sync the range
+    bool done = false;
+    ssize_t sync_result = -1;
+    (void)engine.sync_file_range(file.fd(), 0, 4096,
+                                 AURA_SYNC_RANGE_WRITE | AURA_SYNC_RANGE_WAIT_AFTER,
+                                 [&](aura::Request &, ssize_t result) {
+                                     sync_result = result;
+                                     done = true;
+                                 });
+
+    while (!done) {
+        engine.wait(100);
+    }
+    ASSERT_EQ(sync_result, 0);
+}
+
+// =============================================================================
+// Minor accessor tests
+// =============================================================================
+
+TEST(request_op_type) {
+    TempFile file(4096);
+    file.reopen(O_RDONLY);
+
+    aura::Engine engine;
+    auto buffer = engine.allocate_buffer(4096);
+
+    int observed_op = -1;
+    (void)engine.read(file.fd(), buffer, 4096, 0,
+                      [&](aura::Request &req, ssize_t) {
+                          observed_op = req.op_type();
+                      });
+
+    engine.wait();
+    ASSERT_EQ(observed_op, AURA_OP_READ);
+}
+
+TEST(options_single_thread) {
+    aura::Options opts;
+    const auto &copts = opts;
+    ASSERT(!copts.single_thread());
+
+    opts.single_thread(true);
+    ASSERT(copts.single_thread());
+
+    opts.single_thread(false);
+    ASSERT(!copts.single_thread());
+}
+
+TEST(stats_peak_in_flight) {
+    aura::Engine engine;
+    auto stats = engine.get_stats();
+    // Just verify the accessor compiles and returns something reasonable
+    ASSERT_GE(stats.peak_in_flight(), 0);
+
+    auto rs = engine.get_ring_stats(0);
+    ASSERT_GE(rs.peak_in_flight(), 0);
+}
+
+TEST(version_functions) {
+    const char *ver = aura::version();
+    ASSERT(ver != nullptr);
+    ASSERT(std::strlen(ver) > 0);
+
+    int ver_int = aura::version_int();
+    ASSERT_GT(ver_int, 0);
+}
 
 // =============================================================================
 // Main
@@ -955,7 +1217,20 @@ int main() {
     RUN_TEST(async_write_basic);
     RUN_TEST(async_fsync_basic);
     RUN_TEST(coroutine_sequential);
+    RUN_TEST(async_openat_basic);
+    RUN_TEST(async_close_basic);
+    RUN_TEST(async_fallocate_basic);
 #endif
+
+    RUN_TEST(openat_close_callback);
+    RUN_TEST(statx_callback);
+    RUN_TEST(fallocate_callback);
+    RUN_TEST(ftruncate_callback);
+    RUN_TEST(sync_file_range_callback);
+    RUN_TEST(request_op_type);
+    RUN_TEST(options_single_thread);
+    RUN_TEST(stats_peak_in_flight);
+    RUN_TEST(version_functions);
 
     if (tests_failed > 0) {
         printf("\n%d tests passed, %d FAILED\n", tests_passed, tests_failed);

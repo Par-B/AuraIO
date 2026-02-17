@@ -48,6 +48,12 @@ class Stats {
     [[nodiscard]] int current_in_flight() const noexcept { return stats_.current_in_flight; }
 
     /**
+     * Get observed peak in-flight count (high-water mark)
+     * @return Peak in-flight across all rings
+     */
+    [[nodiscard]] int peak_in_flight() const noexcept { return stats_.peak_in_flight; }
+
+    /**
      * Get optimal in-flight limit (tuned value)
      * @return Optimal in-flight limit determined by adaptive controller
      */
@@ -86,6 +92,7 @@ class RingStats {
     [[nodiscard]] int64_t ops_completed() const noexcept { return stats_.ops_completed; }
     [[nodiscard]] int64_t bytes_transferred() const noexcept { return stats_.bytes_transferred; }
     [[nodiscard]] int pending_count() const noexcept { return stats_.pending_count; }
+    [[nodiscard]] int peak_in_flight() const noexcept { return stats_.peak_in_flight; }
     [[nodiscard]] int in_flight_limit() const noexcept { return stats_.in_flight_limit; }
     [[nodiscard]] int batch_threshold() const noexcept { return stats_.batch_threshold; }
     [[nodiscard]] double p99_latency_ms() const noexcept { return stats_.p99_latency_ms; }

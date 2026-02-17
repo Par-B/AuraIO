@@ -38,6 +38,14 @@ public:
     }
 
     /**
+     * Get operation type of request
+     * @return Operation type (AURA_OP_READ, AURA_OP_WRITE, etc.), or -1 if invalid
+     */
+    [[nodiscard]] int op_type() const noexcept {
+        return handle_ ? aura_request_op_type(handle_) : -1;
+    }
+
+    /**
      * Get underlying C request handle
      * @return Pointer to aura_request_t
      */

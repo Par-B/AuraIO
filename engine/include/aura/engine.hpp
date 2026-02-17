@@ -356,6 +356,210 @@ class Engine {
     }
 
     // =========================================================================
+    // Lifecycle Metadata Operations
+    // =========================================================================
+
+    /**
+     * Submit async openat operation
+     *
+     * Opens a file relative to a directory fd. The callback receives the
+     * new file descriptor as the result (>= 0 on success, negative errno
+     * on failure). The pathname must remain valid until the callback fires.
+     *
+     * @tparam F Callback type
+     * @param dirfd Directory fd (AT_FDCWD for current directory)
+     * @param pathname Path to file (relative to dirfd)
+     * @param flags Open flags (O_RDONLY, O_WRONLY, O_CREAT, etc.)
+     * @param mode File mode (used when O_CREAT is set)
+     * @param callback Completion callback (result is new fd or negative errno)
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request openat(int dirfd, const char *pathname, int flags, mode_t mode,
+                                 F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = aura_openat(handle_, dirfd, pathname, flags, mode,
+                                          aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_openat");
+        }
+
+        return Request(req);
+    }
+
+    /**
+     * Submit async close operation
+     *
+     * @tparam F Callback type
+     * @param fd File descriptor to close
+     * @param callback Completion callback (result is 0 or negative errno)
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request close(int fd, F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req =
+            aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_close");
+        }
+
+        return Request(req);
+    }
+
+#ifdef __linux__
+    /**
+     * Submit async statx operation
+     *
+     * Retrieves file metadata. Both pathname and statxbuf must remain
+     * valid until the callback fires.
+     *
+     * @tparam F Callback type
+     * @param dirfd Directory fd (AT_FDCWD for current directory)
+     * @param pathname Path (relative to dirfd)
+     * @param flags Lookup flags (AURA_STATX_EMPTY_PATH, AURA_STATX_SYMLINK_NOFOLLOW)
+     * @param mask Requested fields (AURA_STATX_SIZE, AURA_STATX_MTIME, etc.)
+     * @param statxbuf Output buffer
+     * @param callback Completion callback
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request statx(int dirfd, const char *pathname, int flags, unsigned int mask,
+                                struct statx *statxbuf, F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = aura_statx(handle_, dirfd, pathname, flags, mask, statxbuf,
+                                         aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_statx");
+        }
+
+        return Request(req);
+    }
+#endif
+
+    /**
+     * Submit async fallocate operation
+     *
+     * Preallocates or deallocates file space.
+     *
+     * @tparam F Callback type
+     * @param fd File descriptor
+     * @param mode Allocation mode (0, FALLOC_FL_KEEP_SIZE, etc.)
+     * @param offset Starting byte offset
+     * @param len Length of region
+     * @param callback Completion callback
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request fallocate(int fd, int mode, off_t offset, off_t len, F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = aura_fallocate(handle_, fd, mode, offset, len,
+                                             aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_fallocate");
+        }
+
+        return Request(req);
+    }
+
+    /**
+     * Submit async ftruncate operation
+     *
+     * Truncates a file to the specified length. Requires kernel 6.9+.
+     *
+     * @tparam F Callback type
+     * @param fd File descriptor
+     * @param length New file length
+     * @param callback Completion callback
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = aura_ftruncate(handle_, fd, length,
+                                             aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_ftruncate");
+        }
+
+        return Request(req);
+    }
+
+    /**
+     * Submit async sync_file_range operation
+     *
+     * Syncs a byte range without flushing metadata.
+     *
+     * @tparam F Callback type
+     * @param fd File descriptor
+     * @param offset Starting byte offset
+     * @param nbytes Number of bytes to sync (0 = to end of file)
+     * @param flags AURA_SYNC_RANGE_WAIT_BEFORE, _WRITE, _WAIT_AFTER
+     * @param callback Completion callback
+     * @return Request handle
+     * @throws Error on submission failure
+     */
+    template <Callback F>
+    [[nodiscard]] Request sync_file_range(int fd, off_t offset, off_t nbytes, unsigned int flags,
+                                          F &&callback) {
+        auto *ctx = pool_->allocate();
+        ctx->callback = std::forward<F>(callback);
+
+        auto *pool_ptr = pool_.get();
+        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+
+        aura_request_t *req = aura_sync_file_range(handle_, fd, offset, nbytes, flags,
+                                                   aura_detail_callback_trampoline, ctx);
+
+        if (!req) {
+            pool_->release(ctx);
+            throw Error(errno, "aura_sync_file_range");
+        }
+
+        return Request(req);
+    }
+
+    // =========================================================================
     // Coroutine I/O Operations
     // =========================================================================
 
@@ -399,6 +603,56 @@ class Engine {
      * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
     inline FsyncAwaitable async_fdatasync(int fd);
+
+    // =========================================================================
+    // Coroutine Lifecycle Operations
+    // =========================================================================
+
+    /**
+     * Async openat for coroutines
+     * @return Awaitable (co_await yields int fd, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline OpenatAwaitable async_openat(int dirfd, const char *pathname, int flags, mode_t mode);
+
+    /**
+     * Async close for coroutines
+     * @return Awaitable (co_await returns void, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline MetadataAwaitable async_close(int fd);
+
+#ifdef __linux__
+    /**
+     * Async statx for coroutines
+     * @return Awaitable (co_await returns void, fills statxbuf, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline StatxAwaitable async_statx(int dirfd, const char *pathname, int flags,
+                                      unsigned int mask, struct statx *statxbuf);
+#endif
+
+    /**
+     * Async fallocate for coroutines
+     * @return Awaitable (co_await returns void, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline MetadataAwaitable async_fallocate(int fd, int mode, off_t offset, off_t len);
+
+    /**
+     * Async ftruncate for coroutines
+     * @return Awaitable (co_await returns void, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline MetadataAwaitable async_ftruncate(int fd, off_t length);
+
+    /**
+     * Async sync_file_range for coroutines
+     * @return Awaitable (co_await returns void, or throws aura::Error)
+     */
+    [[nodiscard("must be immediately co_await-ed")]]
+    inline MetadataAwaitable async_sync_file_range(int fd, off_t offset, off_t nbytes,
+                                                   unsigned int flags);
 
     // =========================================================================
     // Cancellation
@@ -743,6 +997,22 @@ class Engine {
     std::shared_ptr<std::atomic<bool>> engine_alive_;
     std::unique_ptr<std::mutex> event_loop_mutex_;
 };
+
+// =========================================================================
+// Free Functions
+// =========================================================================
+
+/**
+ * Get library version string
+ * @return Version string (e.g., "0.4.0")
+ */
+[[nodiscard]] inline const char *version() noexcept { return aura_version(); }
+
+/**
+ * Get library version as integer
+ * @return Version integer (major * 10000 + minor * 100 + patch)
+ */
+[[nodiscard]] inline int version_int() noexcept { return aura_version_int(); }
 
 } // namespace aura
 

@@ -19,6 +19,10 @@ class Histogram;
 class BufferStats;
 class Error;
 
+class OpenatAwaitable;
+class MetadataAwaitable;
+class StatxAwaitable;
+
 template<typename T = void>
 class Task;
 

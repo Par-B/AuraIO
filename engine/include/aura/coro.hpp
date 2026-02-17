@@ -395,6 +395,135 @@ class FsyncAwaitable {
     std::atomic<bool> completed_{false}; ///< Race coordination: callback vs await_suspend
 };
 
+/**
+ * Awaitable for async openat operations
+ *
+ * co_await yields int (new fd), or throws aura::Error on failure.
+ */
+class OpenatAwaitable {
+    friend class Engine;
+
+    OpenatAwaitable(Engine &engine, int dirfd, const char *pathname, int flags, mode_t mode)
+        : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mode_(mode) {}
+
+  public:
+    bool await_ready() const noexcept { return false; }
+
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    int await_resume() {
+        if (result_ < 0) {
+            auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+            int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
+            throw Error(err, "async_openat");
+        }
+        return static_cast<int>(result_);
+    }
+
+  private:
+    Engine &engine_;
+    int dirfd_;
+    const char *pathname_;
+    int flags_;
+    mode_t mode_;
+    ssize_t result_ = 0;
+    Request request_{nullptr};
+    std::atomic<bool> completed_{false};
+};
+
+/**
+ * Awaitable for async metadata operations (close, fallocate, ftruncate, sync_file_range)
+ *
+ * co_await returns void, or throws aura::Error on failure.
+ */
+class MetadataAwaitable {
+    friend class Engine;
+
+    enum class Op { Close, Fallocate, Ftruncate, SyncFileRange };
+
+    // Close
+    MetadataAwaitable(Engine &engine, int fd, Op op)
+        : engine_(engine), fd_(fd), op_(op) {}
+
+    // Fallocate / Ftruncate / SyncFileRange
+    MetadataAwaitable(Engine &engine, int fd, Op op, int mode, off_t offset, off_t len,
+                      unsigned int flags)
+        : engine_(engine), fd_(fd), op_(op), mode_(mode), offset_(offset), len_(len),
+          flags_(flags) {}
+
+  public:
+    bool await_ready() const noexcept { return false; }
+
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    void await_resume() {
+        if (result_ < 0) {
+            auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+            int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
+            const char *name = "async_metadata";
+            switch (op_) {
+            case Op::Close: name = "async_close"; break;
+            case Op::Fallocate: name = "async_fallocate"; break;
+            case Op::Ftruncate: name = "async_ftruncate"; break;
+            case Op::SyncFileRange: name = "async_sync_file_range"; break;
+            }
+            throw Error(err, name);
+        }
+    }
+
+  private:
+    Engine &engine_;
+    int fd_;
+    Op op_;
+    int mode_ = 0;
+    off_t offset_ = 0;
+    off_t len_ = 0;
+    unsigned int flags_ = 0;
+    ssize_t result_ = 0;
+    Request request_{nullptr};
+    std::atomic<bool> completed_{false};
+};
+
+#ifdef __linux__
+/**
+ * Awaitable for async statx operations
+ *
+ * co_await returns void (fills statxbuf), or throws aura::Error on failure.
+ */
+class StatxAwaitable {
+    friend class Engine;
+
+    StatxAwaitable(Engine &engine, int dirfd, const char *pathname, int flags, unsigned int mask,
+                   struct statx *statxbuf)
+        : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mask_(mask),
+          statxbuf_(statxbuf) {}
+
+  public:
+    bool await_ready() const noexcept { return false; }
+
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    void await_resume() {
+        if (result_ < 0) {
+            auto pos = static_cast<size_t>(-static_cast<std::make_unsigned_t<ssize_t>>(result_));
+            int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
+            throw Error(err, "async_statx");
+        }
+    }
+
+  private:
+    Engine &engine_;
+    int dirfd_;
+    const char *pathname_;
+    int flags_;
+    unsigned int mask_;
+    struct statx *statxbuf_;
+    ssize_t result_ = 0;
+    Request request_{nullptr};
+    std::atomic<bool> completed_{false};
+};
+#endif
+
 } // namespace aura
 
 // Include engine.hpp for the await_suspend implementations
@@ -463,6 +592,103 @@ inline FsyncAwaitable Engine::async_fsync(int fd) {
 
 inline FsyncAwaitable Engine::async_fdatasync(int fd) {
     return FsyncAwaitable(*this, fd, true);
+}
+
+// --- Lifecycle awaitable await_suspend implementations ---
+
+inline bool OpenatAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    try {
+        auto callback = [this, handle](Request &, ssize_t result) {
+            result_ = result;
+            if (completed_.exchange(true, std::memory_order_acq_rel)) {
+                handle.resume();
+            }
+        };
+        request_ = engine_.openat(dirfd_, pathname_, flags_, mode_, std::move(callback));
+        return !completed_.exchange(true, std::memory_order_acq_rel);
+    } catch (const Error &e) {
+        result_ = -e.code();
+        return false;
+    }
+}
+
+inline bool MetadataAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    try {
+        auto callback = [this, handle](Request &, ssize_t result) {
+            result_ = result;
+            if (completed_.exchange(true, std::memory_order_acq_rel)) {
+                handle.resume();
+            }
+        };
+        switch (op_) {
+        case Op::Close:
+            request_ = engine_.close(fd_, std::move(callback));
+            break;
+        case Op::Fallocate:
+            request_ = engine_.fallocate(fd_, mode_, offset_, len_, std::move(callback));
+            break;
+        case Op::Ftruncate:
+            request_ = engine_.ftruncate(fd_, len_, std::move(callback));
+            break;
+        case Op::SyncFileRange:
+            request_ = engine_.sync_file_range(fd_, offset_, len_, flags_, std::move(callback));
+            break;
+        }
+        return !completed_.exchange(true, std::memory_order_acq_rel);
+    } catch (const Error &e) {
+        result_ = -e.code();
+        return false;
+    }
+}
+
+#ifdef __linux__
+inline bool StatxAwaitable::await_suspend(std::coroutine_handle<> handle) {
+    try {
+        auto callback = [this, handle](Request &, ssize_t result) {
+            result_ = result;
+            if (completed_.exchange(true, std::memory_order_acq_rel)) {
+                handle.resume();
+            }
+        };
+        request_ = engine_.statx(dirfd_, pathname_, flags_, mask_, statxbuf_, std::move(callback));
+        return !completed_.exchange(true, std::memory_order_acq_rel);
+    } catch (const Error &e) {
+        result_ = -e.code();
+        return false;
+    }
+}
+#endif
+
+// --- Engine lifecycle async method implementations ---
+
+inline OpenatAwaitable Engine::async_openat(int dirfd, const char *pathname, int flags,
+                                            mode_t mode) {
+    return OpenatAwaitable(*this, dirfd, pathname, flags, mode);
+}
+
+inline MetadataAwaitable Engine::async_close(int fd) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Close);
+}
+
+#ifdef __linux__
+inline StatxAwaitable Engine::async_statx(int dirfd, const char *pathname, int flags,
+                                          unsigned int mask, struct statx *statxbuf) {
+    return StatxAwaitable(*this, dirfd, pathname, flags, mask, statxbuf);
+}
+#endif
+
+inline MetadataAwaitable Engine::async_fallocate(int fd, int mode, off_t offset, off_t len) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Fallocate, mode, offset, len, 0);
+}
+
+inline MetadataAwaitable Engine::async_ftruncate(int fd, off_t length) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Ftruncate, 0, 0, length, 0);
+}
+
+inline MetadataAwaitable Engine::async_sync_file_range(int fd, off_t offset, off_t nbytes,
+                                                       unsigned int flags) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::SyncFileRange, 0, offset, nbytes,
+                             flags);
 }
 
 } // namespace aura
