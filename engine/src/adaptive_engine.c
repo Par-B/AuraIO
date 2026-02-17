@@ -194,9 +194,17 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
         return -1.0; /* No data */
     }
 
-    /* P99 = value at 99th percentile (1% from the top) */
-    uint32_t target = total / 100; /* 1% of samples */
-    if (target == 0) target = 1;
+    /* P99 = value at 99th percentile (1% from the top).
+     * With fewer than 100 samples, 1% rounds to 0 — use 5% (P95) instead
+     * to avoid degenerating to the single highest sample (the max), which
+     * is far noisier and causes spurious backoff decisions. */
+    uint32_t target;
+    if (total >= 100) {
+        target = total / 100;
+    } else {
+        target = total / 20; /* P95 for small sample sets */
+        if (target == 0) target = 1;
+    }
 
     /* Scan from high to low, counting down */
     uint32_t count = atomic_load_explicit(&hist->overflow, memory_order_relaxed);
