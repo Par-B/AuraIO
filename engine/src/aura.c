@@ -298,7 +298,7 @@ static bool resolve_registered_file_locked(const aura_engine_t *engine, int fd, 
 static uint32_t fixed_buf_inflight_total(const aura_engine_t *engine) {
     uint32_t total = 0;
     for (int i = 0; i < engine->ring_count; i++) {
-        total += atomic_load_explicit(&engine->rings[i].fixed_buf_inflight, memory_order_relaxed);
+        total += atomic_load_explicit(&engine->rings[i].fixed_buf_inflight, memory_order_acquire);
     }
     return total;
 }

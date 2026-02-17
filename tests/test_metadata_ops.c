@@ -746,6 +746,137 @@ TEST(statx_symlink) {
 }
 
 /* ============================================================================
+ * Error Path Tests
+ * ============================================================================ */
+
+TEST(fallocate_bad_fd) {
+    aura_engine_t *engine = make_engine();
+    cb_state_t st = { 0 };
+
+    aura_request_t *req = aura_fallocate(engine, 9999, 0, 0, 4096, basic_cb, &st);
+    assert(req);
+    run_until_done(engine, &st);
+    assert(st.result == -EBADF);
+
+    aura_destroy(engine);
+}
+
+TEST(fallocate_bad_mode) {
+    int fd = open(filepath, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    assert(fd >= 0);
+
+    aura_engine_t *engine = make_engine();
+    cb_state_t st = { 0 };
+
+    /* Invalid mode bits — kernel should reject */
+    aura_request_t *req = aura_fallocate(engine, fd, 0x7FFFFFFF, 0, 4096, basic_cb, &st);
+    assert(req);
+    run_until_done(engine, &st);
+    assert(st.result < 0); /* EOPNOTSUPP or EINVAL */
+
+    close(fd);
+    aura_destroy(engine);
+}
+
+TEST(ftruncate_bad_fd) {
+    aura_engine_t *engine = make_engine();
+    cb_state_t st = { 0 };
+
+    aura_request_t *req = aura_ftruncate(engine, 9999, 0, basic_cb, &st);
+    assert(req);
+    run_until_done(engine, &st);
+    /* Could be -EBADF or -EINVAL/-ENOSYS on older kernels */
+    assert(st.result < 0);
+
+    aura_destroy(engine);
+}
+
+TEST(ftruncate_negative_length) {
+    int fd = open(filepath, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    assert(fd >= 0);
+
+    aura_engine_t *engine = make_engine();
+
+    /* Negative length is rejected at the API level */
+    aura_request_t *req = aura_ftruncate(engine, fd, -1, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    close(fd);
+    aura_destroy(engine);
+}
+
+TEST(sync_file_range_bad_fd) {
+    aura_engine_t *engine = make_engine();
+    cb_state_t st = { 0 };
+
+    aura_request_t *req = aura_sync_file_range(engine, 9999, 0, 4096,
+        SYNC_FILE_RANGE_WRITE, basic_cb, &st);
+    assert(req);
+    run_until_done(engine, &st);
+    assert(st.result == -EBADF);
+
+    aura_destroy(engine);
+}
+
+TEST(fallocate_null_params) {
+    /* fallocate with NULL engine */
+    aura_request_t *req = aura_fallocate(NULL, 0, 0, 0, 4096, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    /* fallocate with negative fd */
+    aura_engine_t *engine = make_engine();
+    req = aura_fallocate(engine, -1, 0, 0, 4096, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+}
+
+TEST(ftruncate_null_params) {
+    aura_request_t *req = aura_ftruncate(NULL, 0, 0, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_engine_t *engine = make_engine();
+    req = aura_ftruncate(engine, -1, 0, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+}
+
+TEST(sync_file_range_null_params) {
+    aura_request_t *req = aura_sync_file_range(NULL, 0, 0, 4096,
+        SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_engine_t *engine = make_engine();
+    req = aura_sync_file_range(engine, -1, 0, 4096,
+        SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+}
+
+TEST(openat_readonly_dir) {
+    /* Try to create a file in a read-only location */
+    aura_engine_t *engine = make_engine();
+    cb_state_t st = { 0 };
+
+    aura_request_t *req = aura_openat(engine, AT_FDCWD,
+        "/proc/aura_nonexistent_test", O_CREAT | O_WRONLY, 0644, basic_cb, &st);
+    assert(req);
+    run_until_done(engine, &st);
+    assert(st.result < 0); /* -EACCES or -EROFS */
+
+    aura_destroy(engine);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -777,6 +908,17 @@ int main(void) {
     RUN_TEST(sync_file_range_flags);
     RUN_TEST(openat_dirfd);
     RUN_TEST(statx_symlink);
+
+    /* Error path tests */
+    RUN_TEST(fallocate_bad_fd);
+    RUN_TEST(fallocate_bad_mode);
+    RUN_TEST(ftruncate_bad_fd);
+    RUN_TEST(ftruncate_negative_length);
+    RUN_TEST(sync_file_range_bad_fd);
+    RUN_TEST(fallocate_null_params);
+    RUN_TEST(ftruncate_null_params);
+    RUN_TEST(sync_file_range_null_params);
+    RUN_TEST(openat_readonly_dir);
 
     teardown();
 

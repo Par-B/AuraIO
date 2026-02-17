@@ -203,7 +203,7 @@ void ring_destroy(ring_ctx_t *ctx) {
      * Timeout after 10 seconds to avoid infinite hang on stuck ops
      * (e.g., hung NFS mount, stuck SCSI device). */
     int drain_attempts = 0;
-    while (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0 &&
+    while (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) > 0 &&
            drain_attempts < 100) {
         /* Retry flush in case an earlier submit failed transiently. */
         ring_lock(ctx);
@@ -213,9 +213,9 @@ void ring_destroy(ring_ctx_t *ctx) {
         drain_attempts++;
     }
 
-    if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) > 0) {
+    if (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) > 0) {
         aura_log(AURA_LOG_WARN, "ring_destroy timed out with %d ops still pending",
-                 (int)atomic_load_explicit(&ctx->pending_count, memory_order_relaxed));
+                 (int)atomic_load_explicit(&ctx->pending_count, memory_order_acquire));
     }
 
     adaptive_destroy(&ctx->adaptive);
@@ -363,7 +363,8 @@ int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || !ctx->ring_initialized) {
+    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX ||
+        !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
     }
@@ -392,7 +393,8 @@ int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || !ctx->ring_initialized) {
+    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX ||
+        !ctx->ring_initialized) {
         errno = EINVAL;
         return (-1);
     }

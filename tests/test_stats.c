@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -628,6 +629,302 @@ TEST(ring_select_enum_values) {
 }
 
 /* ============================================================================
+ * Ring Selection Validation Tests
+ * ============================================================================ */
+
+TEST(ring_select_invalid_mode) {
+    /* An out-of-range ring_select should fall back to default (ADAPTIVE) */
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 32;
+    opts.ring_select = (aura_ring_select_t)99; /* invalid */
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    /* Engine should still create (graceful fallback) or fail cleanly */
+    if (engine) {
+        /* If created, verify I/O still works */
+        io_setup();
+        void *buf = aura_buffer_alloc(engine, 4096);
+        callback_called = 0;
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+        assert(callback_called == 1);
+        aura_buffer_free(engine, buf);
+        aura_destroy(engine);
+        io_teardown();
+    }
+    /* Either way: no crash = pass */
+}
+
+TEST(ring_select_round_robin_distribution) {
+    /* Verify round-robin distributes evenly across rings */
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 4;
+    opts.queue_depth = 64;
+    opts.ring_select = AURA_SELECT_ROUND_ROBIN;
+    opts.disable_adaptive = true;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    int actual_rings = aura_get_ring_count(engine);
+
+    /* Submit 4*actual_rings ops — should be perfectly even */
+    void *buf = aura_buffer_alloc(engine, 4096);
+    int total_ops = actual_rings * 4;
+    for (int i = 0; i < total_ops; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+    }
+
+    /* Each ring should have received at least 1 op */
+    int64_t min_ops = INT64_MAX, max_ops = 0;
+    for (int i = 0; i < actual_rings; i++) {
+        aura_ring_stats_t rs;
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
+        if (rs.ops_completed < min_ops) min_ops = rs.ops_completed;
+        if (rs.ops_completed > max_ops) max_ops = rs.ops_completed;
+    }
+    /* Distribution should be within 2x of ideal (allowing for scheduling) */
+    assert(min_ops > 0);
+    assert(max_ops <= min_ops * 3); /* generous bound */
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+/* ============================================================================
+ * Statistics Accuracy Tests
+ * ============================================================================ */
+
+TEST(stats_ops_count_accuracy) {
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 64;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    /* Submit exactly N ops and verify count matches */
+    int n = 10;
+    void *buf = aura_buffer_alloc(engine, 4096);
+    for (int i = 0; i < n; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+        assert(callback_called == 1);
+    }
+
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats, sizeof(stats));
+    assert(stats.ops_completed == n);
+
+    aura_ring_stats_t rs;
+    aura_get_ring_stats(engine, 0, &rs, sizeof(rs));
+    assert(rs.ops_completed == n);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(stats_bytes_accuracy) {
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 64;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    /* Read 4096 bytes 5 times = 20480 bytes */
+    int n = 5;
+    void *buf = aura_buffer_alloc(engine, 4096);
+    for (int i = 0; i < n; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+        assert(callback_called == 1);
+    }
+
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats, sizeof(stats));
+    assert(stats.bytes_transferred == (int64_t)n * 4096);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(stats_zero_before_io) {
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 32;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    /* Before any I/O, all counters should be zero */
+    aura_stats_t stats;
+    aura_get_stats(engine, &stats, sizeof(stats));
+    assert(stats.ops_completed == 0);
+    assert(stats.bytes_transferred == 0);
+    assert(stats.adaptive_spills == 0);
+
+    aura_ring_stats_t rs;
+    aura_get_ring_stats(engine, 0, &rs, sizeof(rs));
+    assert(rs.ops_completed == 0);
+    assert(rs.bytes_transferred == 0);
+    assert(rs.pending_count == 0);
+
+    aura_destroy(engine);
+}
+
+TEST(stats_monotonic_ops) {
+    /* ops_completed should be monotonically non-decreasing */
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 64;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    int64_t prev_ops = 0;
+
+    for (int i = 0; i < 8; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+        assert(callback_called == 1);
+
+        aura_stats_t stats;
+        aura_get_stats(engine, &stats, sizeof(stats));
+        assert(stats.ops_completed >= prev_ops);
+        prev_ops = stats.ops_completed;
+    }
+    assert(prev_ops == 8);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+/* ============================================================================
+ * Cancellation Tests
+ * ============================================================================ */
+
+TEST(cancel_null_params) {
+    /* Cancel with NULL engine */
+    int rc = aura_cancel(NULL, (aura_request_t *)0x1);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+
+    /* Cancel with NULL request */
+    aura_engine_t *engine = aura_create();
+    assert(engine != NULL);
+    rc = aura_cancel(engine, NULL);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+}
+
+TEST(cancel_completed_request) {
+    /* Cancelling an already-completed request should fail with EALREADY */
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 64;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    callback_called = 0;
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+    aura_wait(engine, 1000);
+    assert(callback_called == 1);
+
+    /* Request is now completed — cancel should fail */
+    int rc = aura_cancel(engine, req);
+    assert(rc == -1);
+    assert(errno == EALREADY);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(cancel_pending_request) {
+    /* Submit a slow op and try to cancel it before it completes */
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 64;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    callback_called = 0;
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    assert(req != NULL);
+
+    /* Try to cancel — may succeed (0) or fail (-1/EALREADY) if already completed */
+    int rc = aura_cancel(engine, req);
+    /* Either outcome is valid */
+    assert(rc == 0 || (rc == -1 && errno == EALREADY));
+
+    /* Drain any remaining completions */
+    int iters = 0;
+    while (!callback_called && iters++ < 1000) {
+        aura_poll(engine);
+        usleep(1000);
+    }
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+/* ============================================================================
  * Concurrency Test — stats readers vs active I/O
  * ============================================================================ */
 
@@ -761,6 +1058,21 @@ int main(void) {
     RUN_TEST(ring_select_enum_values);
     RUN_TEST(ring_select_round_robin);
     RUN_TEST(ring_select_cpu_local);
+
+    /* Ring selection validation */
+    RUN_TEST(ring_select_invalid_mode);
+    RUN_TEST(ring_select_round_robin_distribution);
+
+    /* Statistics accuracy */
+    RUN_TEST(stats_ops_count_accuracy);
+    RUN_TEST(stats_bytes_accuracy);
+    RUN_TEST(stats_zero_before_io);
+    RUN_TEST(stats_monotonic_ops);
+
+    /* Concurrent cancellation */
+    RUN_TEST(cancel_null_params);
+    RUN_TEST(cancel_completed_request);
+    RUN_TEST(cancel_pending_request);
 
     printf("\n  All %d tests passed!\n\n", test_count);
     return 0;
