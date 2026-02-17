@@ -1239,4 +1239,335 @@ mod tests {
         );
         // We can't assert on cancelled_count because cancellation is best-effort
     }
+
+    // =========================================================================
+    // Lifecycle Metadata Operation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_openat_close() {
+        let engine = Engine::new().unwrap();
+
+        let tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let path = std::ffi::CString::new(tmpfile.path().to_str().unwrap()).unwrap();
+
+        // openat
+        let done = Arc::new(AtomicBool::new(false));
+        let result_fd = Arc::new(AtomicI32::new(-999));
+        let done_clone = done.clone();
+        let result_clone = result_fd.clone();
+
+        engine
+            .openat(libc::AT_FDCWD, &path, libc::O_RDONLY, 0, move |result| {
+                match result {
+                    Ok(fd) => result_clone.store(fd as i32, Ordering::SeqCst),
+                    Err(_) => result_clone.store(-1, Ordering::SeqCst),
+                }
+                done_clone.store(true, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        let opened_fd = result_fd.load(Ordering::SeqCst);
+        assert!(opened_fd >= 0, "openat should return a valid fd, got {}", opened_fd);
+
+        // close
+        let done = Arc::new(AtomicBool::new(false));
+        let success = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let success_clone = success.clone();
+
+        engine
+            .close(opened_fd, move |result| {
+                success_clone.store(result.is_ok(), Ordering::SeqCst);
+                done_clone.store(true, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        assert!(success.load(Ordering::SeqCst), "close should succeed");
+    }
+
+    #[test]
+    fn test_statx() {
+        let engine = Engine::new().unwrap();
+
+        // Write known content to get a known size
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let test_data = b"statx test data 1234567890";
+        tmpfile.write_all(test_data).unwrap();
+        tmpfile.flush().unwrap();
+
+        let path = std::ffi::CString::new(tmpfile.path().to_str().unwrap()).unwrap();
+        let mut stx: aura_sys::statx = unsafe { std::mem::zeroed() };
+
+        let done = Arc::new(AtomicBool::new(false));
+        let success = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let success_clone = success.clone();
+
+        unsafe {
+            engine
+                .statx(
+                    libc::AT_FDCWD,
+                    &path,
+                    0,
+                    aura_sys::AURA_STATX_SIZE,
+                    &mut stx,
+                    move |result| {
+                        success_clone.store(result.is_ok(), Ordering::SeqCst);
+                        done_clone.store(true, Ordering::SeqCst);
+                    },
+                )
+                .unwrap();
+        }
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        assert!(success.load(Ordering::SeqCst), "statx should succeed");
+        assert_eq!(
+            stx.stx_size,
+            test_data.len() as u64,
+            "statx size should match written data"
+        );
+    }
+
+    #[test]
+    fn test_fallocate() {
+        let engine = Engine::new().unwrap();
+
+        let tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .open(tmpfile.path())
+            .unwrap();
+        let fd = file.as_raw_fd();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let success = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let success_clone = success.clone();
+
+        engine
+            .fallocate(fd, 0, 0, 65536, move |result| {
+                success_clone.store(result.is_ok(), Ordering::SeqCst);
+                done_clone.store(true, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        assert!(success.load(Ordering::SeqCst), "fallocate should succeed");
+
+        // Verify size with fstat
+        let meta = std::fs::metadata(tmpfile.path()).unwrap();
+        assert_eq!(meta.len(), 65536, "fallocated file should be 65536 bytes");
+    }
+
+    #[test]
+    fn test_ftruncate() {
+        let engine = Engine::new().unwrap();
+
+        let tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .open(tmpfile.path())
+            .unwrap();
+        let fd = file.as_raw_fd();
+
+        // Write some data first
+        {
+            use std::io::Write;
+            let mut f = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
+            f.write_all(&[0u8; 8192]).unwrap();
+            f.flush().unwrap();
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let result_val = Arc::new(AtomicI32::new(-999));
+        let done_clone = done.clone();
+        let result_clone = result_val.clone();
+
+        engine
+            .ftruncate(fd, 4096, move |result| {
+                match result {
+                    Ok(_) => result_clone.store(0, Ordering::SeqCst),
+                    Err(ref e) => {
+                        // Accept ENOSYS for kernels < 6.9
+                        if let Error::Io(io_err) = e {
+                            result_clone.store(
+                                io_err.raw_os_error().unwrap_or(-1),
+                                Ordering::SeqCst,
+                            );
+                        } else {
+                            result_clone.store(-1, Ordering::SeqCst);
+                        }
+                    }
+                }
+                done_clone.store(true, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        let rv = result_val.load(Ordering::SeqCst);
+        assert!(
+            rv == 0 || rv == libc::ENOSYS,
+            "ftruncate should succeed or return ENOSYS, got {}",
+            rv
+        );
+
+        if rv == 0 {
+            let meta = std::fs::metadata(tmpfile.path()).unwrap();
+            assert_eq!(meta.len(), 4096, "truncated file should be 4096 bytes");
+        }
+    }
+
+    #[test]
+    fn test_sync_file_range() {
+        let engine = Engine::new().unwrap();
+
+        let tmpfile = tempfile::NamedTempFile::new().unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .open(tmpfile.path())
+            .unwrap();
+        let fd = file.as_raw_fd();
+
+        // Write some data first
+        {
+            use std::io::Write;
+            let mut f = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
+            f.write_all(&[42u8; 4096]).unwrap();
+            f.flush().unwrap();
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let success = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let success_clone = success.clone();
+
+        engine
+            .sync_file_range(
+                fd,
+                0,
+                4096,
+                aura_sys::AURA_SYNC_RANGE_WRITE | aura_sys::AURA_SYNC_RANGE_WAIT_AFTER,
+                move |result| {
+                    success_clone.store(result.is_ok(), Ordering::SeqCst);
+                    done_clone.store(true, Ordering::SeqCst);
+                },
+            )
+            .unwrap();
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        assert!(success.load(Ordering::SeqCst), "sync_file_range should succeed");
+    }
+
+    #[test]
+    fn test_drain() {
+        let engine = Engine::new().unwrap();
+
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"drain test data").unwrap();
+        tmpfile.flush().unwrap();
+
+        let file = File::open(tmpfile.path()).unwrap();
+        let fd = file.as_raw_fd();
+
+        let buf = engine.allocate_buffer(4096).unwrap();
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    completed_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+        }
+
+        // Drain should process the pending read
+        let n = engine.drain(5000).unwrap();
+        assert!(n >= 1, "drain should process at least 1 completion");
+        assert!(completed.load(Ordering::SeqCst), "callback should have fired");
+    }
+
+    // =========================================================================
+    // Minor Accessor Tests
+    // =========================================================================
+
+    #[test]
+    fn test_request_op_type() {
+        let engine = Engine::new().unwrap();
+
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        tmpfile.write_all(b"op type test").unwrap();
+        tmpfile.flush().unwrap();
+
+        let file = File::open(tmpfile.path()).unwrap();
+        let fd = file.as_raw_fd();
+        let buf = engine.allocate_buffer(4096).unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+
+        let handle = unsafe {
+            engine
+                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                    done_clone.store(true, Ordering::SeqCst);
+                })
+                .unwrap()
+        };
+
+        // Check op_type before callback (safe: callback hasn't run yet)
+        let op = unsafe { handle.op_type() };
+
+        while !done.load(Ordering::SeqCst) {
+            engine.wait(100).unwrap();
+        }
+
+        assert_eq!(
+            op,
+            aura_sys::aura_op_type_t_AURA_OP_READ as i32,
+            "op_type should be AURA_OP_READ"
+        );
+    }
+
+    #[test]
+    fn test_options_single_thread() {
+        let opts = Options::new().single_thread(true);
+        // Verify it doesn't panic and creates a valid engine
+        let engine = Engine::with_options(&opts);
+        assert!(engine.is_ok(), "single_thread engine should create successfully");
+    }
+
+    #[test]
+    fn test_stats_peak_in_flight() {
+        let engine = Engine::new().unwrap();
+        let stats = engine.stats().unwrap();
+        assert!(stats.peak_in_flight() >= 0, "peak_in_flight should be >= 0");
+    }
+
+    #[test]
+    fn test_ring_stats_peak_in_flight() {
+        let engine = Engine::new().unwrap();
+        let rs = engine.ring_stats(0).unwrap();
+        assert!(rs.peak_in_flight() >= 0, "ring peak_in_flight should be >= 0");
+    }
 }

@@ -53,6 +53,11 @@ impl Stats {
     pub fn adaptive_spills(&self) -> u64 {
         self.inner.adaptive_spills
     }
+
+    /// Peak in-flight count (high-water mark across all rings)
+    pub fn peak_in_flight(&self) -> i32 {
+        self.inner.peak_in_flight
+    }
 }
 
 /// Per-ring statistics snapshot
@@ -82,6 +87,11 @@ impl RingStats {
     /// Number of pending operations
     pub fn pending_count(&self) -> i32 {
         self.inner.pending_count
+    }
+
+    /// Peak in-flight count (high-water mark for this ring)
+    pub fn peak_in_flight(&self) -> i32 {
+        self.inner.peak_in_flight
     }
 
     /// Current in-flight limit (AIMD-tuned)

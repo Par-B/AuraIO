@@ -526,6 +526,260 @@ impl Engine {
     }
 
     // =========================================================================
+    // Lifecycle Metadata Operations
+    // =========================================================================
+
+    /// Submit an async openat operation
+    ///
+    /// Opens a file relative to a directory fd. The callback receives
+    /// `Ok(fd)` with the new file descriptor on success, or `Err(error)` on failure.
+    ///
+    /// # Arguments
+    ///
+    /// * `dirfd` - Directory fd (`libc::AT_FDCWD` for current directory)
+    /// * `pathname` - Null-terminated path (relative to dirfd)
+    /// * `flags` - Open flags (`libc::O_RDONLY`, `libc::O_CREAT`, etc.)
+    /// * `mode` - File mode (used when `O_CREAT` is set)
+    /// * `callback` - Completion callback
+    pub fn openat<F>(
+        &self,
+        dirfd: RawFd,
+        pathname: &std::ffi::CStr,
+        flags: i32,
+        mode: u32,
+        callback: F,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_openat(
+                self.inner.raw(),
+                dirfd,
+                pathname.as_ptr(),
+                flags,
+                mode,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    /// Submit an async close operation
+    ///
+    /// Closes a file descriptor asynchronously. The callback receives
+    /// `Ok(0)` on success or `Err(error)` on failure.
+    pub fn close<F>(&self, fd: RawFd, callback: F) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_close(
+                self.inner.raw(),
+                fd,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    /// Submit an async statx operation
+    ///
+    /// Retrieves file metadata. The callback receives `Ok(0)` on success
+    /// (the `statxbuf` is filled) or `Err(error)` on failure.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure `statxbuf` points to valid memory that remains
+    /// valid until the completion callback fires. The `pathname` CStr must
+    /// also remain valid until the callback fires.
+    pub unsafe fn statx<F>(
+        &self,
+        dirfd: RawFd,
+        pathname: &std::ffi::CStr,
+        flags: i32,
+        mask: u32,
+        statxbuf: *mut aura_sys::statx,
+        callback: F,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_statx(
+                self.inner.raw(),
+                dirfd,
+                pathname.as_ptr(),
+                flags,
+                mask,
+                statxbuf,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    /// Submit an async fallocate operation
+    ///
+    /// Preallocates or deallocates file space.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - File descriptor
+    /// * `mode` - Allocation mode (0, `libc::FALLOC_FL_KEEP_SIZE`, etc.)
+    /// * `offset` - Starting byte offset
+    /// * `len` - Length of region
+    /// * `callback` - Completion callback
+    pub fn fallocate<F>(
+        &self,
+        fd: RawFd,
+        mode: i32,
+        offset: i64,
+        len: i64,
+        callback: F,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_fallocate(
+                self.inner.raw(),
+                fd,
+                mode,
+                offset,
+                len,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    /// Submit an async ftruncate operation
+    ///
+    /// Truncates a file to the specified length. Requires kernel 6.9+;
+    /// returns `ENOSYS` on older kernels.
+    pub fn ftruncate<F>(
+        &self,
+        fd: RawFd,
+        length: i64,
+        callback: F,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_ftruncate(
+                self.inner.raw(),
+                fd,
+                length,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    /// Submit an async sync_file_range operation
+    ///
+    /// Syncs a byte range without flushing metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - File descriptor
+    /// * `offset` - Starting byte offset
+    /// * `nbytes` - Number of bytes to sync (0 = to end of file)
+    /// * `flags` - Combination of `AURA_SYNC_RANGE_WAIT_BEFORE`, `_WRITE`, `_WAIT_AFTER`
+    /// * `callback` - Completion callback
+    pub fn sync_file_range<F>(
+        &self,
+        fd: RawFd,
+        offset: i64,
+        nbytes: i64,
+        flags: u32,
+        callback: F,
+    ) -> Result<RequestHandle>
+    where
+        F: FnOnce(Result<usize>) + Send + 'static,
+    {
+        let ctx = CallbackContext::new(callback);
+        let ctx_ptr = Box::into_raw(ctx) as *mut std::ffi::c_void;
+
+        let req = unsafe {
+            aura_sys::aura_sync_file_range(
+                self.inner.raw(),
+                fd,
+                offset,
+                nbytes,
+                flags,
+                Some(callback_trampoline),
+                ctx_ptr,
+            )
+        };
+
+        if req.is_null() {
+            let err = io::Error::last_os_error();
+            unsafe { drop_context(ctx_ptr) };
+            Err(Error::Submission(err))
+        } else {
+            Ok(RequestHandle::new(req))
+        }
+    }
+
+    // =========================================================================
     // Cancellation
     // =========================================================================
 
@@ -654,6 +908,34 @@ impl Engine {
     /// Safe to call from any thread, including from within a callback.
     pub fn stop(&self) {
         unsafe { aura_sys::aura_stop(self.inner.raw()) };
+    }
+
+    /// Drain all pending I/O operations
+    ///
+    /// Blocks until all in-flight operations have completed or the timeout
+    /// expires. Useful for graceful shutdown.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout_ms` - Maximum wait time in milliseconds
+    ///   - `-1` = wait forever
+    ///   - `0` = don't block
+    ///   - `>0` = wait up to N milliseconds
+    ///
+    /// Returns the total number of completions processed.
+    ///
+    /// # Deadlock Warning
+    ///
+    /// Do **not** call `drain()` from within a completion callback.
+    /// Must not be called concurrently with `poll()`, `wait()`, or `run()`.
+    pub fn drain(&self, timeout_ms: i32) -> Result<usize> {
+        let _guard = self.poll_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let n = unsafe { aura_sys::aura_drain(self.inner.raw(), timeout_ms) };
+        if n >= 0 {
+            Ok(n as usize)
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
     }
 
     // =========================================================================

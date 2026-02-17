@@ -106,6 +106,33 @@ impl RequestHandle {
         unsafe { aura_sys::aura_request_fd(self.inner) }
     }
 
+    /// Get the operation type of this request
+    ///
+    /// Returns the operation type as a raw integer matching the `aura_op_type_t_AURA_OP_*`
+    /// constants (e.g., `aura_sys::aura_op_type_t_AURA_OP_READ`).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked). See the struct-level docs for
+    /// the validity timeline.
+    pub unsafe fn op_type(&self) -> i32 {
+        unsafe { aura_sys::aura_request_op_type(self.inner) }
+    }
+
+    /// Get the user data pointer associated with this request
+    ///
+    /// Returns the `user_data` pointer that was passed when the request was submitted.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked). See the struct-level docs for
+    /// the validity timeline.
+    pub unsafe fn user_data(&self) -> *mut std::ffi::c_void {
+        unsafe { aura_sys::aura_request_user_data(self.inner) }
+    }
+
     /// Get the raw pointer (for internal use)
     pub(crate) fn as_ptr(&self) -> *mut aura_sys::aura_request_t {
         self.inner

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **auracp file copy tool** (`tools/auracp/`): Production-quality async pipelined file copy with cross-file I/O pipeline, recursive directory support, O_DIRECT mode, progress bar, and AIMD stats reporting
 - **C++ lifecycle bindings**: `Engine::openat()`, `close()`, `statx()`, `fallocate()`, `ftruncate()`, `sync_file_range()` with callback and coroutine variants (`async_openat`, `async_close`, `async_statx`, `async_fallocate`, `async_ftruncate`, `async_sync_file_range`)
 - **C++ accessor completions**: `Request::op_type()`, `Options::single_thread()`, `Stats::peak_in_flight()`, `RingStats::peak_in_flight()`, `aura::version()`, `aura::version_int()`
+- **Rust lifecycle bindings**: `Engine::openat()`, `close()`, `statx()`, `fallocate()`, `ftruncate()`, `sync_file_range()`, `drain()`
+- **Rust accessor completions**: `RequestHandle::op_type()`, `RequestHandle::user_data()`, `Options::single_thread()`, `Stats::peak_in_flight()`, `RingStats::peak_in_flight()`
 - **Diagnostic APIs**: `aura_get_fatal_error()` (check if engine has latched fatal error), `aura_in_callback_context()` (detect if current thread is inside a completion callback), `aura_histogram_percentile()` (compute latency percentiles from histogram data)
 - **C++ Engine movability**: `aura::Engine` is now move-constructible and move-assignable (must not move while event loop methods are executing on another thread)
 - **C++ wrappers**: `Engine::fatal_error()`, `Engine::in_callback_context()`, `Engine::unregister()`, `Engine::request_unregister()`, `Histogram::percentile()`

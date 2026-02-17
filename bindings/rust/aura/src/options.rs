@@ -116,6 +116,16 @@ impl Options {
         self
     }
 
+    /// Enable single-thread mode (skip ring mutexes)
+    ///
+    /// When enabled, the engine skips internal mutex locking on submissions,
+    /// which reduces overhead. The caller must guarantee that only one thread
+    /// calls submission methods at a time.
+    pub fn single_thread(mut self, enable: bool) -> Self {
+        self.inner.single_thread = enable;
+        self
+    }
+
     /// Get a reference to the underlying C options struct
     pub(crate) fn as_ptr(&self) -> *const aura_sys::aura_options_t {
         &self.inner
