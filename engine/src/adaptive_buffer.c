@@ -233,11 +233,10 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
     thread_cache_t *cache = tls_cache;
 
     /* Fast path: already have a valid cache for this pool.
-     * pool pointer match guarantees this cache belongs to this pool instance.
-     * The destroyed check (acquire) ensures we see any concurrent destruction.
-     * pool_id is checked on the slow path only as defense-in-depth against
-     * the ABA scenario (pool freed + new pool at same address). */
-    if (cache && cache->pool == pool &&
+     * pool pointer + pool_id match guards against the ABA scenario where a
+     * pool is freed and a new pool is allocated at the same address.
+     * The destroyed check (acquire) ensures we see any concurrent destruction. */
+    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id &&
         !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         return cache;
     }
@@ -291,7 +290,11 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     cache->pool = pool;
     cache->pool_id = pool->pool_id;
-    pthread_mutex_init(&cache->cleanup_mutex, NULL);
+    if (pthread_mutex_init(&cache->cleanup_mutex, NULL) != 0) {
+        free(cache);
+        atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
+        return NULL;
+    }
 
     /* Assign shard via round-robin for load balancing */
     cache->shard_id = atomic_fetch_add(&pool->next_shard, 1) & pool->shard_mask;

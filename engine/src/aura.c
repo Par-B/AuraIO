@@ -12,6 +12,7 @@
 #include "adaptive_engine.h"
 #include "adaptive_ring.h"
 #include "internal.h"
+#include "log.h"
 
 #include <errno.h>
 #include <liburing.h>
@@ -1299,15 +1300,16 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
     ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_ftruncate(ctx.ring, ctx.req) != 0) {
-        /* If liburing doesn't support ftruncate (ENOSYS), complete immediately with error */
+        /* If liburing doesn't support ftruncate (ENOSYS), invoke callback and abort.
+         * We must abort (not end) to return the request slot to the pool, since
+         * no SQE was submitted and the request will never complete via CQ. */
         if (errno == ENOSYS) {
-            submit_end(&ctx); /* Keep the request */
+            submit_abort(&ctx);
             resolve_file_end(&file_guard);
-            /* Invoke callback immediately with ENOSYS */
             if (callback) {
-                callback(ctx.req, -ENOSYS, user_data);
+                callback(NULL, -ENOSYS, user_data);
             }
-            return ctx.req;
+            return NULL;
         }
         submit_abort(&ctx);
         resolve_file_end(&file_guard);
@@ -2110,9 +2112,8 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
     }
 
     /* Update in all rings, rolling back on failure.
-     * NOTE: The rollback itself can fail (e.g., if the kernel rejects the
-     * old fd). In that case the file table is left in an inconsistent state
-     * across rings. The caller should unregister all files and re-register. */
+     * If rollback itself fails, the file table is inconsistent across rings
+     * and further I/O submissions are unsafe — latch a fatal error. */
     int old_fd = engine->registered_files[index];
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
@@ -2122,11 +2123,20 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
         if (ret < 0) {
             ring_unlock(ring);
             /* Roll back already-updated rings to old fd */
+            bool rollback_failed = false;
             for (int j = 0; j < i; j++) {
                 ring_ctx_t *prev_ring = &engine->rings[j];
                 ring_lock(prev_ring);
-                io_uring_register_files_update(&prev_ring->ring, index, &old_fd, 1);
+                int rb = io_uring_register_files_update(&prev_ring->ring, index, &old_fd, 1);
                 ring_unlock(prev_ring);
+                if (rb < 0) {
+                    rollback_failed = true;
+                }
+            }
+            if (rollback_failed) {
+                aura_log(AURA_LOG_ERR,
+                         "file registration rollback failed — file table inconsistent");
+                latch_fatal_submit_errno(engine, EIO);
             }
             pthread_rwlock_unlock(&engine->reg_lock);
             errno = -ret;

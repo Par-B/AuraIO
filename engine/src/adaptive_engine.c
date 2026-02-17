@@ -396,9 +396,11 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
         double er_threshold =
             stats->throughput_bps > 0 ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO : 0.0;
         if (stats->efficiency_ratio > er_threshold) {
-            /* Still improving - increase */
+            /* Still improving - increase (clamped to max) */
             if (in_flight_limit < ctrl->max_queue_depth) {
                 in_flight_limit += ADAPTIVE_AIMD_INCREASE;
+                if (in_flight_limit > ctrl->max_queue_depth)
+                    in_flight_limit = ctrl->max_queue_depth;
                 atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
                                       memory_order_relaxed);
                 params_changed = true;
@@ -411,6 +413,8 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
              * we approach the user's latency ceiling. */
             if (in_flight_limit < ctrl->max_queue_depth) {
                 in_flight_limit += ADAPTIVE_AIMD_INCREASE;
+                if (in_flight_limit > ctrl->max_queue_depth)
+                    in_flight_limit = ctrl->max_queue_depth;
                 atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
                                       memory_order_relaxed);
                 params_changed = true;

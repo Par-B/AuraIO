@@ -127,9 +127,12 @@ typedef struct {
     /* Submit-path counters (written during ring_submit_*).
      * Separated from completion-path counters to avoid false sharing
      * between the submit and completion code paths. */
-    _Alignas(64) _Atomic int queued_sqes; /**< SQEs queued but not submitted */
-    int sample_counter;                   /**< Submission counter for sampling */
-    int64_t bytes_submitted;              /**< Total bytes requested at submission */
+    /** SQEs queued but not submitted.
+     *  Written under ring->lock, read lock-free in ring_should_flush()
+     *  (advisory only — stale values affect flush timing, not correctness). */
+    _Alignas(64) _Atomic int queued_sqes;
+    int sample_counter;      /**< Submission counter for sampling */
+    int64_t bytes_submitted; /**< Total bytes requested at submission */
 
     /* Completion-path counters (written during process_completion) */
     _Alignas(64) int64_t
