@@ -964,11 +964,14 @@ cleanup_engine:
     return NULL;
 }
 
-void aura_destroy(aura_engine_t *engine) {
-    if (!engine) {
-        return;
-    }
-
+/**
+ * Phase 1: Signal shutdown and stop background threads.
+ *
+ * Sets shutting_down flag with memory_order_release to ensure visibility,
+ * then stops the adaptive tick thread and event loop. Uses atomic_exchange
+ * on tick_running to ensure only one thread attempts pthread_join.
+ */
+static void destroy_phase_1_shutdown(aura_engine_t *engine) {
     /* Signal shutdown - new submissions will be rejected */
     atomic_store_explicit(&engine->shutting_down, true, memory_order_release);
 
@@ -979,12 +982,30 @@ void aura_destroy(aura_engine_t *engine) {
 
     /* Stop event loop if running */
     aura_stop(engine);
+}
 
+/**
+ * Phase 2: Drain all pending I/O operations.
+ *
+ * Waits for all in-flight operations to complete before proceeding to
+ * unregistration. Critical: must drain before unregistering buffers/files
+ * to avoid invalidating resources still referenced by pending operations.
+ */
+static void destroy_phase_2_drain_io(aura_engine_t *engine) {
     /* Drain all pending I/O before unregistering buffers/files.
      * Without draining first, unregistering would invalidate fixed
      * buffers still referenced by in-flight operations. */
     aura_drain(engine, -1);
+}
 
+/**
+ * Phase 3: Unregister buffers and files.
+ *
+ * Safe to call after phase 2 completes - all I/O is drained. Uses deferred
+ * unregistration (request_unregister) to avoid aura_wait loop which can
+ * livelock post-shutdown when no new I/O is submitted.
+ */
+static void destroy_phase_3_unregister(aura_engine_t *engine) {
     /* Unregister buffers and files (safe now that I/O is drained).
      * Call request_unregister (deferred) to avoid the aura_wait loop
      * which can livelock post-shutdown (no new I/O). */
@@ -995,7 +1016,15 @@ void aura_destroy(aura_engine_t *engine) {
         request_unregister_files(engine);
     }
     finalize_deferred_unregistration(engine);
+}
 
+/**
+ * Phase 4: Cleanup all resources and free memory.
+ *
+ * Destroys engine components in reverse initialization order:
+ * eventfd → rings → buffer pool → rwlock → engine struct.
+ */
+static void destroy_phase_4_cleanup_resources(aura_engine_t *engine) {
     /* Close unified eventfd */
     if (engine->event_fd >= 0) {
         close(engine->event_fd);
@@ -1013,6 +1042,17 @@ void aura_destroy(aura_engine_t *engine) {
 
     pthread_rwlock_destroy(&engine->reg_lock);
     free(engine);
+}
+
+void aura_destroy(aura_engine_t *engine) {
+    if (!engine) {
+        return;
+    }
+
+    destroy_phase_1_shutdown(engine);
+    destroy_phase_2_drain_io(engine);
+    destroy_phase_3_unregister(engine);
+    destroy_phase_4_cleanup_resources(engine);
 }
 
 /* ============================================================================

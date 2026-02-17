@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - C engine: Refactored `aura_create_with_options()` into 5 focused initialization stages (validate core, init buffer pool, init rings, register eventfd, start tick thread), reducing complexity from 160 to 30 lines while improving error handling clarity
   - C engine: Refactored `adaptive_tick()` AIMD state machine into focused handlers (275→70 lines, CCN 25→5), extracting `tick_swap_and_compute_stats()` and 6 per-state handlers. Static inline ensures zero overhead on semi-hot path (10ms interval). Preserves exact atomic ordering and cache locality.
   - C engine: Decomposed `buffer_pool_destroy()` into 3 cleanup phases (100→30 lines): `cleanup_phase_1_mark_destroyed()` (shutdown + quiesce), `cleanup_phase_2_process_caches()` (TLS cache coordination with cleanup_mutex), `cleanup_phase_3_destroy_shards()` (resource teardown). Preserves strict phase ordering and thread-safe cleanup protocol.
+  - C engine: Decomposed `aura_destroy()` into 4 lifecycle phases (50→20 lines): `destroy_phase_1_shutdown()` (signal shutdown, stop threads), `destroy_phase_2_drain_io()` (drain pending operations), `destroy_phase_3_unregister()` (cleanup registered resources), `destroy_phase_4_cleanup_resources()` (free memory, close fds). Preserves strict ordering: shutdown → drain → unregister → cleanup.
 
 ## [0.4.0] - 2026-02-15
 
