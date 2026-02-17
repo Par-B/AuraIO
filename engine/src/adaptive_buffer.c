@@ -176,6 +176,49 @@ static void shard_destroy(buffer_shard_t *shard) {
  * ============================================================================ */
 
 /**
+ * Cleanup mode for cache buffer disposal.
+ */
+typedef enum {
+    CACHE_CLEANUP_FLUSH, /**< Flush buffers back to pool (pool still alive) */
+    CACHE_CLEANUP_FREE /**< Free buffers directly (pool being destroyed) */
+} cache_cleanup_mode_t;
+
+/**
+ * Clean up cached buffers with the specified disposal strategy.
+ *
+ * Must be called with cache->cleanup_mutex held.
+ *
+ * @param pool Pool to flush to (NULL allowed for FREE mode)
+ * @param cache Thread cache to clean
+ * @param mode FLUSH (return to pool) or FREE (destroy directly)
+ */
+static void cleanup_cache_buffers_locked(buffer_pool_t *pool, thread_cache_t *cache,
+                                         cache_cleanup_mode_t mode) {
+    if (cache->cleaned_up) {
+        return; /* Already cleaned by another thread */
+    }
+
+    if (mode == CACHE_CLEANUP_FLUSH && pool) {
+        /* Flush buffers back to pool shards */
+        for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
+            while (cache->counts[class_idx] > 0) {
+                cache_flush(pool, cache, class_idx, class_to_size(class_idx));
+            }
+        }
+    } else {
+        /* Free buffers directly (pool being destroyed or NULL) */
+        for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
+            for (int i = 0; i < cache->counts[class_idx]; i++) {
+                free(cache->buffers[class_idx][i]);
+            }
+            cache->counts[class_idx] = 0;
+        }
+    }
+
+    cache->cleaned_up = true;
+}
+
+/**
  * Get or create thread-local cache for this pool.
  *
  * Each thread gets a dedicated cache the first time it accesses the pool.
@@ -220,14 +263,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
              * Mark cleaned_up so pool destroy skips the redundant flush. */
             buffer_pool_t *old_pool = cache->pool;
             pthread_mutex_lock(&cache->cleanup_mutex);
-            if (!cache->cleaned_up) {
-                for (int ci = 0; ci < BUFFER_SIZE_CLASSES; ci++) {
-                    while (cache->counts[ci] > 0) {
-                        cache_flush(old_pool, cache, ci, class_to_size(ci));
-                    }
-                }
-                cache->cleaned_up = true;
-            }
+            cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FLUSH);
             pthread_mutex_unlock(&cache->cleanup_mutex);
         }
         tls_cache = NULL;
@@ -439,20 +475,10 @@ static void tls_destructor(void *arg) {
     pthread_mutex_lock(&cache->cleanup_mutex);
     cache->thread_exited = true;
 
-    if (!cache->cleaned_up) {
-        /* We got here first — flush buffers back to shards.
-         * Shards are guaranteed alive: pool destroy tears down shards
-         * only after processing all caches (which blocks on our mutex). */
-        buffer_pool_t *pool = cache->pool;
-        if (pool) {
-            for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
-                while (cache->counts[class_idx] > 0) {
-                    cache_flush(pool, cache, class_idx, class_to_size(class_idx));
-                }
-            }
-        }
-        cache->cleaned_up = true;
-    }
+    /* Flush buffers back to shards if we got here first.
+     * Shards are guaranteed alive: pool destroy tears down shards
+     * only after processing all caches (which blocks on our mutex). */
+    cleanup_cache_buffers_locked(cache->pool, cache, CACHE_CLEANUP_FLUSH);
 
     bool pool_gone = (cache->pool == NULL);
     pthread_mutex_unlock(&cache->cleanup_mutex);
@@ -616,16 +642,8 @@ static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
 
             pthread_mutex_lock(&cache->cleanup_mutex);
 
-            if (!cache->cleaned_up) {
-                /* Free all cached buffers (destructor hasn't done it yet) */
-                for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
-                    for (int i = 0; i < cache->counts[class_idx]; i++) {
-                        free(cache->buffers[class_idx][i]);
-                    }
-                    cache->counts[class_idx] = 0;
-                }
-                cache->cleaned_up = true;
-            }
+            /* Free all cached buffers (destructor hasn't done it yet) */
+            cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
 
             cache->pool = NULL;
             bool exited = cache->thread_exited;
