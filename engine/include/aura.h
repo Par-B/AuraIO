@@ -475,6 +475,7 @@ static inline aura_buf_t aura_buf_fixed_idx(int index) {
  * Initialize options with default values
  *
  * Always call this before modifying individual options.
+ * Not thread-safe: operates on the caller's structure.
  *
  * @param options Options structure to initialize
  */
@@ -490,17 +491,21 @@ AURA_API void aura_options_init(aura_options_t *options);
  *
  * Automatically detects CPU cores, creates io_uring rings, and initializes
  * adaptive controllers. One ring is created per CPU core.
+ * Thread-safe (no shared mutable state).
  *
- * @return Engine handle, or NULL on failure (errno set)
+ * @return Engine handle, or NULL on failure (errno set to ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_engine_t *aura_create(void);
 
 /**
  * Create a new async I/O engine with custom options
  *
+ * Thread-safe (no shared mutable state).
+ *
  * @param options Configuration options (initialize with aura_options_init
  * first)
- * @return Engine handle, or NULL on failure (errno set)
+ * @return Engine handle, or NULL on failure (errno set to EINVAL for
+ *         invalid options, or ENOMEM for allocation failure)
  */
 AURA_API AURA_WARN_UNUSED aura_engine_t *aura_create_with_options(const aura_options_t *options);
 
@@ -557,6 +562,8 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  * For best performance with O_DIRECT files, use aura_buffer_alloc() to get
  * properly aligned buffers, or use registered buffers for zero-copy I/O.
  *
+ * Thread-safe: may be called concurrently from multiple threads.
+ *
  * @param engine    Engine handle
  * @param fd        Open file descriptor
  * @param buf       Buffer descriptor (use aura_buf() or aura_buf_fixed())
@@ -576,6 +583,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int f
  *
  * The callback is invoked when the write completes. The buffer must remain
  * valid until the callback is called.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * Supports both regular and registered buffers via aura_buf_t descriptor:
  * @code
@@ -606,6 +614,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_write(aura_engine_t *engine, int 
  * Ensures all previous writes to the file descriptor are flushed to storage.
  * Pass AURA_FSYNC_DEFAULT (0) for a full fsync, or AURA_FSYNC_DATASYNC
  * for fdatasync behavior (data only, skip metadata if possible).
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        Open file descriptor
@@ -636,6 +645,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  * Opens a file relative to a directory fd.  The callback receives the new
  * file descriptor as the result (>= 0 on success, negative errno on failure).
  * The pathname must remain valid until the callback fires.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
@@ -644,7 +654,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  * @param mode      File mode (used when O_CREAT is set)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_openat(aura_engine_t *engine, int dirfd,
                                                       const char *pathname, int flags, mode_t mode,
@@ -654,12 +665,14 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_openat(aura_engine_t *engine, int
  * Submit an asynchronous close operation.
  *
  * Callback receives 0 on success, negative errno on failure.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        File descriptor to close
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int fd,
                                                      aura_callback_t callback, void *user_data);
@@ -670,6 +683,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int 
  *
  * Retrieves file metadata into the caller-provided statx buffer.
  * Both pathname and statxbuf must remain valid until the callback.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
@@ -679,7 +693,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int 
  * @param statxbuf  Output buffer -- kernel writes directly here
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int dirfd,
                                                      const char *pathname, int flags,
@@ -691,6 +706,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int 
  * Submit an asynchronous fallocate operation.
  *
  * Preallocates or deallocates file space.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        File descriptor
@@ -699,7 +715,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int 
  * @param len       Length of region
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode,
                                                          off_t offset, off_t len,
@@ -708,14 +725,17 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, 
 /**
  * Submit an asynchronous ftruncate operation.
  *
- * Truncates a file to the specified length.  Requires kernel 6.9+.
+ * Truncates a file to the specified length.  Requires kernel 6.9+;
+ * on older kernels, the callback receives -ENOSYS.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        File descriptor
  * @param length    New file length
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd,
                                                          off_t length, aura_callback_t callback,
@@ -725,6 +745,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, 
  * Submit an asynchronous sync_file_range operation.
  *
  * Syncs a byte range without flushing metadata.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        File descriptor
@@ -733,7 +754,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, 
  * @param flags     SYNC_FILE_RANGE_WAIT_BEFORE, _WRITE, _WAIT_AFTER
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
- * @return Request handle, or NULL on error (errno set)
+ * @return Request handle, or NULL on error (errno set to EINVAL,
+ *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *
 aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, unsigned int flags,
@@ -749,6 +771,7 @@ aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, 
  *
  * Reads into multiple buffers in a single operation (scatter read).
  * The iovec array and all buffers must remain valid until callback.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        Open file descriptor
@@ -770,6 +793,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_readv(aura_engine_t *engine, int 
  *
  * Writes from multiple buffers in a single operation (gather write).
  * The iovec array and all buffers must remain valid until callback.
+ * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
  * @param fd        Open file descriptor
@@ -799,6 +823,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_writev(aura_engine_t *engine, int
  *
  * Cancellation is best-effort: if the operation has already completed or
  * is being processed, it may not be cancelled.
+ * Thread-safe: may be called from any thread.
  *
  * @param engine Engine handle (must be the same engine that created the
  * request)
@@ -819,6 +844,8 @@ AURA_API AURA_WARN_UNUSED int aura_cancel(aura_engine_t *engine, aura_request_t 
 /**
  * Check if a request is still pending
  *
+ * Thread-safe: may be called from any thread while the request is valid.
+ *
  * @param req Request handle
  * @return true if still in-flight, false if completed or cancelled
  */
@@ -827,6 +854,8 @@ AURA_API bool aura_request_pending(const aura_request_t *req);
 /**
  * Get the file descriptor associated with a request
  *
+ * Thread-safe: may be called from any thread while the request is valid.
+ *
  * @param req Request handle
  * @return File descriptor, or -1 if request is invalid
  */
@@ -834,6 +863,8 @@ AURA_API int aura_request_fd(const aura_request_t *req);
 
 /**
  * Get user data associated with a request
+ *
+ * Thread-safe: may be called from any thread while the request is valid.
  *
  * @param req Request handle
  * @return User data pointer passed to submission function
@@ -845,6 +876,7 @@ AURA_API void *aura_request_user_data(const aura_request_t *req);
  *
  * Useful in generic completion handlers to distinguish between operations
  * (e.g., openat returns a new fd, read/write return bytes transferred).
+ * Thread-safe: may be called from any thread while the request is valid.
  *
  * @param req Request handle
  * @return Operation type (AURA_OP_READ, AURA_OP_OPENAT, etc.), or -1 if NULL
@@ -867,8 +899,10 @@ AURA_API int aura_request_op_type(const aura_request_t *req);
  * and clear the readable state. Compatible with epoll (EPOLLIN),
  * poll (POLLIN), and select.
  *
+ * Thread-safe: the returned fd is valid for the engine's lifetime.
+ *
  * @param engine Engine handle
- * @return Pollable fd, or -1 on error (errno set)
+ * @return Pollable fd, or -1 on error (errno set to EINVAL)
  */
 AURA_API int aura_get_poll_fd(const aura_engine_t *engine);
 
@@ -908,6 +942,9 @@ AURA_API int aura_wait(aura_engine_t *engine, int timeout_ms);
  * Blocks, continuously processing completions until aura_stop() is called.
  * Useful for dedicating a thread to I/O processing.
  *
+ * Must NOT be called concurrently with aura_poll(), aura_wait(), or
+ * aura_drain() on the same engine (see aura_poll() threading model note).
+ *
  * @param engine Engine handle
  */
 AURA_API void aura_run(aura_engine_t *engine);
@@ -927,6 +964,9 @@ AURA_API void aura_stop(aura_engine_t *engine);
  *
  * Waits until ALL in-flight operations across all rings have completed.
  * Useful for graceful shutdown or synchronization points.
+ *
+ * Must NOT be called concurrently with aura_poll(), aura_wait(), or
+ * aura_run() on the same engine (see aura_poll() threading model note).
  *
  * New submissions are NOT blocked during drain; if other threads submit
  * operations concurrently, drain will process those as well.
@@ -1018,10 +1058,14 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
  * unregister is draining. Use aura_request_unregister_buffers() from callback
  * contexts, or aura_unregister_buffers() for a synchronous wait.
  *
+ * Not thread-safe with other registration operations. I/O submissions
+ * may proceed concurrently.
+ *
  * @param engine Engine handle
  * @param iovs   Array of iovec describing buffers to register
  * @param count  Number of buffers
- * @return 0 on success, -1 on error (errno set)
+ * @return 0 on success, -1 on error (errno set to EINVAL, EBUSY if
+ *         already registered, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs,
                                                     int count);
@@ -1034,10 +1078,10 @@ AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const
  * unregister is completed lazily once in-flight fixed-buffer operations reach
  * zero.
  *
- * Safe to call from completion callbacks.
+ * Thread-safe: safe to call from completion callbacks or any thread.
  *
  * @param engine Engine handle
- * @return 0 on success, -1 on error
+ * @return 0 on success, -1 on error (errno set to EINVAL)
  */
 AURA_API int aura_request_unregister_buffers(aura_engine_t *engine);
 
@@ -1048,8 +1092,10 @@ AURA_API int aura_request_unregister_buffers(aura_engine_t *engine);
  * drain and unregister completes. If called from a callback, it degrades to
  * aura_request_unregister_buffers() and returns immediately.
  *
+ * Thread-safe: safe to call from any thread.
+ *
  * @param engine Engine handle
- * @return 0 on success, -1 on error
+ * @return 0 on success, -1 on error (errno set to EINVAL)
  */
 AURA_API int aura_unregister_buffers(aura_engine_t *engine);
 
@@ -1069,10 +1115,14 @@ AURA_API int aura_unregister_buffers(aura_engine_t *engine);
  * (aura_read/aura_write/readv/writev/fsync) automatically use the
  * registered-file table when the submitted fd is found there.
  *
+ * Not thread-safe with other registration operations. I/O submissions
+ * may proceed concurrently.
+ *
  * @param engine Engine handle
  * @param fds    Array of file descriptors to register
  * @param count  Number of file descriptors
- * @return 0 on success, -1 on error (errno set)
+ * @return 0 on success, -1 on error (errno set to EINVAL, EBUSY if
+ *         already registered, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const int *fds, int count);
 
@@ -1087,21 +1137,25 @@ AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const i
  * while rings N..max will retain the old fd. On failure, the caller should
  * unregister all files with aura_unregister_files() and re-register them.
  *
+ * Not thread-safe with other registration operations.
+ *
  * @param engine Engine handle
  * @param index  Index in registered file array
  * @param fd     New file descriptor (-1 to unregister slot)
- * @return 0 on success, -1 on error (errno set; state may be inconsistent)
+ * @return 0 on success, -1 on error (errno set to EINVAL, ENOENT if
+ *         files not registered, or EBUSY if unregister pending;
+ *         state may be inconsistent on kernel error)
  */
 AURA_API AURA_WARN_UNUSED int aura_update_file(aura_engine_t *engine, int index, int fd);
 
 /**
  * Request deferred unregister of registered files (callback-safe)
  *
- * Marks registered files for unregister and returns immediately. Safe to call
- * from completion callbacks.
+ * Marks registered files for unregister and returns immediately.
+ * Thread-safe: safe to call from completion callbacks or any thread.
  *
  * @param engine Engine handle
- * @return 0 on success, -1 on error
+ * @return 0 on success, -1 on error (errno set to EINVAL)
  */
 AURA_API int aura_request_unregister_files(aura_engine_t *engine);
 
@@ -1112,8 +1166,10 @@ AURA_API int aura_request_unregister_files(aura_engine_t *engine);
  * from a callback, it degrades to aura_request_unregister_files() and
  * returns immediately.
  *
+ * Thread-safe: safe to call from any thread.
+ *
  * @param engine Engine handle
- * @return 0 on success, -1 on error
+ * @return 0 on success, -1 on error (errno set to EINVAL)
  */
 AURA_API int aura_unregister_files(aura_engine_t *engine);
 
@@ -1143,6 +1199,8 @@ AURA_API void aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, s
 
 /**
  * Get the number of io_uring rings in the engine
+ *
+ * Thread-safe: returns a constant set at engine creation.
  *
  * @param engine Engine handle
  * @return Number of rings, or 0 if engine is NULL
@@ -1204,6 +1262,7 @@ AURA_API int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stat
  *
  * Valid phase values are 0-5 (AURA_PHASE_BASELINE through
  * AURA_PHASE_CONVERGED).  Returns "UNKNOWN" for out-of-range values.
+ * Thread-safe: returns a pointer to a static string.
  *
  * @param phase Phase value (from aura_ring_stats_t.aimd_phase)
  * @return Static string like "BASELINE", "PROBING", etc., or "UNKNOWN"
@@ -1212,6 +1271,8 @@ AURA_API const char *aura_phase_name(int phase);
 
 /**
  * Get library version string
+ *
+ * Thread-safe: returns a pointer to a static string.
  *
  * @return Version string (e.g., "0.3.0")
  */
@@ -1277,6 +1338,7 @@ AURA_API void aura_log_emit(int level, const char *fmt, ...)
  *
  * Format: (major * 10000 + minor * 100 + patch)
  * Example: 0.1.0 = 100
+ * Thread-safe.
  *
  * @return Version integer
  */
