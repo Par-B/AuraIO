@@ -604,49 +604,60 @@ static void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op)
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 }
 
-int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req) {
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
+/**
+ * Macro to eliminate boilerplate in metadata operations.
+ * Usage: RING_SUBMIT_META_OP(ctx, req, OP_TYPE, io_uring_prep_call);
+ *
+ * Handles: validation, SQE acquisition, set_data, finish, and return.
+ */
+#define RING_SUBMIT_META_OP(ctx, req, op_type, prep_call)  \
+    do {                                                   \
+        struct io_uring_sqe *sqe = meta_get_sqe(ctx, req); \
+        if (!sqe) return (-1);                             \
+        prep_call;                                         \
+        io_uring_sqe_set_data(sqe, req);                   \
+        meta_finish(ctx, req, op_type);                    \
+        return (0);                                        \
+    } while (0)
 
-    io_uring_prep_openat(sqe, req->fd, req->meta.open.pathname, req->meta.open.flags,
-                         req->meta.open.mode);
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_OPENAT);
-    return (0);
+/**
+ * Variant for operations that require fixed file handling.
+ * Adds sqe_apply_fixed_file() call after prep.
+ */
+#define RING_SUBMIT_META_OP_FIXED(ctx, req, op_type, prep_call) \
+    do {                                                        \
+        struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);      \
+        if (!sqe) return (-1);                                  \
+        prep_call;                                              \
+        sqe_apply_fixed_file(sqe, req);                         \
+        io_uring_sqe_set_data(sqe, req);                        \
+        meta_finish(ctx, req, op_type);                         \
+        return (0);                                             \
+    } while (0)
+
+int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req) {
+    RING_SUBMIT_META_OP(ctx, req, AURA_OP_OPENAT,
+                        io_uring_prep_openat(sqe, req->fd, req->meta.open.pathname,
+                                             req->meta.open.flags, req->meta.open.mode));
 }
 
 int ring_submit_close(ring_ctx_t *ctx, aura_request_t *req) {
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
-
-    io_uring_prep_close(sqe, req->fd);
     /* No sqe_apply_fixed_file: close always uses the raw fd.
      * IOSQE_FIXED_FILE on close means "unregister slot", not "close fd". */
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_CLOSE);
-    return (0);
+    RING_SUBMIT_META_OP(ctx, req, AURA_OP_CLOSE, io_uring_prep_close(sqe, req->fd));
 }
 
 int ring_submit_statx(ring_ctx_t *ctx, aura_request_t *req) {
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
-
-    io_uring_prep_statx(sqe, req->fd, req->meta.statx.pathname, req->meta.statx.flags,
-                        req->meta.statx.mask, req->meta.statx.buf);
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_STATX);
-    return (0);
+    RING_SUBMIT_META_OP(ctx, req, AURA_OP_STATX,
+                        io_uring_prep_statx(sqe, req->fd, req->meta.statx.pathname,
+                                            req->meta.statx.flags, req->meta.statx.mask,
+                                            req->meta.statx.buf));
 }
 
 int ring_submit_fallocate(ring_ctx_t *ctx, aura_request_t *req) {
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
-
-    io_uring_prep_fallocate(sqe, req->fd, req->meta.fallocate.mode, req->offset, (off_t)req->len);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_FALLOCATE);
-    return (0);
+    RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_FALLOCATE,
+                              io_uring_prep_fallocate(sqe, req->fd, req->meta.fallocate.mode,
+                                                      req->offset, (off_t)req->len));
 }
 
 int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
@@ -658,14 +669,8 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
     errno = ENOSYS;
     return (-1);
 #else
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
-
-    io_uring_prep_ftruncate(sqe, req->fd, (loff_t)req->len);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_FTRUNCATE);
-    return (0);
+    RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_FTRUNCATE,
+                              io_uring_prep_ftruncate(sqe, req->fd, (loff_t)req->len));
 #endif
 }
 
@@ -674,15 +679,10 @@ int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
         errno = EINVAL;
         return (-1);
     }
-    struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);
-    if (!sqe) return (-1);
-
-    io_uring_prep_sync_file_range(sqe, req->fd, (unsigned)req->len, req->offset,
-                                  req->meta.sync_range.flags);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-    meta_finish(ctx, req, AURA_OP_SYNC_FILE_RANGE);
-    return (0);
+    RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_SYNC_FILE_RANGE,
+                              io_uring_prep_sync_file_range(sqe, req->fd, (unsigned)req->len,
+                                                            req->offset,
+                                                            req->meta.sync_range.flags));
 }
 
 /* ============================================================================
