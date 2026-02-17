@@ -500,12 +500,26 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
 }
 
 /**
- * Handle CONVERGED phase: No more changes.
+ * Handle CONVERGED phase: Monitor for workload changes.
+ *
+ * CONVERGED means tuning is complete for the current workload. However, if the
+ * workload changes (sustained latency spike), we must re-enter PROBING to adapt.
+ * Without this, a workload shift after convergence would cause permanent latency
+ * degradation with no corrective action.
  */
 static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
-    (void)ctrl;
-    (void)stats;
-    return false; /* No params changed */
+    if (stats->latency_rising) {
+        ctrl->spike_count++;
+        if (ctrl->spike_count >= 2) {
+            /* Sustained latency spike — workload has changed, back off and re-tune */
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+            ctrl->spike_count = 0;
+            ctrl->steady_count = 0;
+        }
+    } else {
+        ctrl->spike_count = 0;
+    }
+    return false; /* No params changed (BACKOFF will change them on next tick) */
 }
 
 /* ============================================================================
