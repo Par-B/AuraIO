@@ -360,7 +360,6 @@ const char *adaptive_phase_name(adaptive_phase_t phase) {
  * Handle BASELINE phase: Collect baseline metrics during warmup.
  */
 static inline bool handle_baseline_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
-    (void)stats; /* Unused in baseline phase */
     ctrl->warmup_count++;
     if (ctrl->warmup_count >= ADAPTIVE_WARMUP_SAMPLES) {
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
@@ -481,12 +480,12 @@ static inline bool handle_steady_phase(adaptive_controller_t *ctrl, const tick_s
 static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
     (void)stats; /* Unused in backoff phase */
 
-    /* Multiplicative decrease: reduce by 20% (AIMD_DECREASE = 0.80).
-     * Use integer arithmetic (4/5) to avoid float truncation to 0 when
-     * in_flight_limit is small, and clamp to min_in_flight (>= 1). */
+    /* Multiplicative decrease: reduce by (1 - AIMD_DECREASE).
+     * Use double multiplication + ceil to stay consistent with the constant,
+     * and clamp to min_in_flight (>= 1). */
     int in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
-    int reduced = (in_flight_limit * 4 + 4) / 5; /* ceil(limit * 0.80) */
+    int reduced = (int)ceil((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
     in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
     atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_relaxed);
 
@@ -569,8 +568,13 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         }
     }
 
-    /* Save prev_* BEFORE state machine may modify in_flight_limit,
-     * so next tick's efficiency ratio sees the actual delta. */
+    /* Save prev_* BEFORE the state machine runs.  The efficiency ratio
+     * on the NEXT tick needs to measure the effect of THIS tick's state
+     * machine decision: delta_throughput = next_throughput - this_throughput,
+     * delta_inflight = next_limit - this_limit.  If we saved after the
+     * state machine, prev_in_flight_limit would already include this tick's
+     * change, making the delta always zero on the next tick.
+     * WARNING: Do not reorder these lines relative to the switch below. */
     ctrl->prev_throughput_bps = stats.throughput_bps;
     ctrl->prev_in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);

@@ -1753,14 +1753,20 @@ void aura_run(aura_engine_t *engine) {
     atomic_store(&engine->running, true);
     atomic_store(&engine->stop_requested, false);
 
+    int drain_iterations = 0;
     for (;;) {
         int completed = aura_wait(engine, 100);
         if (completed < 0) {
             break;
         }
 
-        /* Check if we have any pending work.
-         * pending_count is atomic — no lock needed for a simple read. */
+        if (!atomic_load(&engine->stop_requested)) {
+            drain_iterations = 0;
+            continue;
+        }
+
+        /* Stop requested — drain in-flight I/O but don't wait forever
+         * for new submissions from other threads. */
         bool has_pending = false;
         for (int i = 0; i < engine->ring_count; i++) {
             if (atomic_load_explicit(&engine->rings[i].pending_count, memory_order_acquire) > 0) {
@@ -1769,9 +1775,7 @@ void aura_run(aura_engine_t *engine) {
             }
         }
 
-        /* Exit only when stop requested AND no pending work AND no completions
-         * in this iteration (ensures we drain all in-flight I/O before returning) */
-        if (atomic_load(&engine->stop_requested) && !has_pending && completed == 0) {
+        if ((!has_pending && completed == 0) || ++drain_iterations >= 100) {
             break;
         }
     }
@@ -1998,7 +2002,9 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         return (-1);
     }
 
-    /* Wait for the deferred unregister to complete */
+    /* Wait for the deferred unregister to complete.
+     * Timeout after 10 seconds to avoid hanging on stuck I/O. */
+    int attempts = 0;
     for (;;) {
         bool done;
         pthread_rwlock_rdlock(&engine->reg_lock);
@@ -2016,6 +2022,11 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         pthread_rwlock_unlock(&engine->reg_lock);
         if (done) {
             return (0);
+        }
+
+        if (++attempts >= 100) {
+            errno = ETIMEDOUT;
+            return (-1);
         }
 
         int n = aura_wait(engine, 100);

@@ -161,6 +161,11 @@ bool ring_in_callback_context(void);
 /** Sample 1 in N submissions for latency measurement.
  *  Must be power of 2. With N=8 and 10K IOPS, gives ~1250 samples/sec
  *  which is sufficient for P99 calculation (needs ~100 per 100ms window). */
+/** Bounds for CQE drain batch size. VLA arrays in ring_drain_cqes are
+ *  sized to RING_MAX_POLL_BATCH to keep stack usage bounded. */
+#define RING_MIN_POLL_BATCH 16
+#define RING_MAX_POLL_BATCH 128
+
 #define RING_LATENCY_SAMPLE_RATE 8
 #define RING_LATENCY_SAMPLE_MASK (RING_LATENCY_SAMPLE_RATE - 1)
 

@@ -165,8 +165,8 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
 
     /* Set CQE drain batch size based on queue depth */
     int batch = queue_depth >> 2;
-    if (batch < 16) batch = 16;
-    if (batch > 128) batch = 128;
+    if (batch < RING_MIN_POLL_BATCH) batch = RING_MIN_POLL_BATCH;
+    if (batch > RING_MAX_POLL_BATCH) batch = RING_MAX_POLL_BATCH;
     ctx->poll_batch_size = batch;
 
     /* Initialize adaptive controller */
@@ -718,6 +718,7 @@ int ring_flush(ring_ctx_t *ctx) {
      * Use submitted (not queued_sqes) in case of partial submit. */
     adaptive_record_submit(&ctx->adaptive, submitted);
     ctx->queued_sqes -= submitted;
+    if (ctx->queued_sqes < 0) ctx->queued_sqes = 0;
 
     return submitted;
 }
@@ -761,6 +762,7 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
      * so we must capture everything we need before potential reuse. */
     retire.op_idx = req->op_idx;
     retire.op_type = req->op_type;
+    bool uses_registered_buffer = req->uses_registered_buffer;
     aura_callback_t callback = req->callback;
     void *user_data = req->user_data;
 
@@ -791,7 +793,7 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         callback_context_depth--;
     }
 
-    if (req->uses_registered_buffer) {
+    if (uses_registered_buffer) {
         atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
     }
 
@@ -856,8 +858,8 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
     struct {
         aura_request_t *req;
         ssize_t result;
-    } batch[batch_size];
-    retire_entry_t retire[batch_size];
+    } batch[RING_MAX_POLL_BATCH];
+    retire_entry_t retire[RING_MAX_POLL_BATCH];
     int completed = 0;
 
     while (1) {

@@ -485,8 +485,15 @@ static void tls_destructor(void *arg) {
 
     /* Flush buffers back to shards if we got here first.
      * Shards are guaranteed alive: pool destroy tears down shards
-     * only after processing all caches (which blocks on our mutex). */
-    cleanup_cache_buffers_locked(cache->pool, cache, CACHE_CLEANUP_FLUSH);
+     * only after processing all caches (which blocks on our mutex).
+     * If pool is NULL (destroy already ran) or marked destroyed (in progress),
+     * free buffers directly instead of trying to access shards. */
+    buffer_pool_t *pool = cache->pool;
+    if (pool && !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        cleanup_cache_buffers_locked(pool, cache, CACHE_CLEANUP_FLUSH);
+    } else {
+        cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
+    }
 
     bool pool_gone = (cache->pool == NULL);
     pthread_mutex_unlock(&cache->cleanup_mutex);
@@ -819,7 +826,8 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Pool destroyed — shards are gone, just free the buffer directly.
      * This can happen when a late callback frees a buffer after destroy. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        atomic_fetch_sub_explicit(&pool->total_allocated, size, memory_order_relaxed);
+        size_t bucket_size = class_to_size(size_to_class(size));
+        atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
         atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         free(buf);
         return;
