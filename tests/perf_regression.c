@@ -20,6 +20,7 @@
  *   --depths D1,D2,..  Queue depths to sweep (default: 32,64,128,256)
  *   --batch-size N     SQEs per io_uring_submit() call (default: 8)
  *   --threshold N      Max allowed IOPS overhead % (default: 10)
+ *   --runs N           Confirmation runs per benchmark (default: 3)
  *   --verbose          Show per-depth sweep results
  *
  * Environment:
@@ -51,10 +52,12 @@
 #define DEFAULT_FILE_SIZE (1ULL << 30) // 1 GB
 #define DEFAULT_DURATION_SEC 5
 #define DEFAULT_WARMUP_SEC 1
-#define DEFAULT_ADAPTIVE_WARMUP_SEC 2
+#define DEFAULT_ADAPTIVE_WARMUP_SEC 5
 #define DEFAULT_BLOCK_SIZE 4096
 #define DEFAULT_BATCH_SIZE 8
 #define DEFAULT_THRESHOLD 10
+#define DEFAULT_RUNS 3
+#define MAX_RUNS 9
 #define MAX_DEPTHS 16
 #define LATENCY_BUCKETS 200
 #define LATENCY_BUCKET_WIDTH_US 50
@@ -140,6 +143,7 @@ typedef struct {
     int num_depths;
     int batch_size;
     int threshold_pct;
+    int runs;
     bool verbose;
 } perf_config_t;
 
@@ -729,6 +733,17 @@ static double pct_diff(double baseline, double test) {
     return (test - baseline) / baseline * 100.0;
 }
 
+static int result_cmp_iops(const void *a, const void *b) {
+    double da = ((const perf_result_t *)a)->iops;
+    double db = ((const perf_result_t *)b)->iops;
+    return (da > db) - (da < db);
+}
+
+static perf_result_t median_result(perf_result_t *results, int n) {
+    qsort(results, (size_t)n, sizeof(perf_result_t), result_cmp_iops);
+    return results[n / 2];
+}
+
 // ============================================================================
 // CLI parsing
 // ============================================================================
@@ -754,12 +769,13 @@ static void usage(const char *prog) {
             "  --depths D1,D2,..  Queue depths (default: 32,64,128,256)\n"
             "  --batch-size N     SQEs per submit in raw baseline (default: %d)\n"
             "  --threshold N      Max IOPS overhead %% (default: %d)\n"
+            "  --runs N           Confirmation runs per benchmark (default: %d, max %d)\n"
             "  --verbose          Show all sweep results\n"
             "\n"
             "Environment:\n"
             "  AURA_PERF_FILE   Same as --file (CLI takes precedence)\n",
             prog, DEFAULT_DURATION_SEC, DEFAULT_WARMUP_SEC, DEFAULT_BLOCK_SIZE, DEFAULT_BATCH_SIZE,
-            DEFAULT_THRESHOLD);
+            DEFAULT_THRESHOLD, DEFAULT_RUNS, MAX_RUNS);
 }
 
 // ============================================================================
@@ -779,6 +795,7 @@ int main(int argc, char **argv) {
         .num_depths = 4,
         .batch_size = DEFAULT_BATCH_SIZE,
         .threshold_pct = DEFAULT_THRESHOLD,
+        .runs = DEFAULT_RUNS,
         .verbose = false,
     };
 
@@ -798,6 +815,10 @@ int main(int argc, char **argv) {
             cfg.batch_size = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--threshold") == 0 && i + 1 < argc) {
             cfg.threshold_pct = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc) {
+            cfg.runs = atoi(argv[++i]);
+            if (cfg.runs < 1) cfg.runs = 1;
+            if (cfg.runs > MAX_RUNS) cfg.runs = MAX_RUNS;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             cfg.verbose = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -855,22 +876,24 @@ int main(int argc, char **argv) {
     }
 
     // Estimate total time
-    // naive sweep + optimized sweep + static + adaptive
-    int num_tests = cfg.num_depths * 2 + 2;
+    // naive sweep + optimized sweep + confirmation runs (raw + static + adaptive)
     int adaptive_warmup =
         cfg.warmup_sec < DEFAULT_ADAPTIVE_WARMUP_SEC ? DEFAULT_ADAPTIVE_WARMUP_SEC : cfg.warmup_sec;
-    int est_sec = cfg.num_depths * 2 * (cfg.warmup_sec + cfg.duration_sec) +
-                  (cfg.warmup_sec + cfg.duration_sec) + (adaptive_warmup + cfg.duration_sec);
+    int sweep_sec = cfg.num_depths * 2 * (cfg.warmup_sec + cfg.duration_sec);
+    int confirm_sec = cfg.runs * ((cfg.warmup_sec + cfg.duration_sec) * 2 +
+                                  (adaptive_warmup + cfg.duration_sec));
+    int est_sec = sweep_sec + confirm_sec;
+    int num_tests = cfg.num_depths * 2 + cfg.runs * 3;
 
     // Print header
     printf("=== AuraIO Performance Regression Test ===\n");
     printf("File: %s (%.1f GB%s)\n", cfg.file_path ? cfg.file_path : "(temp)",
            (double)file_size / (1ULL << 30), using_odirect ? ", O_DIRECT" : "");
-    printf("Block size: %d  Duration: %ds  Warmup: %ds  Batch: %d\n", cfg.block_size,
-           cfg.duration_sec, cfg.warmup_sec, cfg.batch_size);
+    printf("Block size: %d  Duration: %ds  Warmup: %ds  Batch: %d  Runs: %d\n", cfg.block_size,
+           cfg.duration_sec, cfg.warmup_sec, cfg.batch_size, cfg.runs);
     printf("Tests: %d  Estimated time: ~%dm%02ds\n\n", num_tests, est_sec / 60, est_sec % 60);
 
-    // ---- Raw io_uring naive sweep ----
+    // ---- Raw io_uring naive sweep (depth discovery only) ----
     printf("--- Raw io_uring (naive) sweep ---\n");
     perf_result_t naive_best = { 0 };
     int naive_best_depth = 0;
@@ -898,17 +921,17 @@ int main(int argc, char **argv) {
     }
     printf("\n");
 
-    // ---- Raw io_uring optimized sweep ----
+    // ---- Raw io_uring optimized sweep (depth discovery only) ----
     printf("--- Raw io_uring (optimized) sweep ---\n");
-    perf_result_t raw_best = { 0 };
+    perf_result_t raw_sweep_best = { 0 };
     int best_depth = 0;
 
     for (int i = 0; i < cfg.num_depths; i++) {
         int d = cfg.depths[i];
         perf_result_t r = run_raw_uring(fd, &cfg, d, offsets, cfg.warmup_sec);
-        bool is_best = r.iops > raw_best.iops;
+        bool is_best = r.iops > raw_sweep_best.iops;
         if (is_best) {
-            raw_best = r;
+            raw_sweep_best = r;
             best_depth = d;
         }
         if (cfg.verbose || is_best) {
@@ -922,25 +945,46 @@ int main(int argc, char **argv) {
         char label[32];
         snprintf(label, sizeof(label), "depth=%d", best_depth);
         printf("  Best: ");
-        print_result(label, &raw_best, false);
+        print_result(label, &raw_sweep_best, false);
     }
     printf("\n");
 
-    // ---- AuraIO static (matching raw-optimal depth) ----
-    printf("--- AuraIO (static, 1 ring, depth=%d) ---\n", best_depth);
-    perf_result_t aura_static = run_aura(fd, &cfg, best_depth, false, offsets, cfg.warmup_sec);
-    print_result("", &aura_static, false);
-    printf("\n");
-
-    // ---- AuraIO adaptive ----
+    // ---- Confirmation phase: median-of-N runs at best depth ----
     int adaptive_depth = 256;
     if (adaptive_depth < best_depth) adaptive_depth = best_depth * 2;
-    printf("--- AuraIO (adaptive, 1 ring, depth=%d) ---\n", adaptive_depth);
 
-    perf_result_t aura_adaptive =
-        run_aura(fd, &cfg, adaptive_depth, true, offsets, adaptive_warmup);
-    print_result("", &aura_adaptive, false);
-    printf("  (AIMD converged depth: %d)\n", aura_adaptive.depth_used);
+    perf_result_t raw_runs[MAX_RUNS];
+    perf_result_t static_runs[MAX_RUNS];
+    perf_result_t adapt_runs[MAX_RUNS];
+
+    printf("--- Confirmation phase (%d runs at depth=%d) ---\n", cfg.runs, best_depth);
+    for (int run = 0; run < cfg.runs; run++) {
+        if (cfg.runs > 1) printf("  Run %d/%d:\n", run + 1, cfg.runs);
+
+        raw_runs[run] = run_raw_uring(fd, &cfg, best_depth, offsets, cfg.warmup_sec);
+        static_runs[run] = run_aura(fd, &cfg, best_depth, false, offsets, cfg.warmup_sec);
+        adapt_runs[run] = run_aura(fd, &cfg, adaptive_depth, true, offsets, adaptive_warmup);
+
+        if (cfg.runs > 1) {
+            char iops[32];
+            format_iops(iops, sizeof(iops), raw_runs[run].iops);
+            printf("    Raw optimized: %s IOPS", iops);
+            format_iops(iops, sizeof(iops), static_runs[run].iops);
+            printf("  |  Static: %s IOPS", iops);
+            format_iops(iops, sizeof(iops), adapt_runs[run].iops);
+            printf("  |  Adaptive: %s IOPS (d=%d)\n", iops, adapt_runs[run].depth_used);
+        }
+    }
+
+    // Select medians
+    perf_result_t raw_best = median_result(raw_runs, cfg.runs);
+    perf_result_t aura_static = median_result(static_runs, cfg.runs);
+    perf_result_t aura_adaptive = median_result(adapt_runs, cfg.runs);
+
+    if (cfg.runs > 1) {
+        printf("  Median selected (run %d/%d/%d by IOPS)\n", cfg.runs / 2 + 1,
+               cfg.runs / 2 + 1, cfg.runs / 2 + 1);
+    }
     printf("\n");
 
     // ---- Overhead summary ----
@@ -960,8 +1004,8 @@ int main(int argc, char **argv) {
     format_iops(iops_buf, sizeof(iops_buf), raw_best.iops);
     format_lat(avg, sizeof(avg), raw_best.avg_lat_us);
     format_lat(p99, sizeof(p99), raw_best.p99_lat_us);
-    printf("Raw optimized (d=%d):        %14s  %10s  %10s  (baseline)\n", best_depth, iops_buf, avg,
-           p99);
+    printf("Raw optimized (d=%d):        %14s  %10s  %10s  (baseline, median of %d)\n",
+           best_depth, iops_buf, avg, p99, cfg.runs);
 
     double static_iops_pct = pct_diff(raw_best.iops, aura_static.iops);
     double static_avg_pct = pct_diff((double)raw_best.avg_lat_us, (double)aura_static.avg_lat_us);
