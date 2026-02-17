@@ -835,7 +835,12 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
          * internal bookkeeping, not user I/O operations. */
         if (entries[i].op_type != AURA_OP_CANCEL) {
             ctx->ops_completed++;
-            if (entries[i].result > 0) {
+            /* Only accumulate bytes for actual data transfer ops.
+             * Non-transfer ops like openat return fd numbers, not byte counts. */
+            aura_op_type_t op = entries[i].op_type;
+            if (entries[i].result > 0 &&
+                (op == AURA_OP_READ || op == AURA_OP_WRITE || op == AURA_OP_READV ||
+                 op == AURA_OP_WRITEV || op == AURA_OP_READ_FIXED || op == AURA_OP_WRITE_FIXED)) {
                 ctx->bytes_completed += entries[i].result;
             }
         }
