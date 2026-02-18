@@ -136,7 +136,7 @@ typedef struct {
      *  Written under ring->lock, read lock-free in ring_should_flush()
      *  (advisory only — stale values affect flush timing, not correctness). */
     _Alignas(64) _Atomic int queued_sqes;
-    int sample_counter; /**< Submission counter for sampling */
+    unsigned int sample_counter; /**< Submission counter for sampling */
 
     /* Completion-path counters (written during process_completion) */
     _Alignas(64) int64_t

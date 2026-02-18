@@ -27,6 +27,7 @@ tests/adaptive_value
 tests/default.profraw
 tests/perf_regression
 tests/test_request_fd_fix
+tests/test_spill_stress
 
 # Benchmark results (generated)
 tests/bench_results/

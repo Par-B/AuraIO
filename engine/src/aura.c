@@ -2133,7 +2133,8 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
 
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (!engine->files_registered || engine->files_unreg_pending) {
+    if (!atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
+        engine->files_unreg_pending) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = engine->files_unreg_pending ? EBUSY : ENOENT;
         return (-1);

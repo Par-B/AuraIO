@@ -42,6 +42,7 @@ class Error : public std::system_error {
     [[nodiscard]] bool is_shutdown() const noexcept { return code() == ESHUTDOWN; }
     [[nodiscard]] bool is_cancelled() const noexcept { return code() == ECANCELED; }
     [[nodiscard]] bool is_busy() const noexcept { return code() == EBUSY; }
+    [[nodiscard]] bool is_timeout() const noexcept { return code() == ETIMEDOUT; }
     [[nodiscard]] bool is_not_found() const noexcept { return code() == ENOENT; }
 };
 

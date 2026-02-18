@@ -460,7 +460,7 @@ deps-check:
 # =============================================================================
 
 # All source files for linting (library + tests + examples)
-ALL_SRC = $(SRC) $(wildcard tests/*.c) $(wildcard examples/*.c)
+ALL_SRC = $(SRC) $(wildcard tests/*.c) $(wildcard examples/C/*.c)
 HEADERS = $(wildcard engine/include/*.h) $(wildcard engine/src/*.h)
 
 # Run lint: prefer cppcheck, fall back to clang-tidy

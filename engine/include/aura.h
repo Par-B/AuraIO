@@ -742,7 +742,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
  * @param pathname  Path to file (relative to dirfd)
- * @param flags     Open flags (O_RDONLY, O_WRONLY, O_CREAT, etc.)
+ * @param flags     Open flags (AURA_O_RDONLY, AURA_O_WRONLY, AURA_O_CREAT, etc.)
  * @param mode      File mode (used when O_CREAT is set)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
@@ -802,7 +802,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int 
  *
  * @param engine    Engine handle
  * @param fd        File descriptor
- * @param mode      Allocation mode (0, FALLOC_FL_KEEP_SIZE, etc.)
+ * @param mode      Allocation mode (AURA_FALLOC_DEFAULT, AURA_FALLOC_KEEP_SIZE, etc.)
  * @param offset    Starting byte offset
  * @param len       Length of region
  * @param callback  Completion callback (may be NULL)
@@ -844,7 +844,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, 
  * @param fd        File descriptor
  * @param offset    Starting byte offset
  * @param nbytes    Number of bytes to sync (0 = to end of file)
- * @param flags     SYNC_FILE_RANGE_WAIT_BEFORE, _WRITE, _WAIT_AFTER
+ * @param flags     AURA_SYNC_RANGE_WAIT_BEFORE, AURA_SYNC_RANGE_WRITE, AURA_SYNC_RANGE_WAIT_AFTER
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,

@@ -341,6 +341,11 @@ class IoAwaitable {
         : engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write) {}
 
   public:
+    IoAwaitable(const IoAwaitable &) = delete;
+    IoAwaitable &operator=(const IoAwaitable &) = delete;
+    IoAwaitable(IoAwaitable &&) = delete;
+    IoAwaitable &operator=(IoAwaitable &&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle);
@@ -378,6 +383,11 @@ class FsyncAwaitable {
         : engine_(engine), fd_(fd), datasync_(datasync) {}
 
   public:
+    FsyncAwaitable(const FsyncAwaitable &) = delete;
+    FsyncAwaitable &operator=(const FsyncAwaitable &) = delete;
+    FsyncAwaitable(FsyncAwaitable &&) = delete;
+    FsyncAwaitable &operator=(FsyncAwaitable &&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle);
@@ -411,6 +421,11 @@ class OpenatAwaitable {
         : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mode_(mode) {}
 
   public:
+    OpenatAwaitable(const OpenatAwaitable &) = delete;
+    OpenatAwaitable &operator=(const OpenatAwaitable &) = delete;
+    OpenatAwaitable(OpenatAwaitable &&) = delete;
+    OpenatAwaitable &operator=(OpenatAwaitable &&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle);
@@ -455,6 +470,11 @@ class MetadataAwaitable {
           flags_(flags) {}
 
   public:
+    MetadataAwaitable(const MetadataAwaitable &) = delete;
+    MetadataAwaitable &operator=(const MetadataAwaitable &) = delete;
+    MetadataAwaitable(MetadataAwaitable &&) = delete;
+    MetadataAwaitable &operator=(MetadataAwaitable &&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle);
@@ -510,6 +530,11 @@ class StatxAwaitable {
           statxbuf_(statxbuf) {}
 
   public:
+    StatxAwaitable(const StatxAwaitable &) = delete;
+    StatxAwaitable &operator=(const StatxAwaitable &) = delete;
+    StatxAwaitable(StatxAwaitable &&) = delete;
+    StatxAwaitable &operator=(StatxAwaitable &&) = delete;
+
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle);

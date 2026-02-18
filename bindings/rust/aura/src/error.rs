@@ -26,6 +26,10 @@ pub enum Error {
     #[error("Operation cancelled")]
     Cancelled,
 
+    /// Timeout expired with operations still in flight
+    #[error("Timeout expired with pending operations")]
+    TimedOut,
+
     /// Invalid argument
     #[error("Invalid argument: {0}")]
     InvalidArgument(&'static str),

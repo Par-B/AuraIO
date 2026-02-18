@@ -559,8 +559,9 @@ impl Engine {
     /// # Safety
     ///
     /// The caller must ensure `statxbuf` points to valid memory that remains
-    /// valid until the completion callback fires. The `pathname` CStr must
-    /// also remain valid until the callback fires.
+    /// valid until the completion callback fires. The `pathname` is copied
+    /// into the io_uring SQE synchronously during submission, so it only
+    /// needs to remain valid for the duration of this call.
     pub unsafe fn statx<F>(
         &self,
         dirfd: RawFd,
@@ -782,7 +783,12 @@ impl Engine {
         if n >= 0 {
             Ok(n as usize)
         } else {
-            Err(Error::Io(io::Error::last_os_error()))
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ETIMEDOUT) {
+                Err(Error::TimedOut)
+            } else {
+                Err(Error::Io(err))
+            }
         }
     }
 
