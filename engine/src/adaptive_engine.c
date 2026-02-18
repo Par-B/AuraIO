@@ -81,6 +81,16 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
         stats.elapsed_ns = 1;
     }
 
+    /* Reset the histogram that was swapped out on the PREVIOUS tick.
+     * By deferring the reset one generation, any in-flight writers that
+     * raced between the last swap and now will have completed, so we
+     * don't lose their samples (they land in the old buffer which we
+     * already read last tick). */
+    if (ctrl->hist_pair.pending_reset) {
+        adaptive_hist_reset(ctrl->hist_pair.pending_reset);
+        ctrl->hist_pair.pending_reset = NULL;
+    }
+
     /* Swap histograms - O(1) atomic index flip.
      * Returns pointer to old histogram (now inactive) for reading stats. */
     adaptive_histogram_t *old_hist = adaptive_hist_swap(&ctrl->hist_pair);
@@ -96,17 +106,18 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     stats.throughput_bps = (elapsed_sec > 0) ? (double)bytes / elapsed_sec : 0.0;
 
     /* Calculate SQE/submit ratio for batch optimizer */
-    int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_acq_rel);
-    int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_acq_rel);
+    unsigned int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_acq_rel);
+    unsigned int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_acq_rel);
     stats.sqe_ratio = (calls > 0) ? (double)sqes / (double)calls : 0.0;
 
     /* Store current values (atomic for thread-safe stats access).
      * Use memory_order_release so readers with acquire see consistent values,
      * important for ARM/PowerPC with weak memory ordering. */
     atomic_store_double(&ctrl->current_throughput_bps, stats.throughput_bps, memory_order_release);
-    if (stats.p99_ms >= 0) {
-        atomic_store_double(&ctrl->current_p99_ms, stats.p99_ms, memory_order_release);
-    }
+    /* Always publish p99: store -1.0 when no data so external readers can
+     * distinguish "no data this period" from "stale value from prior period". */
+    atomic_store_double(&ctrl->current_p99_ms, (stats.p99_ms >= 0) ? stats.p99_ms : -1.0,
+                        memory_order_release);
 
     /* Update sliding windows */
     if (stats.p99_ms >= 0) {
@@ -165,15 +176,13 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
          * The PROBING handler treats NAN as "no data" and tries aimd_increase. */
     }
 
-    /* Clear the old histogram for next use using atomic stores.
-     * This avoids TSAN warnings from mixing memset with atomic operations.
-     *
-     * Known limitation: there is a brief race window between the pointer swap
-     * above and this reset where concurrent adaptive_hist_record() calls may
-     * write to old_hist. Those ~1-3 samples are lost. Fixing this requires a
-     * seq-lock or RCU approach, which is not worth the complexity for
-     * statistical metrics that tolerate minor sample loss. */
-    adaptive_hist_reset(old_hist);
+    /* Defer the reset of old_hist until the next tick.  This gives any
+     * concurrent adaptive_hist_record() calls that raced with the swap
+     * time to complete their writes.  Their samples land in old_hist and
+     * are included in the P99 we just computed (slightly stale but correct
+     * direction).  On the next tick, old_hist is reset before the next swap,
+     * so it starts clean when it becomes the active histogram again. */
+    ctrl->hist_pair.pending_reset = old_hist;
 
     return stats;
 }
@@ -230,8 +239,10 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
      * Use uint64_t accumulator to prevent overflow at extreme IOPS. */
     uint64_t count = atomic_load_explicit(&hist->overflow, memory_order_relaxed);
     if (count >= target) {
-        /* P99 is in overflow bucket (> 10ms) */
-        return (double)LATENCY_MAX_US / 1000.0;
+        /* P99 is in overflow bucket (> 10ms).  Return 2x the max tracked
+         * latency so it always exceeds any plausible guard threshold,
+         * triggering backoff even when baseline_p99 * guard_mult > 10ms. */
+        return (double)LATENCY_MAX_US * 2.0 / 1000.0;
     }
 
     for (int i = LATENCY_BUCKET_COUNT - 1; i >= 0; i--) {
@@ -263,6 +274,7 @@ void adaptive_hist_pair_init(adaptive_histogram_pair_t *pair) {
         atomic_init(&pair->histograms[h].total_count, 0);
     }
     atomic_init(&pair->active_index, 0);
+    pair->pending_reset = NULL;
 }
 
 adaptive_histogram_t *adaptive_hist_active(adaptive_histogram_pair_t *pair) {
@@ -457,6 +469,11 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
 
     /* spike_count == 0 here (cleared by check_spike_backoff on non-rising) */
 
+    /* No completions this period — don't make AIMD decisions on empty data. */
+    if (stats->sample_count == 0) {
+        return false;
+    }
+
     /* Check if we're still gaining throughput.
      * Use relative threshold: throughput must increase by at least
      * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
@@ -560,7 +577,7 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
     int reduced = (int)floor((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
     int new_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
-    bool changed = (new_limit != in_flight_limit);
+    bool limit_changed = (new_limit != in_flight_limit);
     atomic_store_explicit(&ctrl->current_in_flight_limit, new_limit, memory_order_release);
 
     ctrl->plateau_count = 0;
@@ -568,7 +585,10 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
     ctrl->settling_timer = 0;
 
-    return changed;
+    /* Always return true: even if the limit didn't change (already at floor),
+     * the phase transition to SETTLING is a meaningful state change. */
+    (void)limit_changed;
+    return true;
 }
 
 /**
@@ -595,7 +615,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * Concurrent calls would double-swap the histogram (fetch_xor twice),
      * causing both callers to read the active histogram and corrupt state. */
 #ifndef NDEBUG
-    int prev = atomic_fetch_add_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
+    int prev = atomic_fetch_add_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
     assert(prev == 0 && "adaptive_tick called concurrently — not thread-safe");
 #endif
 
@@ -628,7 +648,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * is subsumed by have_min_time since MAX >= MIN. */
     if (!have_min_samples && !have_min_time) {
 #ifndef NDEBUG
-        atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
 #endif
         return false; /* Skip this tick, keep accumulating */
     }

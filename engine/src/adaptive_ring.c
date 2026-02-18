@@ -174,6 +174,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         ctx->requests[i].op_idx = i;
         ctx->requests[i].uses_registered_buffer = false;
         ctx->requests[i].uses_registered_file = false;
+        ctx->requests[i].in_pool = true;
         atomic_init(&ctx->requests[i].pending, false);
     }
     ctx->free_request_count = queue_depth;
@@ -296,6 +297,7 @@ aura_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->uses_registered_buffer = false;
     req->uses_registered_file = false;
     req->original_fd = -1;
+    req->in_pool = false;
     atomic_store_explicit(&req->pending, false, memory_order_relaxed);
 
     if (op_idx) {
@@ -310,8 +312,9 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
         return;
     }
 
-    /* Guard against double-free: if stack is already full, something is wrong */
-    if (ctx->free_request_count >= ctx->max_requests) {
+    /* Guard against double-free: check per-slot in_pool flag.
+     * This catches all double-frees, not just the full-stack case. */
+    if (ctx->requests[op_idx].in_pool) {
         aura_log(AURA_LOG_ERR, "BUG: ring_put_request double-free detected (op_idx=%d, ring=%p)",
                  op_idx, (void *)ctx);
         return;
@@ -327,6 +330,7 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
         return;
     }
 
+    ctx->requests[op_idx].in_pool = true;
     ctx->free_request_stack[ctx->free_request_count++] = op_idx;
 }
 
@@ -439,8 +443,8 @@ int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *tar
         errno = EINVAL;
         return (-1);
     }
-    /* Validate that the target is still pending. If it has already completed
-     * (and its slot potentially reused), the cancel would hit the wrong op. */
+    /* Caller MUST hold ring_lock to prevent the target slot from being
+     * recycled between this pending check and the cancel SQE submission. */
     if (!atomic_load_explicit(&target->pending, memory_order_acquire)) {
         errno = EALREADY;
         return (-1);
@@ -538,12 +542,20 @@ int ring_submit_statx(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_fallocate(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > (size_t)INT64_MAX) {
+        errno = EOVERFLOW;
+        return (-1);
+    }
     RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_FALLOCATE,
                               io_uring_prep_fallocate(sqe, req->fd, req->meta.fallocate.mode,
                                                       req->offset, (off_t)req->len));
 }
 
 int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > (size_t)INT64_MAX) {
+        errno = EOVERFLOW;
+        return (-1);
+    }
 #ifndef HAVE_FTRUNCATE_SUPPORT
     /* liburing < 2.7 doesn't support ftruncate - return ENOSYS
      * The test suite will detect this and skip the test */
@@ -709,9 +721,10 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
      * The req pointer remains valid because ring_put_request hasn't
      * been called yet. */
     if (callback) {
-        callback_context_depth++;
+        int saved_depth = callback_context_depth;
+        callback_context_depth = saved_depth + 1;
         callback((aura_request_t *)req, result, user_data);
-        callback_context_depth--;
+        callback_context_depth = saved_depth;
     }
 
     return retire;

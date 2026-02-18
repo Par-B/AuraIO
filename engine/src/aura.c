@@ -800,6 +800,16 @@ static aura_engine_t *validate_and_init_engine_core(const aura_options_t *option
         return NULL;
     }
 
+    /* Reject non-zero reserved fields for forward-compatibility.
+     * Future versions may assign meaning to these; non-zero values from
+     * a caller built against an older header would silently misbehave. */
+    for (int i = 0; i < (int)(sizeof(options->_reserved) / sizeof(options->_reserved[0])); i++) {
+        if (options->_reserved[i] != 0) {
+            errno = EINVAL;
+            return NULL;
+        }
+    }
+
     /* Validate options.
      * queue_depth == 0 means "use default"; explicit values must be >= 4
      * because the AIMD controller needs at least 4 request slots. */
@@ -1076,8 +1086,11 @@ static void destroy_phase_3_unregister(aura_engine_t *engine) {
      * Read unreg_pending under reg_lock to avoid data race with the
      * writers that set these flags under the same lock. */
     pthread_rwlock_rdlock(&engine->reg_lock);
-    bool need_unreg_bufs = engine->buffers_registered && !engine->buffers_unreg_pending;
-    bool need_unreg_files = engine->files_registered && !engine->files_unreg_pending;
+    bool need_unreg_bufs =
+        atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
+        !engine->buffers_unreg_pending;
+    bool need_unreg_files = atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
+                            !engine->files_unreg_pending;
     pthread_rwlock_unlock(&engine->reg_lock);
 
     if (need_unreg_bufs) {
@@ -1888,7 +1901,8 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
 
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (engine->buffers_registered || engine->buffers_unreg_pending) {
+    if (atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) ||
+        engine->buffers_unreg_pending) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Already registered - must unregister first */
         return (-1);
@@ -2010,10 +2024,12 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         pthread_rwlock_rdlock(&engine->reg_lock);
         switch (type) {
         case AURA_REG_BUFFERS:
-            done = !engine->buffers_registered && !engine->buffers_unreg_pending;
+            done = !atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
+                   !engine->buffers_unreg_pending;
             break;
         case AURA_REG_FILES:
-            done = !engine->files_registered && !engine->files_unreg_pending;
+            done = !atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
+                   !engine->files_unreg_pending;
             break;
         default:
             done = true;
@@ -2057,7 +2073,8 @@ int aura_register_files(aura_engine_t *engine, const int *fds, int count) {
 
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (engine->files_registered || engine->files_unreg_pending) {
+    if (atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
+        engine->files_unreg_pending) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Already registered - must unregister first */
         return (-1);

@@ -224,8 +224,9 @@ typedef struct {
  * fetch for the index lookup + most common recording path.
  */
 typedef struct {
-    _Atomic int active_index;           /**< Active histogram (0 or 1) */
-    adaptive_histogram_t histograms[2]; /**< Double buffer */
+    _Atomic int active_index;            /**< Active histogram (0 or 1) */
+    adaptive_histogram_t histograms[2];  /**< Double buffer */
+    adaptive_histogram_t *pending_reset; /**< Histogram to reset on next tick (tick-thread only) */
 } adaptive_histogram_pair_t;
 
 /**
@@ -240,8 +241,8 @@ typedef struct {
      * only need to fetch a single cache line. */
     _Atomic int current_in_flight_limit; /**< Current max concurrent ops */
     _Atomic int current_batch_threshold; /**< Current batch size before submit */
-    _Atomic int submit_calls;            /**< Submit syscalls this period */
-    _Atomic int sqes_submitted;          /**< SQEs submitted this period */
+    _Atomic unsigned int submit_calls;   /**< Submit syscalls this period */
+    _Atomic unsigned int sqes_submitted; /**< SQEs submitted this period */
     _Atomic int64_t sample_start_ns;     /**< Current sample start time */
     _Atomic uint64_t
         sample_bytes; /**< Bytes completed this sample (unsigned to avoid signed overflow) */

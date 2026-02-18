@@ -83,9 +83,11 @@ struct aura_request {
         } sync_range;
     } meta;
 
+    bool in_pool; /**< Debug: true when slot is in free pool (detect double-free) */
+
     /* Pad to 128 bytes (2 full cache lines) so that adjacent requests in
      * the request array never share a cache line. */
-    char _cacheline_pad[128 - 124];
+    char _cacheline_pad[128 - 125];
 };
 
 _Static_assert(sizeof(struct aura_request) == 128, "aura_request must be 128 bytes");
