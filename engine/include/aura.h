@@ -249,6 +249,13 @@ typedef struct {
     uint32_t _reserved[4];         /**< Reserved for future use; must be zero */
 } aura_stats_t;
 
+/** ABI stability: catch unexpected layout changes at compile time. */
+#ifdef __cplusplus
+static_assert(sizeof(aura_stats_t) == 72, "aura_stats_t ABI size changed");
+#else
+_Static_assert(sizeof(aura_stats_t) == 72, "aura_stats_t ABI size changed");
+#endif
+
 /**
  * Per-ring statistics
  *
@@ -907,9 +914,14 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_writev(aura_engine_t *engine, int
  * @param req    Request to cancel (returned by read/write/fsync functions).
  *               Must belong to @p engine; passing a request from a different
  *               engine is undefined behavior.
- * @return 0 if cancellation was submitted, -1 on error (errno set to EINVAL,
- *         EALREADY, ESHUTDOWN, or ENOMEM)
- *         Note: 0 does not guarantee the operation will be cancelled
+ * @return 0 if cancellation was submitted, -1 on error (errno set):
+ *         - EINVAL: invalid engine or request handle
+ *         - EALREADY: a cancel was already submitted for this request
+ *         - ESHUTDOWN: engine is shutting down
+ *         - ENOMEM: no request slots available for the cancel SQE
+ *         Note: 0 does not guarantee the operation will be cancelled.
+ *         If the operation completed before the cancel reaches the kernel,
+ *         the original completion callback fires normally (not with -ECANCELED).
  */
 AURA_API AURA_WARN_UNUSED int aura_cancel(aura_engine_t *engine, aura_request_t *req);
 
@@ -922,6 +934,11 @@ AURA_API AURA_WARN_UNUSED int aura_cancel(aura_engine_t *engine, aura_request_t 
  * Check if a request is still pending
  *
  * Thread-safe: may be called from any thread while the request is valid.
+ *
+ * @note A return value of false means the request has completed or been
+ * cancelled, but the completion callback may still be executing.  Do not
+ * free resources associated with the request until after the callback
+ * has returned.
  *
  * @param req Request handle
  * @return true if still in-flight, false if completed or cancelled
@@ -1092,6 +1109,8 @@ AURA_API AURA_WARN_UNUSED void *aura_buffer_alloc(aura_engine_t *engine, size_t 
  *
  * The buffer must have been allocated by aura_buffer_alloc() on the same
  * engine. The size is looked up automatically from an internal table.
+ * Passing a pointer not allocated by aura_buffer_alloc() is undefined
+ * behavior (the pointer will be passed to free() directly).
  *
  * Thread-safe: may be called from any thread.
  *
@@ -1423,7 +1442,8 @@ AURA_API double aura_histogram_percentile(const aura_histogram_t *hist, double p
  * a thread-safe logger, or only call async-signal-safe functions).
  *
  * @param level   Severity (AURA_LOG_ERR .. AURA_LOG_DEBUG; matches syslog)
- * @param msg     Formatted message string (NUL-terminated)
+ * @param msg     Formatted message string (NUL-terminated, max 256 bytes
+ *                including NUL; longer messages are truncated by the library)
  * @param userdata Opaque pointer passed to aura_set_log_handler()
  */
 typedef void (*aura_log_fn)(int level, const char *msg, void *userdata);
