@@ -188,11 +188,11 @@ void adaptive_hist_reset(adaptive_histogram_t *hist) {
 void adaptive_hist_record(adaptive_histogram_t *hist, int64_t latency_us) {
     if (latency_us < 0) latency_us = 0;
 
-    int bucket = (int)(latency_us / LATENCY_BUCKET_WIDTH_US);
-    if (bucket >= LATENCY_BUCKET_COUNT) {
+    int64_t bucket64 = latency_us / LATENCY_BUCKET_WIDTH_US;
+    if (bucket64 >= LATENCY_BUCKET_COUNT) {
         atomic_fetch_add_explicit(&hist->overflow, 1, memory_order_relaxed);
     } else {
-        atomic_fetch_add_explicit(&hist->buckets[bucket], 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&hist->buckets[(int)bucket64], 1, memory_order_relaxed);
     }
     /* Use release ordering on total_count so that a reader who does an
      * acquire load of total_count is guaranteed to see all preceding bucket
@@ -575,6 +575,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     int64_t now_ns = get_time_ns();
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
     int64_t elapsed_ns = now_ns - start_ns;
+    if (elapsed_ns < 0) elapsed_ns = 0; /* clock step-back: treat as no time elapsed */
     int64_t elapsed_ms = elapsed_ns / 1000000LL;
     bool params_changed = false;
 

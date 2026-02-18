@@ -1005,6 +1005,7 @@ static int buf_map_grow(buf_size_map_t *map) {
 }
 
 int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
+    if (!ptr) return -1;
     uintptr_t key = (uintptr_t)ptr;
 
     pthread_mutex_lock(&map->lock);

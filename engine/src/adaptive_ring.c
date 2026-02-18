@@ -352,7 +352,6 @@ int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += req->len;
 
     return (0);
 }
@@ -385,7 +384,6 @@ int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += req->len;
 
     return (0);
 }
@@ -415,7 +413,6 @@ int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
     return (0);
 }
@@ -445,7 +442,6 @@ int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
     return (0);
 }
@@ -565,7 +561,6 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += req->len;
 
     return (0);
 }
@@ -598,7 +593,6 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
 
     queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-    ctx->bytes_submitted += req->len;
 
     return (0);
 }
@@ -607,7 +601,7 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
  * Lifecycle Metadata Operations
  *
  * These skip AIMD latency sampling (submit_time_ns = 0) and don't update
- * bytes_submitted — metadata ops are not throughput-sensitive.
+ * metadata ops are not throughput-sensitive.
  * ============================================================================ */
 
 /** Common preamble for metadata submission: validate + get SQE. */
@@ -935,7 +929,7 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
             batch[n].req = io_uring_cqe_get_data(cqe);
             batch[n].result = cqe->res;
             io_uring_cqe_seen(&ctx->ring, cqe);
-            TSAN_ACQUIRE(batch[n].req);
+            if (batch[n].req) TSAN_ACQUIRE(batch[n].req);
             n++;
         }
         ring_cq_unlock(ctx);

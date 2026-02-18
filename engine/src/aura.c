@@ -2038,7 +2038,9 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
 
     /* Wait for the deferred unregister to complete.
      * Timeout after 10 seconds to avoid hanging on stuck I/O. */
-    int attempts = 0;
+    struct timespec ts_start;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+    int64_t deadline_ms = (int64_t)ts_start.tv_sec * 1000 + ts_start.tv_nsec / 1000000 + 10000;
     for (;;) {
         bool done;
         pthread_rwlock_rdlock(&engine->reg_lock);
@@ -2058,7 +2060,10 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
             return (0);
         }
 
-        if (++attempts >= 100) {
+        struct timespec ts_now;
+        clock_gettime(CLOCK_MONOTONIC, &ts_now);
+        int64_t now_ms = (int64_t)ts_now.tv_sec * 1000 + ts_now.tv_nsec / 1000000;
+        if (now_ms >= deadline_ms) {
             errno = ETIMEDOUT;
             return (-1);
         }
