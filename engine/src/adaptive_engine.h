@@ -16,6 +16,28 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdatomic.h>
+#include <string.h> /* memcpy */
+
+/* ============================================================================
+ * Lock-free double atomics via uint64_t type-punning
+ *
+ * C11 does not guarantee _Atomic double is lock-free on all platforms.
+ * We store doubles as _Atomic uint64_t and use memcpy-based punning
+ * (well-defined in C11) for loads and stores.
+ * ============================================================================ */
+
+static inline void atomic_store_double(_Atomic uint64_t *a, double v, memory_order order) {
+    uint64_t bits;
+    memcpy(&bits, &v, sizeof(bits));
+    atomic_store_explicit(a, bits, order);
+}
+
+static inline double atomic_load_double(const _Atomic uint64_t *a, memory_order order) {
+    uint64_t bits = atomic_load_explicit((_Atomic uint64_t *)a, order);
+    double v;
+    memcpy(&v, &bits, sizeof(v));
+    return v;
+}
 
 /* ============================================================================
  * Constants
@@ -216,19 +238,19 @@ typedef struct {
      * All fields accessed per-op are packed here so both the submission
      * thread (reads limits) and completion thread (updates counters)
      * only need to fetch a single cache line. */
-    _Atomic int current_in_flight_limit;   /**< Current max concurrent ops */
-    _Atomic int current_batch_threshold;   /**< Current batch size before submit */
-    _Atomic int submit_calls;              /**< Submit syscalls this period */
-    _Atomic int sqes_submitted;            /**< SQEs submitted this period */
-    _Atomic int64_t sample_start_ns;       /**< Current sample start time */
-    _Atomic int64_t sample_bytes;          /**< Bytes completed this sample */
-    _Atomic double current_p99_ms;         /**< Current sample P99 */
-    _Atomic double current_throughput_bps; /**< Current throughput */
-    /* _Atomic double requires lock-free 64-bit atomics on the target platform. */
-    _Atomic adaptive_phase_t phase; /**< Current phase */
-    int max_queue_depth;            /**< Upper bound on in-flight */
-    int min_in_flight;              /**< Lower bound on in-flight */
-    int prev_in_flight_limit;       /**< Previous limit for efficiency ratio */
+    _Atomic int current_in_flight_limit; /**< Current max concurrent ops */
+    _Atomic int current_batch_threshold; /**< Current batch size before submit */
+    _Atomic int submit_calls;            /**< Submit syscalls this period */
+    _Atomic int sqes_submitted;          /**< SQEs submitted this period */
+    _Atomic int64_t sample_start_ns;     /**< Current sample start time */
+    _Atomic uint64_t
+        sample_bytes; /**< Bytes completed this sample (unsigned to avoid signed overflow) */
+    _Atomic uint64_t current_p99_ms;         /**< Current sample P99 (double stored as uint64_t) */
+    _Atomic uint64_t current_throughput_bps; /**< Current throughput (double stored as uint64_t) */
+    _Atomic adaptive_phase_t phase;          /**< Current phase */
+    int max_queue_depth;                     /**< Upper bound on in-flight */
+    int min_in_flight;                       /**< Lower bound on in-flight */
+    int prev_in_flight_limit;                /**< Previous limit for efficiency ratio */
 
     /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
     double baseline_p99_ms;        /**< Minimum observed P99 */
@@ -260,13 +282,13 @@ typedef struct {
 #endif
 } adaptive_controller_t;
 
-_Static_assert(sizeof(double) == sizeof(int64_t),
-               "_Atomic double assumes 64-bit double matching int64_t width");
+_Static_assert(sizeof(double) == sizeof(uint64_t),
+               "double-as-uint64_t punning requires matching width");
 #if defined(__STDC_NO_ATOMICS__)
 #    error "C11 atomics are required"
 #elif defined(ATOMIC_LLONG_LOCK_FREE)
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
-               "_Atomic double requires lock-free 64-bit atomics (unsafe on this platform)");
+               "Lock-free 64-bit atomics required for throughput/latency counters");
 #endif
 
 /* ============================================================================

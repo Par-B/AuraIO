@@ -2205,9 +2205,8 @@ int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size
 
         /* Use memory_order_acquire to pair with release in tick thread,
          * ensuring consistent reads on ARM/PowerPC with weak memory ordering. */
-        double throughput =
-            atomic_load_explicit(&ctrl->current_throughput_bps, memory_order_acquire);
-        double p99 = atomic_load_explicit(&ctrl->current_p99_ms, memory_order_acquire);
+        double throughput = atomic_load_double(&ctrl->current_throughput_bps, memory_order_acquire);
+        double p99 = atomic_load_double(&ctrl->current_p99_ms, memory_order_acquire);
         total_throughput += throughput;
         if (p99 > max_p99) {
             max_p99 = p99;
@@ -2286,8 +2285,8 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_acquire);
     tmp.batch_threshold =
         atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_acquire);
-    tmp.p99_latency_ms = atomic_load_explicit(&ctrl->current_p99_ms, memory_order_acquire);
-    tmp.throughput_bps = atomic_load_explicit(&ctrl->current_throughput_bps, memory_order_acquire);
+    tmp.p99_latency_ms = atomic_load_double(&ctrl->current_p99_ms, memory_order_acquire);
+    tmp.throughput_bps = atomic_load_double(&ctrl->current_throughput_bps, memory_order_acquire);
     tmp.aimd_phase = atomic_load_explicit(&ctrl->phase, memory_order_acquire);
 
     ring_unlock(ring);

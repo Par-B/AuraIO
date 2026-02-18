@@ -92,7 +92,7 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     /* Calculate current sample statistics from the old (now inactive) histogram */
     stats.p99_ms = adaptive_hist_p99(old_hist);
     double elapsed_sec = (double)stats.elapsed_ns / 1e9;
-    int64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_acq_rel);
+    uint64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_acq_rel);
     stats.throughput_bps = (elapsed_sec > 0) ? (double)bytes / elapsed_sec : 0.0;
 
     /* Calculate SQE/submit ratio for batch optimizer */
@@ -103,10 +103,9 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     /* Store current values (atomic for thread-safe stats access).
      * Use memory_order_release so readers with acquire see consistent values,
      * important for ARM/PowerPC with weak memory ordering. */
-    atomic_store_explicit(&ctrl->current_throughput_bps, stats.throughput_bps,
-                          memory_order_release);
+    atomic_store_double(&ctrl->current_throughput_bps, stats.throughput_bps, memory_order_release);
     if (stats.p99_ms >= 0) {
-        atomic_store_explicit(&ctrl->current_p99_ms, stats.p99_ms, memory_order_release);
+        atomic_store_double(&ctrl->current_p99_ms, stats.p99_ms, memory_order_release);
     }
 
     /* Update sliding windows */
@@ -304,13 +303,13 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
      * the non-atomic fields individually. */
     atomic_init(&ctrl->current_in_flight_limit, initial_inflight);
     atomic_init(&ctrl->current_batch_threshold, ADAPTIVE_MIN_BATCH);
-    atomic_init(&ctrl->current_p99_ms, 0.0);
-    atomic_init(&ctrl->current_throughput_bps, 0.0);
+    atomic_init(&ctrl->current_p99_ms, UINT64_C(0));
+    atomic_init(&ctrl->current_throughput_bps, UINT64_C(0));
     atomic_init(&ctrl->phase, ADAPTIVE_PHASE_BASELINE);
     atomic_init(&ctrl->submit_calls, 0);
     atomic_init(&ctrl->sqes_submitted, 0);
     atomic_init(&ctrl->sample_start_ns, get_time_ns());
-    atomic_init(&ctrl->sample_bytes, 0);
+    atomic_init(&ctrl->sample_bytes, UINT64_C(0));
 
     /* Zero all non-atomic fields */
     ctrl->max_queue_depth = max_queue_depth;
@@ -360,7 +359,7 @@ void adaptive_record_completion(adaptive_controller_t *ctrl, int64_t latency_ns,
     int64_t latency_us = latency_ns / 1000;
     adaptive_histogram_t *hist = adaptive_hist_active(&ctrl->hist_pair);
     adaptive_hist_record(hist, latency_us);
-    atomic_fetch_add_explicit(&ctrl->sample_bytes, (int64_t)bytes, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ctrl->sample_bytes, (uint64_t)bytes, memory_order_relaxed);
 }
 
 void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count) {
