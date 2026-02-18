@@ -154,10 +154,9 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     if (ctrl->prev_in_flight_limit > 0 && in_flight_limit != ctrl->prev_in_flight_limit) {
         double delta_throughput = stats.throughput_bps - ctrl->prev_throughput_bps;
         int delta_inflight = in_flight_limit - ctrl->prev_in_flight_limit;
-        if (delta_inflight != 0) {
-            stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
-            stats.delta_inflight = delta_inflight;
-        }
+        /* delta_inflight != 0 is guaranteed by the outer condition */
+        stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
+        stats.delta_inflight = delta_inflight;
     }
 
     /* Clear the old histogram for next use using atomic stores.
@@ -335,8 +334,9 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     return 0;
 }
 
+/* adaptive_destroy() intentionally omitted — all fields are embedded, nothing to free.
+ * Kept as a declaration in the header for forward-compatibility. */
 void adaptive_destroy(adaptive_controller_t *ctrl) {
-    /* Nothing to free - all embedded */
     (void)ctrl;
 }
 
@@ -380,6 +380,43 @@ const char *adaptive_phase_name(adaptive_phase_t phase) {
 }
 
 /* ============================================================================
+ * AIMD State Machine Helpers
+ * ============================================================================ */
+
+/**
+ * Check for consecutive latency spikes and transition to BACKOFF if confirmed.
+ * Returns true if BACKOFF was entered (caller should typically return).
+ */
+static inline bool check_spike_backoff(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
+    if (stats->latency_rising) {
+        ctrl->spike_count++;
+        if (ctrl->spike_count >= 2) {
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+            ctrl->spike_count = 0;
+            return true;
+        }
+    } else {
+        ctrl->spike_count = 0;
+    }
+    return false;
+}
+
+/**
+ * Additive increase of in-flight limit, clamped to max_queue_depth.
+ * Returns true if the limit was changed.
+ */
+static inline bool aimd_increase(adaptive_controller_t *ctrl) {
+    int limit = atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+    if (limit < ctrl->max_queue_depth) {
+        limit += ADAPTIVE_AIMD_INCREASE;
+        if (limit > ctrl->max_queue_depth) limit = ctrl->max_queue_depth;
+        atomic_store_explicit(&ctrl->current_in_flight_limit, limit, memory_order_release);
+        return true;
+    }
+    return false;
+}
+
+/* ============================================================================
  * AIMD State Machine Handlers
  * ============================================================================ */
 
@@ -402,61 +439,36 @@ static inline bool handle_baseline_phase(adaptive_controller_t *ctrl, const tick
  */
 static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
     bool params_changed = false;
-    int in_flight_limit =
-        atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
 
-    if (stats->latency_rising) {
-        ctrl->spike_count++;
-        if (ctrl->spike_count >= 2) {
-            /* Latency spike - back off */
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-            ctrl->spike_count = 0;
-        }
+    if (check_spike_backoff(ctrl, stats)) {
+        return false;
+    }
+
+    /* spike_count == 0 here (cleared by check_spike_backoff on non-rising) */
+
+    /* Check if we're still gaining throughput.
+     * Use relative threshold: throughput must increase by at least
+     * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
+     * relative to current throughput to be considered improvement. */
+    double er_threshold = (stats->throughput_bps > 0 && stats->delta_inflight != 0)
+                              ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO /
+                                    fabs((double)stats->delta_inflight)
+                              : 0.0;
+    if (isnan(stats->efficiency_ratio) || stats->efficiency_ratio > er_threshold) {
+        /* Still improving - increase */
+        params_changed = aimd_increase(ctrl);
+        ctrl->plateau_count = 0;
+    } else if (ctrl->max_p99_ms > 0 && stats->have_valid_p99 && stats->p99_ms < ctrl->max_p99_ms) {
+        /* Target-p99 mode: latency headroom remains, keep probing */
+        params_changed = aimd_increase(ctrl);
+        ctrl->plateau_count = 0;
     } else {
-        ctrl->spike_count = 0;
-
-        /* Check if we're still gaining throughput.
-         * Use relative threshold: throughput must increase by at least
-         * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
-         * relative to current throughput to be considered improvement. */
-        double er_threshold = (stats->throughput_bps > 0 && stats->delta_inflight != 0)
-                                  ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO /
-                                        fabs((double)stats->delta_inflight)
-                                  : 0.0;
-        if (isnan(stats->efficiency_ratio) || stats->efficiency_ratio > er_threshold) {
-            /* Still improving - increase (clamped to max) */
-            if (in_flight_limit < ctrl->max_queue_depth) {
-                in_flight_limit += ADAPTIVE_AIMD_INCREASE;
-                if (in_flight_limit > ctrl->max_queue_depth)
-                    in_flight_limit = ctrl->max_queue_depth;
-                atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                      memory_order_release);
-                params_changed = true;
-            }
-            ctrl->plateau_count = 0;
-        } else if (ctrl->max_p99_ms > 0 && stats->have_valid_p99 &&
-                   stats->p99_ms < ctrl->max_p99_ms) {
-            /* Target-p99 mode: latency headroom remains, keep probing
-             * even though throughput has plateaued. Push depth until
-             * we approach the user's latency ceiling. */
-            if (in_flight_limit < ctrl->max_queue_depth) {
-                in_flight_limit += ADAPTIVE_AIMD_INCREASE;
-                if (in_flight_limit > ctrl->max_queue_depth)
-                    in_flight_limit = ctrl->max_queue_depth;
-                atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                      memory_order_release);
-                params_changed = true;
-            }
-            ctrl->plateau_count = 0;
-        } else {
-            /* Plateau detected */
-            ctrl->plateau_count++;
-            if (ctrl->plateau_count >= 3) {
-                /* Confirmed plateau - enter steady */
-                ctrl->entered_via_backoff = false;
-                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
-                ctrl->settling_timer = 0;
-            }
+        /* Plateau detected */
+        ctrl->plateau_count++;
+        if (ctrl->plateau_count >= 3) {
+            ctrl->entered_via_backoff = false;
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
+            ctrl->settling_timer = 0;
         }
     }
 
@@ -491,33 +503,25 @@ static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick
 static inline bool handle_steady_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
     ctrl->steady_count++;
 
-    /* Check for latency spike — require 2 consecutive spikes before BACKOFF,
-     * consistent with PROBING and CONVERGED phases. A single noisy P99 tick
-     * should not trigger a 20% throughput cut. */
-    if (stats->latency_rising) {
-        ctrl->spike_count++;
-        if (ctrl->spike_count >= 2) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-            ctrl->steady_count = 0;
-            ctrl->spike_count = 0;
-        }
-    } else {
-        ctrl->spike_count = 0;
-        /* Re-probe after backoff: the transient spike may have passed, so
-         * try increasing in-flight again rather than staying at a reduced level. */
-        if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
-            ctrl->entered_via_backoff = false;
-            ctrl->plateau_count = 0;
-            ctrl->spike_count = 0;
-        }
-        /* Check for sustained steady state (only from plateau, not backoff) */
-        else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
-        }
+    if (check_spike_backoff(ctrl, stats)) {
+        ctrl->steady_count = 0;
+        return false;
     }
 
-    return false; /* No params changed */
+    /* spike_count == 0 here */
+    /* Re-probe after backoff: the transient spike may have passed, so
+     * try increasing in-flight again rather than staying at a reduced level. */
+    if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
+        ctrl->entered_via_backoff = false;
+        ctrl->plateau_count = 0;
+    }
+    /* Check for sustained steady state (only from plateau, not backoff) */
+    else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
+        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
+    }
+
+    return false;
 }
 
 /**
@@ -553,16 +557,8 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
  * degradation with no corrective action.
  */
 static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
-    if (stats->latency_rising) {
-        ctrl->spike_count++;
-        if (ctrl->spike_count >= 2) {
-            /* Sustained latency spike — workload has changed, back off and re-tune */
-            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-            ctrl->spike_count = 0;
-            ctrl->steady_count = 0;
-        }
-    } else {
-        ctrl->spike_count = 0;
+    if (check_spike_backoff(ctrl, stats)) {
+        ctrl->steady_count = 0;
     }
     return false; /* No params changed (BACKOFF will change them on next tick) */
 }

@@ -109,14 +109,17 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
 #endif
 
     bool try_sqpoll = options && options->enable_sqpoll;
-    if (try_sqpoll) {
-        params.flags |= IORING_SETUP_SQPOLL;
-        if (options->sqpoll_idle_ms > 0) {
-            params.sq_thread_idle = options->sqpoll_idle_ms;
-        } else {
-            params.sq_thread_idle = 1000; /* Default 1 second */
-        }
-    }
+
+/* Helper: apply SQPOLL params if requested */
+#define APPLY_SQPOLL_PARAMS(p)                                                                    \
+    do {                                                                                          \
+        if (try_sqpoll) {                                                                         \
+            (p)->flags |= IORING_SETUP_SQPOLL;                                                    \
+            (p)->sq_thread_idle = (options->sqpoll_idle_ms > 0) ? options->sqpoll_idle_ms : 1000; \
+        }                                                                                         \
+    } while (0)
+
+    APPLY_SQPOLL_PARAMS(&params);
 
     int ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
 
@@ -125,14 +128,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
      * and SQPOLL requires root/CAP_SYS_NICE. */
     if (ret < 0) {
         memset(&params, 0, sizeof(params));
-        if (try_sqpoll) {
-            params.flags |= IORING_SETUP_SQPOLL;
-            if (options->sqpoll_idle_ms > 0) {
-                params.sq_thread_idle = options->sqpoll_idle_ms;
-            } else {
-                params.sq_thread_idle = 1000;
-            }
-        }
+        APPLY_SQPOLL_PARAMS(&params);
         ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
         ctx->sqpoll_enabled = try_sqpoll && (ret >= 0);
 
@@ -145,6 +141,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     } else {
         ctx->sqpoll_enabled = try_sqpoll;
     }
+#undef APPLY_SQPOLL_PARAMS
 
     if (ret < 0) {
         errno = -ret;
@@ -324,288 +321,12 @@ static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const aura_req
     }
 }
 
-int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-    if (req->len > UINT_MAX) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_read(sqe, req->fd, req->buffer, req->len, req->offset);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_READ;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-    if (req->len > UINT_MAX) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_write(sqe, req->fd, req->buffer, req->len, req->offset);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_WRITE;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX ||
-        !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_readv(sqe, req->fd, req->iov, req->iovcnt, req->offset);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_READV;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX ||
-        !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_writev(sqe, req->fd, req->iov, req->iovcnt, req->offset);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_WRITEV;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_fsync(sqe, req->fd, 0);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_FSYNC;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    /* IORING_FSYNC_DATASYNC flag makes it behave like fdatasync */
-    io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_FDATASYNC;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target) {
-    if (!ctx || !req || !target || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    /* io_uring cancel uses user_data to identify the request */
-    io_uring_prep_cancel(sqe, target, 0);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_CANCEL;
-    req->submit_time_ns = 0; /* Cancel ops skip latency tracking */
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-    if (req->len > UINT_MAX) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    /* io_uring_prep_read_fixed takes buffer address, but for registered buffers
-     * we need to compute it from the registered iovec. The caller must provide
-     * the actual buffer address in req->buffer computed from buf_index + buf_offset. */
-    io_uring_prep_read_fixed(sqe, req->fd, req->buffer, req->len, req->offset, req->buf_index);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_READ_FIXED;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
-int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return (-1);
-    }
-    if (req->len > UINT_MAX) {
-        errno = EINVAL;
-        return (-1);
-    }
-
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);
-    if (!sqe) {
-        errno = EBUSY;
-        return (-1);
-    }
-
-    io_uring_prep_write_fixed(sqe, req->fd, req->buffer, req->len, req->offset, req->buf_index);
-    sqe_apply_fixed_file(sqe, req);
-    io_uring_sqe_set_data(sqe, req);
-
-    req->op_type = AURA_OP_WRITE_FIXED;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
-    atomic_store_explicit(&req->pending, true, memory_order_release);
-    TSAN_RELEASE(req);
-
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
-
-    return (0);
-}
-
 /* ============================================================================
- * Lifecycle Metadata Operations
- *
- * These skip AIMD latency sampling (submit_time_ns = 0) and don't update
- * metadata ops are not throughput-sensitive.
+ * Shared Submission Helpers
  * ============================================================================ */
 
-/** Common preamble for metadata submission: validate + get SQE. */
-static struct io_uring_sqe *meta_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
+/** Common preamble: validate ctx/req and get SQE. */
+static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return NULL;
@@ -618,10 +339,21 @@ static struct io_uring_sqe *meta_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
     return sqe;
 }
 
-/** Common postamble for metadata submission. */
-static void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
+/** Common postamble for data-transfer submissions (latency-sampled). */
+static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
     req->op_type = op;
-    req->submit_time_ns = 0; /* Skip AIMD sampling */
+    req->submit_time_ns =
+        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
+    atomic_store_explicit(&req->pending, true, memory_order_release);
+    TSAN_RELEASE(req);
+    queued_sqes_inc(ctx);
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
+}
+
+/** Common postamble for metadata submissions (skip AIMD sampling). */
+static inline void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
+    req->op_type = op;
+    req->submit_time_ns = 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
@@ -629,28 +361,126 @@ static void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op)
 }
 
 /**
+ * Macro for data-transfer submissions: validate, get SQE, prep, finish.
+ * Handles fixed-file flag, latency sampling, and pending bookkeeping.
+ */
+#define RING_SUBMIT_DATA_OP(ctx, req, op_type, prep_call)    \
+    do {                                                     \
+        struct io_uring_sqe *sqe = submit_get_sqe(ctx, req); \
+        if (!sqe) return (-1);                               \
+        prep_call;                                           \
+        sqe_apply_fixed_file(sqe, req);                      \
+        io_uring_sqe_set_data(sqe, req);                     \
+        data_finish(ctx, req, op_type);                      \
+        return (0);                                          \
+    } while (0)
+
+int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_READ,
+                        io_uring_prep_read(sqe, req->fd, req->buffer, req->len, req->offset));
+}
+
+int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_WRITE,
+                        io_uring_prep_write(sqe, req->fd, req->buffer, req->len, req->offset));
+}
+
+int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
+    if (!req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_READV,
+                        io_uring_prep_readv(sqe, req->fd, req->iov, req->iovcnt, req->offset));
+}
+
+int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
+    if (!req || !req->iov || req->iovcnt <= 0 || req->iovcnt > IOV_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_WRITEV,
+                        io_uring_prep_writev(sqe, req->fd, req->iov, req->iovcnt, req->offset));
+}
+
+int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_FSYNC, io_uring_prep_fsync(sqe, req->fd, 0));
+}
+
+int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_FDATASYNC,
+                        io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC));
+}
+
+int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target) {
+    if (!target) {
+        errno = EINVAL;
+        return (-1);
+    }
+    struct io_uring_sqe *sqe = submit_get_sqe(ctx, req);
+    if (!sqe) return (-1);
+    io_uring_prep_cancel(sqe, target, 0);
+    io_uring_sqe_set_data(sqe, req);
+    meta_finish(ctx, req, AURA_OP_CANCEL);
+    return (0);
+}
+
+int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(
+        ctx, req, AURA_OP_READ_FIXED,
+        io_uring_prep_read_fixed(sqe, req->fd, req->buffer, req->len, req->offset, req->buf_index));
+}
+
+int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
+    if (req && req->len > UINT_MAX) {
+        errno = EINVAL;
+        return (-1);
+    }
+    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_WRITE_FIXED,
+                        io_uring_prep_write_fixed(sqe, req->fd, req->buffer, req->len, req->offset,
+                                                  req->buf_index));
+}
+
+/* ============================================================================
+ * Lifecycle Metadata Operations
+ *
+ * These skip AIMD latency sampling (submit_time_ns = 0).
+ * ============================================================================ */
+
+/**
  * Macro to eliminate boilerplate in metadata operations.
  * Usage: RING_SUBMIT_META_OP(ctx, req, OP_TYPE, io_uring_prep_call);
  *
  * Handles: validation, SQE acquisition, set_data, finish, and return.
  */
-#define RING_SUBMIT_META_OP(ctx, req, op_type, prep_call)  \
-    do {                                                   \
-        struct io_uring_sqe *sqe = meta_get_sqe(ctx, req); \
-        if (!sqe) return (-1);                             \
-        prep_call;                                         \
-        io_uring_sqe_set_data(sqe, req);                   \
-        meta_finish(ctx, req, op_type);                    \
-        return (0);                                        \
+#define RING_SUBMIT_META_OP(ctx, req, op_type, prep_call)    \
+    do {                                                     \
+        struct io_uring_sqe *sqe = submit_get_sqe(ctx, req); \
+        if (!sqe) return (-1);                               \
+        prep_call;                                           \
+        io_uring_sqe_set_data(sqe, req);                     \
+        meta_finish(ctx, req, op_type);                      \
+        return (0);                                          \
     } while (0)
 
 /**
  * Variant for operations that require fixed file handling.
- * Adds sqe_apply_fixed_file() call after prep.
  */
 #define RING_SUBMIT_META_OP_FIXED(ctx, req, op_type, prep_call) \
     do {                                                        \
-        struct io_uring_sqe *sqe = meta_get_sqe(ctx, req);      \
+        struct io_uring_sqe *sqe = submit_get_sqe(ctx, req);    \
         if (!sqe) return (-1);                                  \
         prep_call;                                              \
         sqe_apply_fixed_file(sqe, req);                         \
@@ -699,11 +529,7 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
-    if (!ctx || !req || !ctx->ring_initialized) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (req->len > UINT_MAX) {
+    if (req && req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }

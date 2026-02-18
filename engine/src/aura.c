@@ -299,6 +299,35 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
     }
 }
 
+/**
+ * Drain eventfd to clear POLLIN state after completions.
+ * Without this, epoll would immediately return again even though
+ * we've processed all available CQEs.
+ * Skip in single_thread mode: direct poll callers don't use epoll.
+ */
+static inline void drain_eventfd(aura_engine_t *engine) {
+    if (!engine->rings[0].single_thread) {
+        uint64_t eventfd_val;
+        if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
+            /* Intentionally ignored — EAGAIN expected if no data */
+        }
+    }
+}
+
+/**
+ * Flush a ring and handle fatal errors. Returns true if a fatal error was latched.
+ */
+static inline bool flush_ring_checked(aura_engine_t *engine, ring_ctx_t *ring) {
+    if (ring_flush(ring) < 0) {
+        if (flush_error_is_fatal(errno)) {
+            latch_fatal_submit_errno(engine, errno);
+            return true;
+        }
+        errno = 0;
+    }
+    return false;
+}
+
 static bool check_fatal_submit_errno(aura_engine_t *engine) {
     int fatal = get_fatal_submit_errno(engine);
     if (fatal != 0) {
@@ -1010,20 +1039,6 @@ static void destroy_phase_1_shutdown(aura_engine_t *engine) {
 }
 
 /**
- * Phase 2: Drain all pending I/O operations.
- *
- * Waits for all in-flight operations to complete before proceeding to
- * unregistration. Critical: must drain before unregistering buffers/files
- * to avoid invalidating resources still referenced by pending operations.
- */
-static void destroy_phase_2_drain_io(aura_engine_t *engine) {
-    /* Drain all pending I/O before unregistering buffers/files.
-     * Without draining first, unregistering would invalidate fixed
-     * buffers still referenced by in-flight operations. */
-    aura_drain(engine, -1);
-}
-
-/**
  * Phase 3: Unregister buffers and files.
  *
  * Safe to call after phase 2 completes - all I/O is drained. Uses deferred
@@ -1082,7 +1097,7 @@ void aura_destroy(aura_engine_t *engine) {
     }
 
     destroy_phase_1_shutdown(engine);
-    destroy_phase_2_drain_io(engine);
+    aura_drain(engine, -1); /* Phase 2: drain I/O before unregistering */
     destroy_phase_3_unregister(engine);
     destroy_phase_4_cleanup_resources(engine);
 }
@@ -1275,40 +1290,55 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
     return ctx.req;
 }
 
+/**
+ * Macro: file-resolve + submit scaffold.
+ *
+ * Eliminates the repeated resolve_file_begin → submit_begin → set common fields →
+ * ring_submit → submit_end/abort → resolve_file_end pattern.
+ *
+ * @param engine_     Engine handle
+ * @param fd_         File descriptor
+ * @param callback_   Completion callback
+ * @param user_data_  User context
+ * @param submit_fn_  Ring submit function (e.g., ring_submit_fallocate)
+ * @param setup_code  Statement(s) to set op-specific fields on ctx.req
+ */
+#define SUBMIT_FILE_RESOLVED_OP(engine_, fd_, callback_, user_data_, submit_fn_, setup_code) \
+    do {                                                                                     \
+        file_resolve_guard_t file_guard_ = resolve_file_begin(engine_, fd_);                 \
+        submit_ctx_t ctx = submit_begin(engine_, !file_guard_.uses_registered_file);         \
+        if (!ctx.req) {                                                                      \
+            resolve_file_end(&file_guard_);                                                  \
+            return NULL;                                                                     \
+        }                                                                                    \
+        ctx.req->fd = file_guard_.submit_fd;                                                 \
+        ctx.req->original_fd = fd_;                                                          \
+        ctx.req->callback = callback_;                                                       \
+        ctx.req->user_data = user_data_;                                                     \
+        ctx.req->ring_idx = ctx.ring->ring_idx;                                              \
+        ctx.req->uses_registered_file = file_guard_.uses_registered_file;                    \
+        setup_code;                                                                          \
+        if (submit_fn_(ctx.ring, ctx.req) != 0) {                                            \
+            submit_abort(&ctx);                                                              \
+            resolve_file_end(&file_guard_);                                                  \
+            return NULL;                                                                     \
+        }                                                                                    \
+        submit_end(&ctx);                                                                    \
+        resolve_file_end(&file_guard_);                                                      \
+        return ctx.req;                                                                      \
+    } while (0)
+
 aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset, off_t len,
                                aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || offset < 0 || len <= 0) {
         errno = EINVAL;
         return NULL;
     }
-
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
-
-    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
-    if (!ctx.req) {
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    ctx.req->fd = file_guard.submit_fd;
-    ctx.req->original_fd = fd;
-    ctx.req->offset = offset;
-    ctx.req->len = (size_t)len;
-    ctx.req->meta.fallocate.mode = mode;
-    ctx.req->callback = callback;
-    ctx.req->user_data = user_data;
-    ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = file_guard.uses_registered_file;
-
-    if (ring_submit_fallocate(ctx.ring, ctx.req) != 0) {
-        submit_abort(&ctx);
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    submit_end(&ctx);
-    resolve_file_end(&file_guard);
-    return ctx.req;
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_fallocate, {
+        ctx.req->offset = offset;
+        ctx.req->len = (size_t)len;
+        ctx.req->meta.fallocate.mode = mode;
+    });
 }
 
 aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
@@ -1317,36 +1347,8 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
         errno = EINVAL;
         return NULL;
     }
-
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
-
-    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
-    if (!ctx.req) {
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    ctx.req->fd = file_guard.submit_fd;
-    ctx.req->original_fd = fd;
-    ctx.req->len = (size_t)length;
-    ctx.req->callback = callback;
-    ctx.req->user_data = user_data;
-    ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = file_guard.uses_registered_file;
-
-    if (ring_submit_ftruncate(ctx.ring, ctx.req) != 0) {
-        /* ENOSYS means the kernel (or liburing) doesn't support ftruncate.
-         * Treat it like any other submission failure: abort and return NULL
-         * with errno=ENOSYS.  Do NOT invoke the callback here — the API
-         * contract is that NULL return means the callback will never fire. */
-        submit_abort(&ctx);
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    submit_end(&ctx);
-    resolve_file_end(&file_guard);
-    return ctx.req;
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_ftruncate,
+                            { ctx.req->len = (size_t)length; });
 }
 
 aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
@@ -1356,34 +1358,11 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
         errno = EINVAL;
         return NULL;
     }
-
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
-
-    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
-    if (!ctx.req) {
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    ctx.req->fd = file_guard.submit_fd;
-    ctx.req->original_fd = fd;
-    ctx.req->offset = offset;
-    ctx.req->len = (size_t)nbytes;
-    ctx.req->meta.sync_range.flags = flags;
-    ctx.req->callback = callback;
-    ctx.req->user_data = user_data;
-    ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = file_guard.uses_registered_file;
-
-    if (ring_submit_sync_file_range(ctx.ring, ctx.req) != 0) {
-        submit_abort(&ctx);
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    submit_end(&ctx);
-    resolve_file_end(&file_guard);
-    return ctx.req;
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_sync_file_range, {
+        ctx.req->offset = offset;
+        ctx.req->len = (size_t)nbytes;
+        ctx.req->meta.sync_range.flags = flags;
+    });
 }
 
 /* ============================================================================
@@ -1397,34 +1376,11 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
         errno = EINVAL;
         return NULL;
     }
-
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
-
-    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
-    if (!ctx.req) {
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    ctx.req->fd = file_guard.submit_fd;
-    ctx.req->original_fd = fd;
-    ctx.req->iov = iov;
-    ctx.req->iovcnt = iovcnt;
-    ctx.req->offset = offset;
-    ctx.req->callback = callback;
-    ctx.req->user_data = user_data;
-    ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = file_guard.uses_registered_file;
-
-    if (ring_submit_readv(ctx.ring, ctx.req) != 0) {
-        submit_abort(&ctx);
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    submit_end(&ctx);
-    resolve_file_end(&file_guard);
-    return ctx.req;
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_readv, {
+        ctx.req->iov = iov;
+        ctx.req->iovcnt = iovcnt;
+        ctx.req->offset = offset;
+    });
 }
 
 aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt,
@@ -1433,34 +1389,11 @@ aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *i
         errno = EINVAL;
         return NULL;
     }
-
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
-
-    submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
-    if (!ctx.req) {
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    ctx.req->fd = file_guard.submit_fd;
-    ctx.req->original_fd = fd;
-    ctx.req->iov = iov;
-    ctx.req->iovcnt = iovcnt;
-    ctx.req->offset = offset;
-    ctx.req->callback = callback;
-    ctx.req->user_data = user_data;
-    ctx.req->ring_idx = ctx.ring->ring_idx;
-    ctx.req->uses_registered_file = file_guard.uses_registered_file;
-
-    if (ring_submit_writev(ctx.ring, ctx.req) != 0) {
-        submit_abort(&ctx);
-        resolve_file_end(&file_guard);
-        return NULL;
-    }
-
-    submit_end(&ctx);
-    resolve_file_end(&file_guard);
-    return ctx.req;
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_writev, {
+        ctx.req->iov = iov;
+        ctx.req->iovcnt = iovcnt;
+        ctx.req->offset = offset;
+    });
 }
 
 /* ============================================================================
@@ -1599,19 +1532,7 @@ int aura_poll(aura_engine_t *engine) {
         return (-1);
     }
 
-    /* Drain eventfd to clear POLLIN state after completions.
-     * Without this, epoll would immediately return again even
-     * though we've processed all available CQEs.
-     * Skip in single_thread mode: direct poll callers don't use epoll,
-     * so the eventfd read is a wasted syscall.
-     * EAGAIN expected if no data. Other errors (EBADF etc) indicate
-     * broken state with no recovery - ignore and continue. */
-    if (!engine->rings[0].single_thread) {
-        uint64_t eventfd_val;
-        if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
-            /* Intentionally ignored - see comment above */
-        }
-    }
+    drain_eventfd(engine);
 
     int total = 0;
     int skipped = 0;
@@ -1623,24 +1544,12 @@ int aura_poll(aura_engine_t *engine) {
         ring_ctx_t *ring = &engine->rings[i];
 
         if (ring_trylock(ring)) {
-            /* Got the lock - flush, then release before poll */
-            if (ring_flush(ring) < 0) {
-                if (!flush_error_is_fatal(errno)) {
-                    errno = 0;
-                } else {
-                    latch_fatal_submit_errno(engine, errno);
-                    fatal_latched = true;
-                }
-            }
+            if (flush_ring_checked(engine, ring)) fatal_latched = true;
             ring_unlock(ring);
 
             int completed = ring_poll(ring);
-
-            if (completed > 0) {
-                total += completed;
-            }
+            if (completed > 0) total += completed;
         } else {
-            /* Ring is contended - skip for now */
             skipped++;
         }
     }
@@ -1652,21 +1561,11 @@ int aura_poll(aura_engine_t *engine) {
             ring_ctx_t *ring = &engine->rings[i];
 
             ring_lock(ring);
-            if (ring_flush(ring) < 0) {
-                if (!flush_error_is_fatal(errno)) {
-                    errno = 0;
-                } else {
-                    latch_fatal_submit_errno(engine, errno);
-                    fatal_latched = true;
-                }
-            }
+            if (flush_ring_checked(engine, ring)) fatal_latched = true;
             ring_unlock(ring);
 
             int completed = ring_poll(ring);
-
-            if (completed > 0) {
-                total += completed;
-            }
+            if (completed > 0) total += completed;
         }
     }
 
@@ -1694,18 +1593,7 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         return (-1);
     }
 
-    /* Drain eventfd to clear POLLIN state after completions.
-     * Without this, epoll would immediately return again even
-     * though we've processed all available CQEs.
-     * Skip in single_thread mode: direct poll callers don't use epoll.
-     * EAGAIN expected if no data. Other errors (EBADF etc) indicate
-     * broken state with no recovery - ignore and continue. */
-    if (!engine->rings[0].single_thread) {
-        uint64_t eventfd_val;
-        if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
-            /* Intentionally ignored - see comment above */
-        }
-    }
+    drain_eventfd(engine);
 
     /* Single-pass flush+poll: flush each ring and immediately poll it.
      * Returns as soon as any ring produces completions — remaining rings
@@ -1716,14 +1604,7 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
         ring_lock(ring);
-        if (ring_flush(ring) < 0) {
-            if (!flush_error_is_fatal(errno)) {
-                errno = 0;
-            } else {
-                latch_fatal_submit_errno(engine, errno);
-                fatal_latched = true;
-            }
-        }
+        if (flush_ring_checked(engine, ring)) fatal_latched = true;
         bool has_pending = (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0);
         ring_unlock(ring);
 
@@ -1979,32 +1860,34 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
  * ============================================================================
  */
 
-static int request_unregister_buffers(aura_engine_t *engine) {
+/**
+ * Generic deferred unregister: set the pending flag and finalize if possible.
+ * @param registered      Pointer to the _Atomic bool (buffers_registered or files_registered)
+ * @param unreg_pending   Pointer to the bool (buffers_unreg_pending or files_unreg_pending)
+ */
+static int request_unregister_generic(aura_engine_t *engine, _Atomic bool *registered,
+                                      bool *unreg_pending) {
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (!engine->buffers_registered && !engine->buffers_unreg_pending) {
+    if (!atomic_load_explicit(registered, memory_order_relaxed) && !*unreg_pending) {
         pthread_rwlock_unlock(&engine->reg_lock);
-        return (0); /* Nothing to unregister */
+        return (0);
     }
 
-    engine->buffers_unreg_pending = true;
+    *unreg_pending = true;
     pthread_rwlock_unlock(&engine->reg_lock);
 
     return finalize_deferred_unregistration(engine);
 }
 
+static int request_unregister_buffers(aura_engine_t *engine) {
+    return request_unregister_generic(engine, &engine->buffers_registered,
+                                      &engine->buffers_unreg_pending);
+}
+
 static int request_unregister_files(aura_engine_t *engine) {
-    pthread_rwlock_wrlock(&engine->reg_lock);
-
-    if (!engine->files_registered && !engine->files_unreg_pending) {
-        pthread_rwlock_unlock(&engine->reg_lock);
-        return (0); /* Nothing to unregister */
-    }
-
-    engine->files_unreg_pending = true;
-    pthread_rwlock_unlock(&engine->reg_lock);
-
-    return finalize_deferred_unregistration(engine);
+    return request_unregister_generic(engine, &engine->files_registered,
+                                      &engine->files_unreg_pending);
 }
 
 int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type) {
