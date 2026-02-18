@@ -25,6 +25,7 @@
 #include <sys/eventfd.h>
 #include <time.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 
 /* Verify AURA_O_* constants match the system's O_* values.
@@ -787,7 +788,7 @@ aura_engine_t *aura_create(void) {
  */
 static aura_engine_t *validate_and_init_engine_core(const aura_options_t *options) {
     /* Validate struct_size for ABI forward-compatibility */
-    if (options->struct_size != sizeof(aura_options_t)) {
+    if (options->struct_size < sizeof(aura_options_t)) {
         errno = EINVAL;
         return NULL;
     }
@@ -806,6 +807,20 @@ static aura_engine_t *validate_and_init_engine_core(const aura_options_t *option
         return NULL;
     }
     if (options->ring_count < 0 || options->ring_count > AURA_MAX_RINGS) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    /* Validate adaptive tuning limits */
+    int qdepth = options->queue_depth > 0 ? options->queue_depth : DEFAULT_QUEUE_DEPTH;
+    if (options->min_in_flight != 0 &&
+        (options->min_in_flight < 1 || options->min_in_flight > qdepth)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int effective_min = options->min_in_flight > 0 ? options->min_in_flight : 4;
+    if (options->initial_in_flight != 0 &&
+        (options->initial_in_flight < effective_min || options->initial_in_flight > qdepth)) {
         errno = EINVAL;
         return NULL;
     }
@@ -953,8 +968,10 @@ static int start_tick_thread(aura_engine_t *engine) {
     }
 
     atomic_store(&engine->tick_running, true);
-    if (pthread_create(&engine->tick_thread, NULL, tick_thread_func, engine) != 0) {
+    int ret = pthread_create(&engine->tick_thread, NULL, tick_thread_func, engine);
+    if (ret != 0) {
         atomic_store(&engine->tick_running, false);
+        errno = ret;
         return -1;
     }
 
@@ -1634,16 +1651,32 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         return (0);
     }
 
-    {
+    /* Block on eventfd — any ring completion wakes us, avoiding starvation */
+    if (engine->event_fd >= 0) {
+        struct pollfd pfd = { .fd = engine->event_fd, .events = POLLIN };
+        int poll_timeout = (timeout_ms < 0) ? -1 : timeout_ms;
+        int pret = poll(&pfd, 1, poll_timeout);
+        if (pret > 0) {
+            drain_eventfd(engine);
+            int completed = 0;
+            for (int j = 0; j < engine->ring_count; j++) {
+                int n = ring_poll(&engine->rings[j]);
+                if (n > 0) completed += n;
+            }
+            if (maybe_finalize_deferred_unregistration(engine) != 0) {
+                return (-1);
+            }
+            return completed > 0 ? completed : 0;
+        }
+        /* pret == 0: timeout, pret < 0: error (EINTR etc.) */
+    } else {
+        /* Fallback: no eventfd, block on first pending ring */
         int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
         if (completed > 0) {
-            /* Also poll other rings that may have completed while we blocked */
             for (int j = 0; j < engine->ring_count; j++) {
                 if (j == first_pending) continue;
                 int more = ring_poll(&engine->rings[j]);
-                if (more > 0) {
-                    completed += more;
-                }
+                if (more > 0) completed += more;
             }
             if (maybe_finalize_deferred_unregistration(engine) != 0) {
                 return (-1);

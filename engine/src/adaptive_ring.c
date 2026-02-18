@@ -80,11 +80,15 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     ctx->max_requests = queue_depth;
 
     /* Initialize per-ring locks */
-    if (pthread_mutex_init(&ctx->lock, NULL) != 0) {
+    int ret = pthread_mutex_init(&ctx->lock, NULL);
+    if (ret != 0) {
+        errno = ret;
         return (-1);
     }
-    if (pthread_mutex_init(&ctx->cq_lock, NULL) != 0) {
+    ret = pthread_mutex_init(&ctx->cq_lock, NULL);
+    if (ret != 0) {
         pthread_mutex_destroy(&ctx->lock);
+        errno = ret;
         return (-1);
     }
 
@@ -121,7 +125,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
 
     APPLY_SQPOLL_PARAMS(&params);
 
-    int ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
+    ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
 
     /* If init failed, retry without optional flags.
      * COOP_TASKRUN/SINGLE_ISSUER may not be supported on older kernels,
