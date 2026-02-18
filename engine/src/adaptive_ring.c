@@ -750,12 +750,11 @@ int ring_flush(ring_ctx_t *ctx) {
      * Use submitted (not queued_sqes) in case of partial submit. */
     adaptive_record_submit(&ctx->adaptive, submitted);
     if (submitted < queued) {
-        int unsubmitted = queued - submitted;
         aura_log(AURA_LOG_WARN, "partial submit: %d of %d SQEs submitted", submitted, queued);
-        /* Un-submitted SQEs will never produce CQEs, so pending_count
-         * (already incremented during ring_submit_* calls) must be
-         * corrected to avoid permanently inflating the count. */
-        atomic_fetch_sub_explicit(&ctx->pending_count, unsubmitted, memory_order_relaxed);
+        /* Un-submitted SQEs remain in the kernel SQ ring and will be
+         * submitted on the next io_uring_submit call, eventually producing
+         * CQEs.  Do NOT correct pending_count here — doing so would cause
+         * a double-decrement when those CQEs arrive via ring_retire_batch. */
     }
     /* Subtract only the submitted count atomically so that concurrent
      * increments from other threads (via submit functions) are not lost. */
@@ -820,6 +819,18 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         if (latency_ns > 0) adaptive_record_completion(&ctx->adaptive, latency_ns, bytes);
     }
 
+    /* Decrement registered buffer/file inflight counters BEFORE the callback.
+     * If the callback calls aura_request_unregister(), it checks inflight == 0
+     * to decide whether to finalize unregistration.  Decrementing after the
+     * callback would leave the count stale during the check, potentially
+     * causing the final unregister to never fire. */
+    if (uses_registered_buffer) {
+        atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
+    }
+    if (uses_registered_file) {
+        atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
+    }
+
     /* Mark as no longer pending just before callback invocation.
      * This ensures aura_request_pending() returns false only when
      * the callback is about to fire (not earlier). */
@@ -834,13 +845,6 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         callback_context_depth++;
         callback((aura_request_t *)req, result, user_data);
         callback_context_depth--;
-    }
-
-    if (uses_registered_buffer) {
-        atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
-    }
-    if (uses_registered_file) {
-        atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
     }
 
     return retire;

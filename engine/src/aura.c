@@ -24,7 +24,19 @@
 #include <string.h>
 #include <sys/eventfd.h>
 #include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
+
+/* Verify AURA_O_* constants match the system's O_* values.
+ * These are hardcoded in aura.h for header-only use, but they are
+ * architecture-specific on Linux (differ on MIPS, SPARC, Alpha). */
+_Static_assert(AURA_O_RDONLY == O_RDONLY, "AURA_O_RDONLY mismatch");
+_Static_assert(AURA_O_WRONLY == O_WRONLY, "AURA_O_WRONLY mismatch");
+_Static_assert(AURA_O_RDWR == O_RDWR, "AURA_O_RDWR mismatch");
+_Static_assert(AURA_O_CREAT == O_CREAT, "AURA_O_CREAT mismatch");
+_Static_assert(AURA_O_TRUNC == O_TRUNC, "AURA_O_TRUNC mismatch");
+_Static_assert(AURA_O_APPEND == O_APPEND, "AURA_O_APPEND mismatch");
+_Static_assert(AURA_O_DIRECT == O_DIRECT, "AURA_O_DIRECT mismatch");
 
 /* ============================================================================
  * Configuration Constants

@@ -341,7 +341,7 @@ class Engine {
      * @tparam F Callback type
      * @param dirfd Directory fd (AT_FDCWD for current directory)
      * @param pathname Path (relative to dirfd)
-     * @param flags Lookup flags (AURA_STATX_EMPTY_PATH, AURA_STATX_SYMLINK_NOFOLLOW)
+     * @param flags Lookup flags (AURA_AT_EMPTY_PATH, AURA_AT_SYMLINK_NOFOLLOW)
      * @param mask Requested fields (AURA_STATX_SIZE, AURA_STATX_MTIME, etc.)
      * @param statxbuf Output buffer
      * @param callback Completion callback

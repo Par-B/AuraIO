@@ -699,12 +699,10 @@ TEST(registered_buffers_callback_deferred_unregister) {
     assert(callback_called == 1);
     assert(callback_result == 4096);
     assert(cb_ctx.unregister_rc == 0);
-    assert(cb_ctx.nested_submit_errno == EBUSY);
-
-    /* Deferred unregister should complete once in-flight fixed-buffer ops drain. */
-    errno = 0;
-    aura_request_t *after = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 64, 0, NULL, NULL);
-    assert(after == NULL && errno == ENOENT);
+    /* Since inflight counters are decremented before the callback, the
+     * unregister inside the callback sees inflight==0 and completes
+     * immediately.  The nested submit gets ENOENT (already unregistered). */
+    assert(cb_ctx.nested_submit_errno == ENOENT);
 
     free(buf);
     aura_destroy(engine);

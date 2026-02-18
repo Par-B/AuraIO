@@ -402,10 +402,17 @@ typedef struct {
 #define AURA_SYNC_RANGE_WAIT_AFTER 0x04  /**< Wait for writeout to complete */
 /**@}*/
 
-/** @name Statx lookup flags (for aura_statx flags parameter) */
+/** @name Statx lookup flags (for aura_statx flags parameter)
+ *
+ * These are AT_* flags passed in the `flags` parameter, NOT field masks.
+ * Do not OR these with AURA_STATX_* field masks — they are separate parameters.
+ */
 /**@{*/
-#define AURA_STATX_SYMLINK_NOFOLLOW 0x100 /**< Don't follow symlinks */
-#define AURA_STATX_EMPTY_PATH 0x1000      /**< Operate on fd itself (pathname="") */
+#define AURA_AT_SYMLINK_NOFOLLOW 0x100 /**< Don't follow symlinks */
+#define AURA_AT_EMPTY_PATH 0x1000      /**< Operate on fd itself (pathname="") */
+/* Backwards-compatible aliases (deprecated — use AURA_AT_* instead) */
+#define AURA_STATX_SYMLINK_NOFOLLOW AURA_AT_SYMLINK_NOFOLLOW
+#define AURA_STATX_EMPTY_PATH AURA_AT_EMPTY_PATH
 /**@}*/
 
 /** @name Statx field mask (for aura_statx mask parameter) */
@@ -424,13 +431,13 @@ typedef struct {
 
 /** @name Open flags (for aura_openat flags parameter) */
 /**@{*/
-#define AURA_O_RDONLY 0x0000 /**< Open for reading only */
-#define AURA_O_WRONLY 0x0001 /**< Open for writing only */
-#define AURA_O_RDWR 0x0002   /**< Open for reading and writing */
-#define AURA_O_CREAT 0x0040  /**< Create file if it doesn't exist */
-#define AURA_O_TRUNC 0x0200  /**< Truncate file to zero length */
-#define AURA_O_APPEND 0x0400 /**< Append to end of file */
-#define AURA_O_DIRECT 0x4000 /**< Direct I/O (bypass page cache) */
+#define AURA_O_RDONLY 0x0000  /**< Open for reading only */
+#define AURA_O_WRONLY 0x0001  /**< Open for writing only */
+#define AURA_O_RDWR 0x0002    /**< Open for reading and writing */
+#define AURA_O_CREAT 0x0040   /**< Create file if it doesn't exist */
+#define AURA_O_TRUNC 0x0200   /**< Truncate file to zero length */
+#define AURA_O_APPEND 0x0400  /**< Append to end of file */
+#define AURA_O_DIRECT 0x10000 /**< Direct I/O (bypass page cache) */
 /**@}*/
 
 /* ============================================================================
@@ -758,7 +765,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int 
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
  * @param pathname  Path (relative to dirfd; "" with AT_EMPTY_PATH for fd-based stat)
- * @param flags     Lookup flags (AURA_STATX_EMPTY_PATH, AURA_STATX_SYMLINK_NOFOLLOW)
+ * @param flags     Lookup flags (AURA_AT_EMPTY_PATH, AURA_AT_SYMLINK_NOFOLLOW)
  * @param mask      Requested fields (AURA_STATX_SIZE, AURA_STATX_MTIME, etc.)
  * @param statxbuf  Output buffer -- kernel writes directly here
  * @param callback  Completion callback (may be NULL)
