@@ -119,9 +119,15 @@ impl Options {
     /// Enable single-thread mode (skip ring mutexes)
     ///
     /// When enabled, the engine skips internal mutex locking on submissions,
-    /// which reduces overhead. The caller must guarantee that only one thread
-    /// calls submission methods at a time.
-    pub fn single_thread(mut self, enable: bool) -> Self {
+    /// which reduces overhead.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that only one thread calls submission methods
+    /// at a time. Since `Engine` implements `Sync`, it can be shared across
+    /// threads — using this option without single-threaded access is undefined
+    /// behavior.
+    pub unsafe fn single_thread(mut self, enable: bool) -> Self {
         self.inner.single_thread = enable;
         self
     }

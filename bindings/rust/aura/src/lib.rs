@@ -1551,7 +1551,8 @@ mod tests {
 
     #[test]
     fn test_options_single_thread() {
-        let opts = Options::new().single_thread(true);
+        // SAFETY: This test runs single-threaded.
+        let opts = unsafe { Options::new().single_thread(true) };
         // Verify it doesn't panic and creates a valid engine
         let engine = Engine::with_options(&opts);
         assert!(engine.is_ok(), "single_thread engine should create successfully");
