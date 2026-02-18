@@ -497,13 +497,31 @@ static void tls_destructor(void *arg) {
     cache->thread_exited = true;
 
     /* Flush buffers back to shards if we got here first.
-     * Shards are guaranteed alive: pool destroy tears down shards
-     * only after processing all caches (which blocks on our mutex).
-     * If pool is NULL (destroy already ran) or marked destroyed (in progress),
-     * free buffers directly instead of trying to access shards. */
+     *
+     * We must hold active_users while flushing to shards to prevent a
+     * concurrent buffer_pool_destroy from freeing pool->shards under us.
+     * The protocol mirrors buffer_pool_alloc/free slow path:
+     *   1. Increment active_users BEFORE checking destroyed.
+     *   2. Re-check destroyed after increment; if now true, decrement and
+     *      fall back to FREE mode (destroy is already past its active_users
+     *      wait and may have freed shards at any moment).
+     *   3. Flush to shards while holding the active_users count.
+     *   4. Decrement active_users when done.
+     *
+     * If pool is NULL (destroy already completed and orphaned this cache),
+     * free buffers directly — there are no shards to return to. */
     buffer_pool_t *pool = cache->pool;
-    if (pool && !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        cleanup_cache_buffers_locked(pool, cache, CACHE_CLEANUP_FLUSH);
+    if (pool) {
+        atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
+        if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+            /* Destroy already completed (or is past its active_users wait)
+             * — shards may be freed at any moment, do not access them. */
+            atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_acq_rel);
+            cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
+        } else {
+            cleanup_cache_buffers_locked(pool, cache, CACHE_CLEANUP_FLUSH);
+            atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_acq_rel);
+        }
     } else {
         cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
     }
@@ -678,10 +696,9 @@ static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
 
             pthread_mutex_unlock(&cache->cleanup_mutex);
 
-            if (tls_cache == cache || pthread_equal(cache->owner_thread, pthread_self())) {
+            if (pthread_equal(cache->owner_thread, pthread_self())) {
                 /* This is the calling thread's own cache.  tls_cache may
-                 * already be NULL if the thread switched pools, so also
-                 * check owner_thread to avoid leaking the struct. */
+                 * already be NULL if the thread switched pools. */
                 if (tls_cache == cache) {
                     tls_cache = NULL;
                     if (tls_key_valid) {
@@ -1038,8 +1055,7 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                 if (map->entries[next].key == 0) break;
                 size_t natural = buf_map_hash(map->entries[next].key, mask);
                 /* Check if 'next' is displaced past 'hole' */
-                bool displaced = (hole < next) ? (natural <= hole || natural > next)
-                                               : (natural <= hole && natural > next);
+                bool displaced = (natural <= hole || natural > next);
                 if (displaced) {
                     map->entries[hole] = map->entries[next];
                     hole = next;

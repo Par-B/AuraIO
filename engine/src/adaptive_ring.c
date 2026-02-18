@@ -50,6 +50,21 @@ static _Thread_local int callback_context_depth = 0;
 
 /* Conditional locking helpers are in adaptive_ring.h (inline). */
 
+/**
+ * Increment queued_sqes by 1. Uses relaxed ordering since this is always
+ * called under ring->lock; the atomic type exists only for the lock-free
+ * read in ring_should_flush().
+ */
+static inline void queued_sqes_inc(ring_ctx_t *ctx) {
+    atomic_fetch_add_explicit(&ctx->queued_sqes, 1, memory_order_relaxed);
+}
+
+/** Returns true for ops whose CQE result represents a byte count. */
+static inline bool op_is_data_transfer(aura_op_type_t op) {
+    return op == AURA_OP_READ || op == AURA_OP_WRITE || op == AURA_OP_READV ||
+           op == AURA_OP_WRITEV || op == AURA_OP_READ_FIXED || op == AURA_OP_WRITE_FIXED;
+}
+
 /* ============================================================================
  * Ring Lifecycle
  * ============================================================================ */
@@ -335,9 +350,7 @@ int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
@@ -370,9 +383,7 @@ int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
@@ -402,9 +413,7 @@ int ring_submit_readv(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
@@ -434,9 +443,7 @@ int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += iovec_total_len(req->iov, req->iovcnt);
 
@@ -465,9 +472,7 @@ int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
@@ -496,9 +501,7 @@ int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
@@ -525,9 +528,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *tar
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 
     return (0);
@@ -562,9 +563,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
@@ -597,9 +596,7 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
 
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
     ctx->bytes_submitted += req->len;
 
@@ -633,9 +630,7 @@ static void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op)
     req->submit_time_ns = 0; /* Skip AIMD sampling */
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
-    atomic_store_explicit(&ctx->queued_sqes,
-                          atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                          memory_order_relaxed);
+    queued_sqes_inc(ctx);
     atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
 }
 
@@ -710,6 +705,10 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
+    if (!ctx || !req || !ctx->ring_initialized) {
+        errno = EINVAL;
+        return -1;
+    }
     if (req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
@@ -725,8 +724,11 @@ int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
  * ============================================================================ */
 
 int ring_flush(ring_ctx_t *ctx) {
+    if (!ctx || !ctx->ring_initialized) {
+        return (0);
+    }
     int queued = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
-    if (!ctx || !ctx->ring_initialized || queued == 0) {
+    if (queued == 0) {
         return (0);
     }
 
@@ -747,16 +749,13 @@ int ring_flush(ring_ctx_t *ctx) {
     /* Record submit for batch optimizer.
      * Use submitted (not queued_sqes) in case of partial submit. */
     adaptive_record_submit(&ctx->adaptive, submitted);
-    int remaining = queued - submitted;
-    if (remaining > 0) {
-        /* Partial submit: the kernel accepted some SQEs but not all.
-         * The dropped SQEs will never produce CQEs, so decrement
-         * pending_count to avoid permanent inflation. */
-        atomic_fetch_sub_explicit(&ctx->pending_count, remaining, memory_order_relaxed);
-        aura_log(AURA_LOG_WARN, "partial submit: %d of %d SQEs (adjusted pending_count)", submitted,
-                 queued);
+    if (submitted < queued) {
+        aura_log(AURA_LOG_WARN, "partial submit: %d of %d SQEs submitted", submitted, queued);
     }
-    atomic_store_explicit(&ctx->queued_sqes, remaining > 0 ? remaining : 0, memory_order_relaxed);
+    /* Subtract only the submitted count atomically so that concurrent
+     * increments from other threads (via submit functions) are not lost. */
+    atomic_fetch_sub_explicit(&ctx->queued_sqes, submitted > 0 ? submitted : 0,
+                              memory_order_relaxed);
 
     return submitted;
 }
@@ -813,7 +812,7 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         int64_t now_ns = get_time_ns();
         int64_t latency_ns = now_ns - req->submit_time_ns;
         size_t bytes = (result > 0) ? (size_t)result : 0;
-        adaptive_record_completion(&ctx->adaptive, latency_ns, bytes);
+        if (latency_ns > 0) adaptive_record_completion(&ctx->adaptive, latency_ns, bytes);
     }
 
     /* Mark as no longer pending just before callback invocation.
@@ -871,10 +870,7 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
             ctx->ops_completed++;
             /* Only accumulate bytes for actual data transfer ops.
              * Non-transfer ops like openat return fd numbers, not byte counts. */
-            aura_op_type_t op = entries[i].op_type;
-            if (entries[i].result > 0 &&
-                (op == AURA_OP_READ || op == AURA_OP_WRITE || op == AURA_OP_READV ||
-                 op == AURA_OP_WRITEV || op == AURA_OP_READ_FIXED || op == AURA_OP_WRITE_FIXED)) {
+            if (entries[i].result > 0 && op_is_data_transfer(entries[i].op_type)) {
                 ctx->bytes_completed += entries[i].result;
             }
         }

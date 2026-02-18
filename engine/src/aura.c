@@ -521,7 +521,7 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         free(engine->registered_buffers);
         engine->registered_buffers = NULL;
         engine->registered_buffer_count = 0;
-        engine->buffers_registered = false;
+        atomic_store_explicit(&engine->buffers_registered, false, memory_order_release);
         engine->buffers_unreg_pending = false;
     }
 
@@ -535,7 +535,7 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         free(engine->registered_files);
         engine->registered_files = NULL;
         engine->registered_file_count = 0;
-        engine->files_registered = false;
+        atomic_store_explicit(&engine->files_registered, false, memory_order_release);
         engine->files_unreg_pending = false;
     }
 
@@ -890,6 +890,9 @@ static int register_eventfd_with_rings(aura_engine_t *engine) {
         int ret = io_uring_register_eventfd(&engine->rings[i].ring, engine->event_fd);
         if (ret != 0) {
             errno = -ret;
+            for (int j = 0; j < i; j++) {
+                io_uring_unregister_eventfd(&engine->rings[j].ring);
+            }
             close(engine->event_fd);
             engine->event_fd = -1;
             return -1;
@@ -1321,14 +1324,16 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
          * We must abort (not end) to return the request slot to the pool, since
          * no SQE was submitted and the request will never complete via CQ. */
         if (errno == ENOSYS) {
-            /* Invoke callback with the allocated request so it has a
-             * valid req pointer (matching the API contract), then abort
-             * to return the slot to the pool. */
-            if (callback) {
-                callback(ctx.req, -ENOSYS, user_data);
-            }
+            /* Abort first to clear req->pending and return the slot to the
+             * pool before invoking the callback.  This prevents a callback
+             * that calls aura_cancel() from seeing pending==true and
+             * submitting a cancel SQE against a request that was never
+             * submitted to the kernel. */
             submit_abort(&ctx);
             resolve_file_end(&file_guard);
+            if (callback) {
+                callback(NULL, -ENOSYS, user_data);
+            }
             return NULL;
         }
         submit_abort(&ctx);
@@ -1957,7 +1962,7 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
         ring_unlock(ring);
     }
 
-    engine->buffers_registered = true;
+    atomic_store_explicit(&engine->buffers_registered, true, memory_order_release);
     engine->buffers_unreg_pending = false;
     pthread_rwlock_unlock(&engine->reg_lock);
     return (0);
@@ -2116,7 +2121,7 @@ int aura_register_files(aura_engine_t *engine, const int *fds, int count) {
         ring_unlock(ring);
     }
 
-    engine->files_registered = true;
+    atomic_store_explicit(&engine->files_registered, true, memory_order_release);
     engine->files_unreg_pending = false;
     pthread_rwlock_unlock(&engine->reg_lock);
     return (0);

@@ -59,6 +59,7 @@ typedef struct {
     bool have_valid_p99;
     bool latency_rising;
     double efficiency_ratio;
+    int delta_inflight;
 } tick_stats_t;
 
 /**
@@ -85,12 +86,12 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     /* Calculate current sample statistics from the old (now inactive) histogram */
     stats.p99_ms = adaptive_hist_p99(old_hist);
     double elapsed_sec = (double)stats.elapsed_ns / 1e9;
-    int64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
+    int64_t bytes = atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_acq_rel);
     stats.throughput_bps = (elapsed_sec > 0) ? (double)bytes / elapsed_sec : 0.0;
 
     /* Calculate SQE/submit ratio for batch optimizer */
-    int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
-    int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
+    int calls = atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_acq_rel);
+    int sqes = atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_acq_rel);
     stats.sqe_ratio = (calls > 0) ? (double)sqes / (double)calls : 0.0;
 
     /* Store current values (atomic for thread-safe stats access).
@@ -149,6 +150,7 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
         int delta_inflight = in_flight_limit - ctrl->prev_in_flight_limit;
         if (delta_inflight != 0) {
             stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
+            stats.delta_inflight = delta_inflight;
         }
     }
 
@@ -206,9 +208,9 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
      * is far noisier and causes spurious backoff decisions. */
     uint32_t target;
     if (total >= 100) {
-        target = total / 100;
+        target = (total + 99) / 100;
     } else {
-        target = total / 20; /* P95 for small sample sets */
+        target = (total + 19) / 20; /* P95 for small sample sets */
         if (target == 0) target = 1;
     }
 
@@ -411,8 +413,10 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
          * Use relative threshold: throughput must increase by at least
          * ADAPTIVE_ER_EPSILON_RATIO (1%) per unit of in-flight increase
          * relative to current throughput to be considered improvement. */
-        double er_threshold =
-            stats->throughput_bps > 0 ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO : 0.0;
+        double er_threshold = (stats->throughput_bps > 0 && stats->delta_inflight != 0)
+                                  ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO /
+                                        fabs((double)stats->delta_inflight)
+                                  : 0.0;
         if (stats->efficiency_ratio > er_threshold) {
             /* Still improving - increase (clamped to max) */
             if (in_flight_limit < ctrl->max_queue_depth) {
@@ -462,6 +466,7 @@ static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick
      * sustained congestion causes a BACKOFF->SETTLING->STEADY->BACKOFF thrash
      * loop where each SETTLING window (100ms) is wasted ignoring the problem. */
     if (stats->latency_rising) {
+        ctrl->entered_via_backoff = true;
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
         ctrl->settling_timer = 0;
         return false;
@@ -508,11 +513,12 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
     (void)stats; /* Unused in backoff phase */
 
     /* Multiplicative decrease: reduce by (1 - AIMD_DECREASE).
-     * Use double multiplication + ceil to stay consistent with the constant,
-     * and clamp to min_in_flight (>= 1). */
+     * Use double multiplication + floor so the limit always strictly decreases
+     * (ceil would leave small values unchanged, e.g. ceil(4 * 0.80) = 4).
+     * Clamp to min_in_flight (>= 1). */
     int in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
-    int reduced = (int)ceil((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
+    int reduced = (int)floor((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
     in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
     atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_release);
 
