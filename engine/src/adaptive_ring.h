@@ -104,11 +104,12 @@ typedef struct {
  * One io_uring ring, typically pinned to a single CPU core.
  */
 typedef struct {
-    struct io_uring ring;  /**< io_uring instance */
-    bool ring_initialized; /**< Ring setup succeeded */
-    bool sqpoll_enabled;   /**< SQPOLL mode active */
-    int cpu_id;            /**< CPU this ring is pinned to (-1 if not pinned) */
-    int ring_idx;          /**< Index of this ring in engine's array */
+    struct io_uring ring;       /**< io_uring instance */
+    bool ring_initialized;      /**< Ring setup succeeded */
+    _Atomic bool shutting_down; /**< Reject new submissions during destroy */
+    bool sqpoll_enabled;        /**< SQPOLL mode active */
+    int cpu_id;                 /**< CPU this ring is pinned to (-1 if not pinned) */
+    int ring_idx;               /**< Index of this ring in engine's array */
 
     /* Per-ring locks for thread-safe access */
     pthread_mutex_t lock;    /**< Protects ring submission and request pool */

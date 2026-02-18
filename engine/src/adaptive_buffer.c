@@ -249,7 +249,8 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
      * pool pointer + pool_id match guards against the ABA scenario where a
      * pool is freed and a new pool is allocated at the same address.
      * The destroyed check (acquire) ensures we see any concurrent destruction. */
-    if (cache && cache->pool == pool && cache->pool_id == pool->pool_id &&
+    if (cache && atomic_load_explicit(&cache->pool, memory_order_acquire) == pool &&
+        cache->pool_id == pool->pool_id &&
         !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         return cache;
     }
@@ -262,8 +263,8 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     /* Cache belongs to a different pool — clean up before returning NULL.
      * The caller will get NULL and fall through to the shard slow path. */
-    if (cache && cache->pool != pool) {
-        if (cache->pool == NULL) {
+    if (cache && atomic_load_explicit(&cache->pool, memory_order_acquire) != pool) {
+        if (atomic_load_explicit(&cache->pool, memory_order_acquire) == NULL) {
             /* Orphaned by pool destroy: pool set pool=NULL and left the
              * struct for us to free (since our TLS still referenced it). */
             pthread_mutex_destroy(&cache->cleanup_mutex);
@@ -278,7 +279,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
              *
              * We must hold active_users while accessing shards to prevent
              * a concurrent pool_destroy from freeing them under us. */
-            buffer_pool_t *old_pool = cache->pool;
+            buffer_pool_t *old_pool = atomic_load_explicit(&cache->pool, memory_order_acquire);
             atomic_fetch_add_explicit(&old_pool->active_users, 1, memory_order_acq_rel);
             pthread_mutex_lock(&cache->cleanup_mutex);
             if (atomic_load_explicit(&old_pool->destroyed, memory_order_acquire)) {
@@ -312,7 +313,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
         return NULL;
     }
 
-    cache->pool = pool;
+    atomic_store_explicit(&cache->pool, pool, memory_order_release);
     cache->pool_id = pool->pool_id;
     cache->owner_thread = pthread_self();
     if (pthread_mutex_init(&cache->cleanup_mutex, NULL) != 0) {
@@ -423,8 +424,10 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
     int transferred = 0;
 
     /* Collect buffers that need to be freed outside the lock.
-     * THREAD_CACHE_SIZE is the max we could ever need to free in one flush. */
-    void *to_free[THREAD_CACHE_SIZE];
+     * The "no slot" path can accumulate up to THREAD_CACHE_BATCH_SIZE entries,
+     * then the high-water early-exit can drain all remaining (up to
+     * THREAD_CACHE_SIZE), so we need room for both. */
+    void *to_free[THREAD_CACHE_SIZE + THREAD_CACHE_BATCH_SIZE];
     int free_count = 0;
 
     pthread_mutex_lock(&shard->lock);
@@ -522,7 +525,7 @@ static void tls_destructor(void *arg) {
      *
      * If pool is NULL (destroy already completed and orphaned this cache),
      * free buffers directly — there are no shards to return to. */
-    buffer_pool_t *pool = cache->pool;
+    buffer_pool_t *pool = atomic_load_explicit(&cache->pool, memory_order_acquire);
     if (pool) {
         atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
         if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
@@ -538,7 +541,7 @@ static void tls_destructor(void *arg) {
         cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
     }
 
-    bool pool_gone = (cache->pool == NULL);
+    bool pool_gone = (atomic_load_explicit(&cache->pool, memory_order_acquire) == NULL);
     pthread_mutex_unlock(&cache->cleanup_mutex);
 
     if (pool_gone) {
@@ -750,7 +753,7 @@ static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
             /* Free all cached buffers (destructor hasn't done it yet) */
             cleanup_cache_buffers_locked(NULL, cache, CACHE_CLEANUP_FREE);
 
-            cache->pool = NULL;
+            atomic_store_explicit(&cache->pool, NULL, memory_order_release);
             bool exited = cache->thread_exited;
 
             pthread_mutex_unlock(&cache->cleanup_mutex);

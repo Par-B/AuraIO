@@ -219,6 +219,9 @@ void ring_destroy(ring_ctx_t *ctx) {
         return;
     }
 
+    /* Reject new submissions before draining. */
+    atomic_store_explicit(&ctx->shutting_down, true, memory_order_release);
+
     /* Flush any batched-but-not-submitted SQEs before draining.
      * Without this, ring_wait() would block waiting for CQEs that
      * correspond to SQEs never submitted to the kernel. */
@@ -345,6 +348,10 @@ static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const aura_req
 static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
+        return NULL;
+    }
+    if (atomic_load_explicit(&ctx->shutting_down, memory_order_acquire)) {
+        errno = ESHUTDOWN;
         return NULL;
     }
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ctx->ring);

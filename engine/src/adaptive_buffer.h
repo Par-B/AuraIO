@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <pthread.h>
 
 /** Number of size classes (power-of-2 from 4KB to 128MB) */
@@ -69,8 +70,9 @@ struct buffer_pool;
 typedef struct thread_cache {
     /* Hot fields: all in cache line 0 for fast-path alloc/free.
      * pool+pool_id validated on every access, counts checked immediately after. */
-    struct buffer_pool *pool;        /**< Parent pool (for slow path) */
-    uint64_t pool_id;                /**< Pool generation ID (detect stale cache) */
+    _Atomic(struct buffer_pool *)
+        pool;         /**< Parent pool (for slow path, atomic for cross-thread visibility) */
+    uint64_t pool_id; /**< Pool generation ID (detect stale cache) */
     struct thread_cache *next;       /**< Next in pool's cache list (for cleanup) */
     pthread_t owner_thread;          /**< Thread that created this cache */
     int shard_id;                    /**< Assigned shard for slow-path operations */
