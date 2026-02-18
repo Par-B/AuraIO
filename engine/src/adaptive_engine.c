@@ -70,10 +70,16 @@ typedef struct {
 static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ctrl,
                                                        int64_t now_ns) {
     tick_stats_t stats = { 0 };
+    stats.efficiency_ratio = NAN; /* NAN = no data; distinct from 0.0 = no change */
 
     /* Calculate elapsed time */
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
     stats.elapsed_ns = now_ns - start_ns;
+    /* Guard against clock going backwards (NTP step, VM migration).
+     * Clamp to 1ns to avoid division by zero or negative throughput. */
+    if (stats.elapsed_ns <= 0) {
+        stats.elapsed_ns = 1;
+    }
 
     /* Swap histograms - O(1) atomic index flip.
      * Returns pointer to old histogram (now inactive) for reading stats. */
@@ -620,11 +626,14 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
      * machine decision: delta_throughput = next_throughput - this_throughput,
      * delta_inflight = next_limit - this_limit.  If we saved after the
      * state machine, prev_in_flight_limit would already include this tick's
-     * change, making the delta always zero on the next tick.
-     * WARNING: Do not reorder these lines relative to the switch below. */
+     * change, making the delta always zero on the next tick. */
     ctrl->prev_throughput_bps = stats.throughput_bps;
     ctrl->prev_in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
+    /* Compiler barrier: prevent reordering of the prev_* writes past the
+     * state machine switch below.  These are non-atomic writes that the
+     * compiler is otherwise free to reorder or defer. */
+    __asm__ volatile("" ::: "memory");
 
     /* =========== OUTER LOOP: AIMD State Machine =========== */
     bool state_changed_params = false;

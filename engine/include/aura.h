@@ -1232,14 +1232,18 @@ typedef enum {
 AURA_API int aura_unregister(aura_engine_t *engine, aura_reg_type_t type);
 
 /**
- * Request deferred unregister (callback-safe, non-blocking)
+ * Request deferred unregister (callback-safe)
  *
- * Marks registered resources as draining and returns immediately.
- * For buffers: new fixed-buffer submissions fail with errno=EBUSY while
- * draining. Final unregister completes lazily once in-flight fixed-buffer
- * operations reach zero.
+ * Marks registered resources as draining. If no in-flight fixed-buffer/file
+ * operations remain, the unregistration completes synchronously (acquires
+ * reg_lock and makes a blocking kernel call). Otherwise, unregistration is
+ * deferred until in-flight operations drain via aura_poll/aura_wait.
  *
  * Thread-safe: safe to call from completion callbacks or any thread.
+ *
+ * @note Despite being callback-safe, this function may block briefly when
+ * it completes the unregistration synchronously.  It will NOT block waiting
+ * for in-flight operations to complete.
  *
  * @param engine Engine handle
  * @param type   Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)

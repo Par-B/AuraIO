@@ -956,7 +956,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         return (-1);
     }
 
-    if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) == 0) {
+    if (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) == 0) {
         return (0);
     }
 
