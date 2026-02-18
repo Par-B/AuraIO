@@ -750,7 +750,12 @@ int ring_flush(ring_ctx_t *ctx) {
      * Use submitted (not queued_sqes) in case of partial submit. */
     adaptive_record_submit(&ctx->adaptive, submitted);
     if (submitted < queued) {
+        int unsubmitted = queued - submitted;
         aura_log(AURA_LOG_WARN, "partial submit: %d of %d SQEs submitted", submitted, queued);
+        /* Un-submitted SQEs will never produce CQEs, so pending_count
+         * (already incremented during ring_submit_* calls) must be
+         * corrected to avoid permanently inflating the count. */
+        atomic_fetch_sub_explicit(&ctx->pending_count, unsubmitted, memory_order_relaxed);
     }
     /* Subtract only the submitted count atomically so that concurrent
      * increments from other threads (via submit functions) are not lost. */
@@ -1007,9 +1012,17 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
         }
     } else {
         ring_cq_unlock(ctx);
+        return ring_drain_cqes(ctx);
     }
 
-    return ring_drain_cqes(ctx);
+    int drained = ring_drain_cqes(ctx);
+
+    /* The blocking wait succeeded (ret >= 0) but drain found nothing —
+     * another thread consumed the CQE between our unlock and drain.
+     * Return 1 so the caller doesn't re-block unnecessarily. */
+    if (drained == 0) return 1;
+
+    return drained;
 }
 
 /* ============================================================================

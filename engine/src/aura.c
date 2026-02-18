@@ -1332,7 +1332,7 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
             submit_abort(&ctx);
             resolve_file_end(&file_guard);
             if (callback) {
-                callback(NULL, -ENOSYS, user_data);
+                callback(ctx.req, -ENOSYS, user_data);
             }
             return NULL;
         }
@@ -1618,7 +1618,7 @@ int aura_poll(aura_engine_t *engine) {
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
 
-        if (ring->single_thread || pthread_mutex_trylock(&ring->lock) == 0) {
+        if (ring_trylock(ring)) {
             /* Got the lock - flush, then release before poll */
             if (ring_flush(ring) < 0) {
                 if (!flush_error_is_fatal(errno)) {
@@ -2201,7 +2201,7 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;
         return (-1);
@@ -2290,7 +2290,7 @@ int aura_get_ring_count(const aura_engine_t *engine) {
     return engine->ring_count;
 }
 
-int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
+int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
                         size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;

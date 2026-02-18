@@ -1055,7 +1055,8 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                 if (map->entries[next].key == 0) break;
                 size_t natural = buf_map_hash(map->entries[next].key, mask);
                 /* Check if 'next' is displaced past 'hole' */
-                bool displaced = (natural <= hole || natural > next);
+                bool displaced = (hole < next) ? (natural <= hole || natural > next)
+                                               : (natural <= hole && natural > next);
                 if (displaced) {
                     map->entries[hole] = map->entries[next];
                     hole = next;

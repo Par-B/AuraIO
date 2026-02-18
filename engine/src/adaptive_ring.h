@@ -376,6 +376,10 @@ int ring_get_fd(ring_ctx_t *ctx);
 static inline void ring_lock(ring_ctx_t *ctx) {
     if (!ctx->single_thread) pthread_mutex_lock(&ctx->lock);
 }
+static inline bool ring_trylock(ring_ctx_t *ctx) {
+    if (ctx->single_thread) return true;
+    return pthread_mutex_trylock(&ctx->lock) == 0;
+}
 static inline void ring_unlock(ring_ctx_t *ctx) {
     if (!ctx->single_thread) pthread_mutex_unlock(&ctx->lock);
 }
