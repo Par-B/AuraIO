@@ -1707,7 +1707,7 @@ TEST(load_vectored_io) {
  * Drain Tests
  * ============================================================================ */
 
-static int drain_callback_count = 0;
+static _Atomic int drain_callback_count = 0;
 
 static void drain_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;

@@ -35,7 +35,7 @@ static int test_count = 0;
 
 typedef struct {
     ssize_t result;
-    int done;
+    _Atomic int done;
 } cb_state_t;
 
 static void basic_cb(aura_request_t *req, ssize_t result, void *user_data) {
@@ -84,8 +84,8 @@ TEST(openat_close_basic) {
     cb_state_t st = { 0 };
 
     /* Open (create) a file */
-    aura_request_t *req = aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_WRONLY | O_TRUNC,
-                                          0644, basic_cb, &st);
+    aura_request_t *req =
+        aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_WRONLY | O_TRUNC, 0644, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0); /* result is the new fd */
@@ -234,8 +234,8 @@ TEST(openat_enoent) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_openat(engine, AT_FDCWD, "/tmp/aura_nonexistent_file_xyz",
-                                          O_RDONLY, 0, basic_cb, &st);
+    aura_request_t *req =
+        aura_openat(engine, AT_FDCWD, "/tmp/aura_nonexistent_file_xyz", O_RDONLY, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -ENOENT);
@@ -261,8 +261,8 @@ TEST(statx_enoent) {
     struct statx stx = { 0 };
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_statx(engine, AT_FDCWD, "/tmp/aura_nonexistent_xyz", 0,
-                                         STATX_SIZE, &stx, basic_cb, &st);
+    aura_request_t *req = aura_statx(engine, AT_FDCWD, "/tmp/aura_nonexistent_xyz", 0, STATX_SIZE,
+                                     &stx, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -ENOENT);
@@ -512,8 +512,8 @@ TEST(openat_mode_verification) {
     char modefile[512];
     snprintf(modefile, sizeof(modefile), "%s/modefile", tmpdir);
 
-    aura_request_t *req = aura_openat(engine, AT_FDCWD, modefile, O_CREAT | O_WRONLY | O_TRUNC,
-                                          0600, basic_cb, &st);
+    aura_request_t *req =
+        aura_openat(engine, AT_FDCWD, modefile, O_CREAT | O_WRONLY | O_TRUNC, 0600, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0);
@@ -668,9 +668,9 @@ TEST(sync_file_range_flags) {
     /* WAIT_BEFORE | WRITE | WAIT_AFTER (full sync) */
     cb_state_t st2 = { 0 };
     req = aura_sync_file_range(engine, fd, 4096, 4096,
-                                 SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
-                                     SYNC_FILE_RANGE_WAIT_AFTER,
-                                 basic_cb, &st2);
+                               SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
+                                   SYNC_FILE_RANGE_WAIT_AFTER,
+                               basic_cb, &st2);
     assert(req);
     run_until_done(engine, &st2);
     assert(st2.result == 0);
@@ -687,8 +687,8 @@ TEST(openat_dirfd) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_openat(engine, dirfd, "dirfd_test", O_CREAT | O_WRONLY | O_TRUNC,
-                                          0644, basic_cb, &st);
+    aura_request_t *req =
+        aura_openat(engine, dirfd, "dirfd_test", O_CREAT | O_WRONLY | O_TRUNC, 0644, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0);
@@ -735,7 +735,7 @@ TEST(statx_symlink) {
     struct statx stx2 = { 0 };
     cb_state_t st2 = { 0 };
     req = aura_statx(engine, AT_FDCWD, linkpath, AT_SYMLINK_NOFOLLOW, STATX_MODE, &stx2, basic_cb,
-                       &st2);
+                     &st2);
     assert(req);
     run_until_done(engine, &st2);
     assert(st2.result == 0);
@@ -810,8 +810,8 @@ TEST(sync_file_range_bad_fd) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_sync_file_range(engine, 9999, 0, 4096,
-        SYNC_FILE_RANGE_WRITE, basic_cb, &st);
+    aura_request_t *req =
+        aura_sync_file_range(engine, 9999, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -EBADF);
@@ -848,14 +848,13 @@ TEST(ftruncate_null_params) {
 }
 
 TEST(sync_file_range_null_params) {
-    aura_request_t *req = aura_sync_file_range(NULL, 0, 0, 4096,
-        SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+    aura_request_t *req =
+        aura_sync_file_range(NULL, 0, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     aura_engine_t *engine = make_engine();
-    req = aura_sync_file_range(engine, -1, 0, 4096,
-        SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+    req = aura_sync_file_range(engine, -1, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -867,8 +866,8 @@ TEST(openat_readonly_dir) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_openat(engine, AT_FDCWD,
-        "/proc/aura_nonexistent_test", O_CREAT | O_WRONLY, 0644, basic_cb, &st);
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, "/proc/aura_nonexistent_test",
+                                      O_CREAT | O_WRONLY, 0644, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result < 0); /* -EACCES or -EROFS */

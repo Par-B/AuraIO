@@ -18,11 +18,15 @@
 aura_engine_t *engine;
 int efd;
 volatile atomic_int running = 1;
+volatile atomic_uint_fast64_t completions = 0;
 
 void on_done(aura_request_t *req, ssize_t res, void *data) {
     (void)req;
-    (void)res;
     (void)data;
+    atomic_fetch_add_explicit(&completions, 1, memory_order_relaxed);
+    if (res < 0) {
+        fprintf(stderr, "I/O error in callback: %zd\n", res);
+    }
 }
 
 void *worker(void *arg) {
@@ -107,8 +111,22 @@ int main() {
         total += (uint64_t)ret;
     }
 
+    uint64_t total_completions = atomic_load(&completions);
     printf("Total submissions: %lu\n", total);
+    printf("Total completions: %lu\n", total_completions);
     printf("Average Throughput: %.2f M/s\n", (double)total / DURATION_SEC / 1000000.0);
+
+    /* Drain remaining completions */
+    aura_drain(engine, 1000);
+    total_completions = atomic_load(&completions);
+
+    /* Sanity: at least some I/O must have completed */
+    if (total_completions == 0 && total > 0) {
+        fprintf(stderr, "FAIL: %lu submissions but 0 completions\n", total);
+        aura_destroy(engine);
+        close(efd);
+        return 1;
+    }
 
     aura_destroy(engine);
     close(efd);

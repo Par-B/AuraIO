@@ -685,11 +685,10 @@ TEST(cancel_completed_request) {
     aura_wait(engine, 1000);
     assert(cb_called == 1);
 
-    /* Cancelling already-completed request should return EALREADY.
-     * NOTE: req is invalid after callback, but cancel checks pending flag
-     * before dereferencing, so this is an expected usage pattern. */
-    /* We cannot safely test this because the request handle is invalid
-     * after the callback. Skip this specific test. */
+    /* The request handle is returned to the pool after completion,
+     * so we cannot safely call aura_cancel() on it.  Just verify
+     * the I/O completed successfully. */
+    assert(cb_called == 1);
 
     aura_buffer_free(engine, buf);
     aura_destroy(engine);
@@ -816,10 +815,9 @@ TEST(unregister_reg_buffers_not_registered) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
-    /* Unregister when nothing is registered */
+    /* Unregister when nothing is registered — should not crash */
     int rc = aura_unregister(engine, AURA_REG_BUFFERS);
-    /* Should return error or be a no-op */
-    (void)rc;
+    assert(rc == 0 || rc == -1);
 
     aura_destroy(engine);
 }
@@ -920,7 +918,7 @@ TEST(unregister_reg_files_not_registered) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     int rc = aura_unregister(engine, AURA_REG_FILES);
-    (void)rc;
+    assert(rc == 0 || rc == -1);
     aura_destroy(engine);
 }
 
@@ -1951,14 +1949,12 @@ TEST(buffer_pool_mixed_sizes) {
 
     /* Free in reverse order */
     for (int i = 99; i >= 0; i--) {
-        size_t size = sizes[i % 6];
         aura_buffer_free(engine, bufs[i]);
     }
 
     /* Allocate again to reuse freed buffers */
     for (int i = 0; i < 100; i++) {
-        size_t size = sizes[i % 6];
-        bufs[i] = aura_buffer_alloc(engine, size);
+        bufs[i] = aura_buffer_alloc(engine, sizes[i % 6]);
         assert(bufs[i]);
         aura_buffer_free(engine, bufs[i]);
     }
@@ -2080,6 +2076,137 @@ TEST(poll_no_pending) {
     int rc = aura_poll(engine);
     assert(rc >= 0);
     aura_destroy(engine);
+}
+
+/* ============================================================================
+ * API Coverage: aura_create(), aura_get_fatal_error(),
+ *               aura_in_callback_context(), aura_histogram_percentile(),
+ *               aura_request_op_type()
+ * ============================================================================ */
+
+TEST(create_default) {
+    aura_engine_t *engine = aura_create();
+    assert(engine);
+    aura_destroy(engine);
+}
+
+TEST(get_fatal_error_null) {
+    int err = aura_get_fatal_error(NULL);
+    assert(err == -1);
+    assert(errno == EINVAL);
+}
+
+TEST(get_fatal_error_clean) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    int err = aura_get_fatal_error(engine);
+    assert(err == 0);
+    aura_destroy(engine);
+}
+
+TEST(in_callback_context_outside) {
+    /* Outside any callback, should return false */
+    assert(aura_in_callback_context() == false);
+}
+
+static void check_in_callback_cb(aura_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    (void)result;
+    int *flag = user_data;
+    *flag = aura_in_callback_context() ? 1 : 0;
+}
+
+TEST(in_callback_context_inside) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    int in_cb = -1;
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, check_in_callback_cb, &in_cb);
+    assert(req);
+    aura_wait(engine, 1000);
+    assert(in_cb == 1);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(histogram_percentile_null) {
+    double val = aura_histogram_percentile(NULL, 50.0);
+    assert(val < 0.0);
+}
+
+TEST(histogram_percentile_out_of_range) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    aura_histogram_t hist;
+    aura_get_histogram(engine, 0, &hist, sizeof(hist));
+    double val = aura_histogram_percentile(&hist, -1.0);
+    assert(val < 0.0);
+    val = aura_histogram_percentile(&hist, 101.0);
+    assert(val < 0.0);
+    aura_destroy(engine);
+}
+
+TEST(histogram_percentile_valid) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    aura_histogram_t hist;
+    aura_get_histogram(engine, 0, &hist, sizeof(hist));
+    /* With valid range, should not crash; value depends on data */
+    double val = aura_histogram_percentile(&hist, 50.0);
+    (void)val; /* may be 0 or negative with empty histogram */
+    aura_destroy(engine);
+}
+
+TEST(request_op_type_null) {
+    int op = aura_request_op_type(NULL);
+    assert(op == -1);
+}
+
+static int last_op_type = -999;
+static void capture_op_cb(aura_request_t *req, ssize_t result, void *user_data) {
+    (void)result;
+    (void)user_data;
+    last_op_type = aura_request_op_type(req);
+}
+
+TEST(request_op_type_read) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    last_op_type = -999;
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, capture_op_cb, NULL);
+    assert(req);
+    aura_wait(engine, 1000);
+    assert(last_op_type == AURA_OP_READ);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(request_op_type_write) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    memset(buf, 'Z', 4096);
+    last_op_type = -999;
+    aura_request_t *req = aura_write(engine, test_fd, aura_buf(buf), 4096, 0, capture_op_cb, NULL);
+    assert(req);
+    aura_wait(engine, 1000);
+    assert(last_op_type == AURA_OP_WRITE);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
 }
 
 /* ============================================================================
@@ -2232,6 +2359,19 @@ int main(void) {
     RUN_TEST(wait_null_engine);
     RUN_TEST(wait_zero_timeout);
     RUN_TEST(poll_no_pending);
+
+    /* API coverage */
+    RUN_TEST(create_default);
+    RUN_TEST(get_fatal_error_null);
+    RUN_TEST(get_fatal_error_clean);
+    RUN_TEST(in_callback_context_outside);
+    RUN_TEST(in_callback_context_inside);
+    RUN_TEST(histogram_percentile_null);
+    RUN_TEST(histogram_percentile_out_of_range);
+    RUN_TEST(histogram_percentile_valid);
+    RUN_TEST(request_op_type_null);
+    RUN_TEST(request_op_type_read);
+    RUN_TEST(request_op_type_write);
 
     printf("\n  All %d tests passed!\n\n", test_count);
     return 0;
