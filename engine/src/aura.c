@@ -46,8 +46,12 @@ _Static_assert(AURA_O_DIRECT == O_DIRECT, "AURA_O_DIRECT mismatch");
 
 #define DEFAULT_QUEUE_DEPTH 1024 /**< Default ring queue depth */
 static size_t get_page_size(void) {
-    long ps = sysconf(_SC_PAGESIZE);
-    return (ps > 0) ? (size_t)ps : 4096;
+    static size_t cached;
+    if (cached == 0) {
+        long ps = sysconf(_SC_PAGESIZE);
+        cached = (ps > 0) ? (size_t)ps : 4096;
+    }
+    return cached;
 }
 #define BUFFER_ALIGNMENT get_page_size() /**< Page alignment for O_DIRECT */
 #define TICK_INTERVAL_MS 10 /**< Adaptive tick interval */
@@ -338,7 +342,8 @@ static bool check_fatal_submit_errno(aura_engine_t *engine) {
 }
 
 static bool resolve_registered_file_locked(const aura_engine_t *engine, int fd, int *fixed_fd) {
-    if (!engine->files_registered || engine->files_unreg_pending) {
+    if (!atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
+        engine->files_unreg_pending) {
         return false;
     }
 
@@ -446,7 +451,7 @@ static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, i
 
     pthread_rwlock_rdlock(&engine->reg_lock);
 
-    if (!engine->buffers_registered) {
+    if (!atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = ENOENT; /* No buffers registered */
         return info;
@@ -1468,6 +1473,8 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     /* Submit cancel — clear callback/user_data so process_completion()
      * does not invoke a stale callback from this slot's previous use. */
     cancel_req->ring_idx = ring->ring_idx;
+    cancel_req->fd = -1;
+    cancel_req->original_fd = -1;
     cancel_req->callback = NULL;
     cancel_req->user_data = NULL;
     if (ring_submit_cancel(ring, cancel_req, req) != 0) {
@@ -1682,7 +1689,22 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         if (pret < 0 && errno != EINTR) {
             return (-1);
         }
-        /* pret == 0: timeout, pret < 0 with EINTR: signal interrupted */
+        /* pret == 0: timeout, pret < 0 with EINTR: signal interrupted.
+         * Do a final non-blocking poll to catch completions that arrived
+         * between the interrupt/timeout and now. */
+        {
+            int completed = 0;
+            for (int j = 0; j < engine->ring_count; j++) {
+                int n = ring_poll(&engine->rings[j]);
+                if (n > 0) completed += n;
+            }
+            if (completed > 0) {
+                if (maybe_finalize_deferred_unregistration(engine) != 0) {
+                    return (-1);
+                }
+                return completed;
+            }
+        }
     } else {
         /* Fallback: no eventfd, block on first pending ring */
         int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
@@ -2008,6 +2030,11 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         int n = aura_wait(engine, 100);
         if (n < 0) {
             return (-1);
+        }
+        if (n == 0) {
+            /* No completions — sleep briefly to avoid busy-polling */
+            struct timespec ts_sleep = { .tv_sec = 0, .tv_nsec = 1000000 }; /* 1ms */
+            nanosleep(&ts_sleep, NULL);
         }
     }
 }
@@ -2353,14 +2380,14 @@ double aura_histogram_percentile(const aura_histogram_t *hist, double percentile
     }
 
     uint64_t target = (uint64_t)((percentile / 100.0) * hist->total_count);
-    if (target == 0) {
+    if (target == 0 && percentile > 0.0) {
         target = 1;
     }
 
     uint64_t cumulative = 0;
     for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
         cumulative += hist->buckets[i];
-        if (cumulative >= target) {
+        if (cumulative >= target && cumulative > 0) {
             /* Return the upper edge of this bucket, clamped to max_tracked_us */
             uint64_t upper = (uint64_t)(i + 1) * (uint64_t)hist->bucket_width_us;
             if (upper > (uint64_t)hist->max_tracked_us) upper = (uint64_t)hist->max_tracked_us;
