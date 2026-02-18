@@ -875,7 +875,7 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
     ring_lock(ctx);
     for (int i = 0; i < count; i++) {
         if (entries[i].op_idx < 0) {
-            continue; /* NULL req, skipped */
+            continue; /* NULL/unknown req — no matching submit, don't adjust pending */
         }
         /* Don't count cancel operations in ops_completed — they are
          * internal bookkeeping, not user I/O operations. */

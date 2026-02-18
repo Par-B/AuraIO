@@ -763,30 +763,31 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     int class_idx = size_to_class(size);
     size_t bucket_size = class_to_size(class_idx);
 
-    /* Fast path: try thread-local cache first (no lock) */
+    /* Fast path: try thread-local cache first (no lock, no shard access) */
     thread_cache_t *cache = get_thread_cache(pool);
     if (cache && cache->counts[class_idx] > 0) {
         return cache->buffers[class_idx][--cache->counts[class_idx]];
+    }
+
+    /* All paths below access pool->shards, so we must hold active_users to
+     * prevent buffer_pool_destroy from freeing the shards array under us.
+     * Acquire active_users BEFORE checking destroyed: destroy sets
+     * destroyed=true then waits for active_users==0 before freeing shards.
+     * By incrementing first, we guarantee destroy will wait for us. */
+    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
+        errno = ENXIO;
+        return NULL;
     }
 
     /* Thread cache empty - try to refill from assigned shard */
     if (cache) {
         int refilled = cache_refill(pool, cache, class_idx);
         if (refilled > 0) {
+            atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
             return cache->buffers[class_idx][--cache->counts[class_idx]];
         }
-    }
-
-    /* Slow path: shard also empty, or no thread cache.
-     * Acquire active_users BEFORE checking destroyed to prevent a race with
-     * buffer_pool_destroy: destroy sets destroyed=true then waits for
-     * active_users==0 before freeing shards.  By incrementing first, we
-     * guarantee destroy will wait for us to finish shard access. */
-    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
-    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
-        errno = ENXIO;
-        return NULL;
     }
 
     /* Pick a shard - use cache's shard or round-robin for no-cache case */
@@ -870,10 +871,19 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     int class_idx = size_to_class(size);
     size_t bucket_size = class_to_size(class_idx);
 
-    /* Fast path: try thread-local cache first (no lock) */
+    /* Fast path: try thread-local cache first (no lock, no shard access) */
     thread_cache_t *cache = get_thread_cache(pool);
     if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
         cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
+        return;
+    }
+
+    /* All paths below access pool->shards (flush or direct insert), so we
+     * must hold active_users — same protocol as buffer_pool_alloc. */
+    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
+        free(buf);
         return;
     }
 
@@ -883,19 +893,10 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
 
         /* Now there should be room in the cache */
         if (cache->counts[class_idx] < THREAD_CACHE_SIZE) {
+            atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
             cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
             return;
         }
-    }
-
-    /* Slow path: no thread cache or flush failed, go directly to shard.
-     * Same active_users protocol as buffer_pool_alloc slow path — see
-     * comment there for the synchronization rationale. */
-    atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
-    if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
-        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
-        free(buf);
-        return;
     }
 
     int shard_id = cache ? cache->shard_id

@@ -970,6 +970,9 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
 
 cleanup_eventfd:
     if (engine->event_fd >= 0) {
+        for (int i = 0; i < engine->ring_count; i++) {
+            io_uring_unregister_eventfd(&engine->rings[i].ring);
+        }
         close(engine->event_fd);
     }
 cleanup_rings:
