@@ -1699,17 +1699,20 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             if (maybe_finalize_deferred_unregistration(engine) != 0) {
                 return (-1);
             }
-            return completed > 0 ? completed : 0;
+            if (completed > 0) {
+                if (maybe_finalize_deferred_unregistration(engine) != 0) {
+                    return (-1);
+                }
+                return completed;
+            }
+            /* Woke from poll but no completions — fall through to timeout. */
         }
         if (pret < 0 && errno != EINTR) {
             return (-1);
         }
         /* pret == 0: timeout, pret < 0 with EINTR: signal interrupted.
-         * Clear stale errno (may be EINTR) before the final poll pass
-         * so callers checking errno on return 0 don't see a stale value.
          * Do a final non-blocking poll to catch completions that arrived
          * between the interrupt/timeout and now. */
-        errno = 0;
         {
             int completed = 0;
             for (int j = 0; j < engine->ring_count; j++) {
@@ -1742,10 +1745,14 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         }
     }
 
+    /* Operations were pending but none completed before the timeout.
+     * Return -1 with ETIMEDOUT so callers can distinguish from the
+     * "nothing pending" case (which returns 0). */
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
     }
-    return (0);
+    errno = ETIMEDOUT;
+    return (-1);
 }
 
 void aura_run(aura_engine_t *engine) {
@@ -1763,7 +1770,7 @@ void aura_run(aura_engine_t *engine) {
     int drain_iterations = 0;
     for (;;) {
         int completed = aura_wait(engine, 100);
-        if (completed < 0) {
+        if (completed < 0 && errno != ETIMEDOUT) {
             break;
         }
 
@@ -1855,7 +1862,9 @@ int aura_drain(aura_engine_t *engine, int timeout_ms) {
 
         int n = aura_wait(engine, wait_ms);
         if (n > 0) total += n;
-        if (n < 0) return (-1);
+        if (n < 0 && errno != ETIMEDOUT) return (-1);
+        /* ETIMEDOUT from aura_wait is expected — we loop with capped
+         * per-iteration timeouts and check the overall deadline above. */
     }
 }
 
@@ -2049,10 +2058,10 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         }
 
         int n = aura_wait(engine, 100);
-        if (n < 0) {
+        if (n < 0 && errno != ETIMEDOUT) {
             return (-1);
         }
-        if (n == 0) {
+        if (n <= 0) {
             /* No completions — sleep briefly to avoid busy-polling */
             struct timespec ts_sleep = { .tv_sec = 0, .tv_nsec = 1000000 }; /* 1ms */
             nanosleep(&ts_sleep, NULL);

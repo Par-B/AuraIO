@@ -760,7 +760,9 @@ impl Engine {
     ///   - `0` = don't block (same as `poll()`)
     ///   - `>0` = wait up to N milliseconds
     ///
-    /// Returns the number of completions processed.
+    /// Returns the number of completions processed, `Ok(0)` if nothing
+    /// is pending, or `Err(ETIMEDOUT)` if the timeout expired with
+    /// operations still in flight.
     ///
     /// # Deadlock Warning
     ///

@@ -1034,7 +1034,9 @@ AURA_API int aura_poll(aura_engine_t *engine);
  * @param engine     Engine handle
  * @param timeout_ms Maximum wait time in milliseconds (-1 = forever, 0 = don't
  * block)
- * @return Number of completions processed, or -1 on error
+ * @return Number of completions processed (>0), 0 if nothing is pending,
+ *         or -1 on error. On timeout with pending operations, returns -1
+ *         with errno set to ETIMEDOUT.
  */
 AURA_API int aura_wait(aura_engine_t *engine, int timeout_ms);
 
