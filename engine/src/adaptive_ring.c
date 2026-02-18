@@ -351,7 +351,7 @@ static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
 }
 
 /** Common postamble for metadata submissions (skip AIMD sampling). */
@@ -361,7 +361,7 @@ static inline void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
 }
 
 /**
@@ -380,7 +380,7 @@ static inline void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     } while (0)
 
 int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
-    if (req && req->len > UINT_MAX) {
+    if (!req || req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -389,7 +389,7 @@ int ring_submit_read(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_write(ring_ctx_t *ctx, aura_request_t *req) {
-    if (req && req->len > UINT_MAX) {
+    if (!req || req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -438,7 +438,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *tar
 }
 
 int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
-    if (req && req->len > UINT_MAX) {
+    if (!req || req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -448,7 +448,7 @@ int ring_submit_read_fixed(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
-    if (req && req->len > UINT_MAX) {
+    if (!req || req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -533,7 +533,7 @@ int ring_submit_ftruncate(ring_ctx_t *ctx, aura_request_t *req) {
 }
 
 int ring_submit_sync_file_range(ring_ctx_t *ctx, aura_request_t *req) {
-    if (req && req->len > UINT_MAX) {
+    if (!req || req->len > UINT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -720,8 +720,9 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
         ring_put_request(ctx, entries[i].op_idx);
         pending_delta++;
     }
-    /* Single atomic decrement for the entire batch instead of one per CQE. */
-    atomic_fetch_sub_explicit(&ctx->pending_count, pending_delta, memory_order_relaxed);
+    /* Single atomic decrement for the entire batch instead of one per CQE.
+     * Use release ordering to pair with acquire loads in ring_destroy/ring_wait. */
+    atomic_fetch_sub_explicit(&ctx->pending_count, pending_delta, memory_order_release);
     ring_unlock(ctx);
 }
 

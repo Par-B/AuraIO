@@ -891,6 +891,13 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         return;
     }
 
+    /* Guard against size=0: size_to_class(0) returns class 0, which would
+     * place the buffer in the wrong bucket. Free directly instead. */
+    if (size == 0) {
+        free(buf);
+        return;
+    }
+
     /* Pool destroyed — shards are gone, just free the buffer directly.
      * This can happen when a late callback frees a buffer after destroy. */
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {

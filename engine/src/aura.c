@@ -1089,8 +1089,13 @@ static void destroy_phase_3_unregister(aura_engine_t *engine) {
  * eventfd → rings → buffer pool → rwlock → engine struct.
  */
 static void destroy_phase_4_cleanup_resources(aura_engine_t *engine) {
-    /* Close unified eventfd */
+    /* Unregister eventfd from all rings BEFORE closing it.
+     * Closing first could cause kernel writes to a recycled fd number
+     * if the OS reuses it before unregistration completes. */
     if (engine->event_fd >= 0) {
+        for (int i = 0; i < engine->ring_count; i++) {
+            io_uring_unregister_eventfd(&engine->rings[i].ring);
+        }
         close(engine->event_fd);
     }
 
@@ -1468,6 +1473,7 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     if (ring_submit_cancel(ring, cancel_req, req) != 0) {
         ring_put_request(ring, op_idx);
         ring_unlock(ring);
+        if (errno == 0) errno = EIO;
         return (-1);
     }
 
@@ -1480,6 +1486,7 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
         }
         latch_fatal_submit_errno(engine, errno);
         ring_unlock(ring);
+        errno = get_fatal_submit_errno(engine);
         return (-1);
     }
 

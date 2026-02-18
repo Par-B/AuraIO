@@ -487,6 +487,7 @@ static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick
         ctrl->entered_via_backoff = true;
         atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
         ctrl->settling_timer = 0;
+        ctrl->spike_count = 0;
         return false;
     }
     ctrl->settling_timer++;
