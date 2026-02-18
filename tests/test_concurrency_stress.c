@@ -91,14 +91,14 @@ int main() {
         if (print_counter++ % 10 == 0) {
             aura_stats_t stats;
             aura_get_stats(engine, &stats, sizeof(stats));
-            printf("\rThroughput: %.2f M/s, P99: %.3f ms, In-flight: %d   ",
-                   stats.current_throughput_bps / 8.0 / 1000000.0, // 8 bytes per op
-                   stats.p99_latency_ms, stats.current_in_flight);
-            fflush(stdout);
+            fprintf(stderr, "\rThroughput: %.2f M/s, P99: %.3f ms, In-flight: %d   ",
+                    stats.current_throughput_bps / 8.0 / 1000000.0, // 8 bytes per op
+                    stats.p99_latency_ms, stats.current_in_flight);
+            fflush(stderr);
         }
     }
     atomic_store(&running, 0);
-    printf("\nStopping threads...\n");
+    fprintf(stderr, "\nStopping threads...\n");
 
     uint64_t total = 0;
     for (int i = 0; i < NUM_THREADS; i++) {
