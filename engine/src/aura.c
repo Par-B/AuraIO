@@ -1324,16 +1324,21 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
          * We must abort (not end) to return the request slot to the pool, since
          * no SQE was submitted and the request will never complete via CQ. */
         if (errno == ENOSYS) {
-            /* Abort first to clear req->pending and return the slot to the
-             * pool before invoking the callback.  This prevents a callback
-             * that calls aura_cancel() from seeing pending==true and
-             * submitting a cancel SQE against a request that was never
-             * submitted to the kernel. */
-            submit_abort(&ctx);
+            /* Clear req->pending so aura_cancel() won't try to cancel a
+             * request that was never submitted.  Release ring lock before
+             * invoking the callback (don't hold locks during user callbacks).
+             * Return the slot to the pool AFTER the callback to prevent
+             * use-after-free (a concurrent submission could reclaim the slot
+             * immediately after ring_put_request). */
+            atomic_store_explicit(&ctx.req->pending, false, memory_order_release);
+            ring_unlock(ctx.ring);
             resolve_file_end(&file_guard);
             if (callback) {
                 callback(ctx.req, -ENOSYS, user_data);
             }
+            ring_lock(ctx.ring);
+            ring_put_request(ctx.ring, ctx.op_idx);
+            ring_unlock(ctx.ring);
             return NULL;
         }
         submit_abort(&ctx);
@@ -1936,20 +1941,20 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
     memcpy(engine->registered_buffers, iovs, (size_t)count * sizeof(struct iovec));
     engine->registered_buffer_count = count;
 
-    /* Register with all rings - they share the registration */
+    /* Register with all rings — they share the registration.
+     * No ring_lock needed: reg_lock(write) prevents new submissions that use
+     * registered buffers, and io_uring_register_buffers is a kernel syscall
+     * that doesn't touch the SQ/CQ.  Avoiding ring_lock here prevents a
+     * lock-ordering inversion (reg_lock → ring_lock vs the submission path's
+     * ring_lock → reg_lock(read)). */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        ring_lock(ring);
 
         int ret = io_uring_register_buffers(&ring->ring, iovs, count);
         if (ret < 0) {
-            ring_unlock(ring);
             /* Unregister from already-registered rings */
             for (int j = 0; j < i; j++) {
-                ring_ctx_t *prev_ring = &engine->rings[j];
-                ring_lock(prev_ring);
-                io_uring_unregister_buffers(&prev_ring->ring);
-                ring_unlock(prev_ring);
+                io_uring_unregister_buffers(&engine->rings[j].ring);
             }
             free(engine->registered_buffers);
             engine->registered_buffers = NULL;
@@ -1958,8 +1963,6 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int c
             errno = -ret;
             return (-1);
         }
-
-        ring_unlock(ring);
     }
 
     atomic_store_explicit(&engine->buffers_registered, true, memory_order_release);
@@ -2095,20 +2098,17 @@ int aura_register_files(aura_engine_t *engine, const int *fds, int count) {
     memcpy(engine->registered_files, fds, (size_t)count * sizeof(int));
     engine->registered_file_count = count;
 
-    /* Register with all rings */
+    /* Register with all rings — no ring_lock needed (same rationale as
+     * aura_register_buffers: reg_lock(write) blocks submissions, and the
+     * kernel syscall doesn't touch SQ/CQ). */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        ring_lock(ring);
 
         int ret = io_uring_register_files(&ring->ring, fds, count);
         if (ret < 0) {
-            ring_unlock(ring);
             /* Unregister from already-registered rings */
             for (int j = 0; j < i; j++) {
-                ring_ctx_t *prev_ring = &engine->rings[j];
-                ring_lock(prev_ring);
-                io_uring_unregister_files(&prev_ring->ring);
-                ring_unlock(prev_ring);
+                io_uring_unregister_files(&engine->rings[j].ring);
             }
             free(engine->registered_files);
             engine->registered_files = NULL;
@@ -2117,8 +2117,6 @@ int aura_register_files(aura_engine_t *engine, const int *fds, int count) {
             errno = -ret;
             return (-1);
         }
-
-        ring_unlock(ring);
     }
 
     atomic_store_explicit(&engine->files_registered, true, memory_order_release);
@@ -2147,24 +2145,20 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
         return (-1);
     }
 
-    /* Update in all rings, rolling back on failure.
+    /* Update in all rings, rolling back on failure.  No ring_lock needed
+     * (same rationale as aura_register_buffers/files).
      * If rollback itself fails, the file table is inconsistent across rings
      * and further I/O submissions are unsafe — latch a fatal error. */
     int old_fd = engine->registered_files[index];
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        ring_lock(ring);
 
         int ret = io_uring_register_files_update(&ring->ring, index, &fd, 1);
         if (ret < 0) {
-            ring_unlock(ring);
             /* Roll back already-updated rings to old fd */
             bool rollback_failed = false;
             for (int j = 0; j < i; j++) {
-                ring_ctx_t *prev_ring = &engine->rings[j];
-                ring_lock(prev_ring);
-                int rb = io_uring_register_files_update(&prev_ring->ring, index, &old_fd, 1);
-                ring_unlock(prev_ring);
+                int rb = io_uring_register_files_update(&engine->rings[j].ring, index, &old_fd, 1);
                 if (rb < 0) {
                     rollback_failed = true;
                 }
@@ -2178,8 +2172,6 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
             errno = -ret;
             return (-1);
         }
-
-        ring_unlock(ring);
     }
 
     /* Update our copy */

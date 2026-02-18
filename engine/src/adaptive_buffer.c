@@ -1054,9 +1054,12 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                 size_t next = (hole + 1) & mask;
                 if (map->entries[next].key == 0) break;
                 size_t natural = buf_map_hash(map->entries[next].key, mask);
-                /* Check if 'next' is displaced past 'hole' */
-                bool displaced = (hole < next) ? (natural <= hole || natural > next)
-                                               : (natural <= hole && natural > next);
+                /* Backward-shift: move entry at 'next' to 'hole' if 'hole'
+                 * lies on the probe path from 'natural' to 'next'.  Use
+                 * circular distance to handle wrap-around correctly. */
+                size_t dist_natural_to_next = (next - natural) & mask;
+                size_t dist_natural_to_hole = (hole - natural) & mask;
+                bool displaced = dist_natural_to_hole < dist_natural_to_next;
                 if (displaced) {
                     map->entries[hole] = map->entries[next];
                     hole = next;

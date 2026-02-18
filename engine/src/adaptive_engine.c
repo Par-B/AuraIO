@@ -140,7 +140,7 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
      */
     stats.have_valid_p99 =
         (stats.sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES && stats.p99_ms >= 0);
-    stats.latency_rising = stats.have_valid_p99 && stats.p99_ms > stats.latency_guard_ms;
+    stats.latency_rising = stats.have_valid_p99 && stats.p99_ms >= stats.latency_guard_ms;
 
     /* Calculate efficiency ratio: change in throughput per change in in-flight */
     int in_flight_limit =
