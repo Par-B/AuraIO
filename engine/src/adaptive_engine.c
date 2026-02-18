@@ -423,7 +423,7 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
                                   ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO /
                                         fabs((double)stats->delta_inflight)
                                   : 0.0;
-        if (stats->efficiency_ratio > er_threshold) {
+        if (isnan(stats->efficiency_ratio) || stats->efficiency_ratio > er_threshold) {
             /* Still improving - increase (clamped to max) */
             if (in_flight_limit < ctrl->max_queue_depth) {
                 in_flight_limit += ADAPTIVE_AIMD_INCREASE;
