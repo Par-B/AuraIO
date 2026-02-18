@@ -491,6 +491,14 @@ static uint32_t fixed_buf_inflight_total(const aura_engine_t *engine) {
     return total;
 }
 
+static uint32_t fixed_file_inflight_total(const aura_engine_t *engine) {
+    uint32_t total = 0;
+    for (int i = 0; i < engine->ring_count; i++) {
+        total += atomic_load_explicit(&engine->rings[i].fixed_file_inflight, memory_order_acquire);
+    }
+    return total;
+}
+
 static int finalize_deferred_unregistration(aura_engine_t *engine) {
     if (!engine) {
         errno = EINVAL;
@@ -501,11 +509,13 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
 
     if (engine->buffers_registered && engine->buffers_unreg_pending &&
         fixed_buf_inflight_total(engine) == 0) {
+        /* No ring_lock needed: reg_lock(write) prevents new registered-buffer
+         * submissions, and inflight count is zero so no completions will touch
+         * the registered buffer table.  Avoiding ring_lock here prevents a
+         * lock-ordering inversion (reg_lock → ring_lock vs the submission
+         * path's ring_lock → reg_lock). */
         for (int i = 0; i < engine->ring_count; i++) {
-            ring_ctx_t *ring = &engine->rings[i];
-            ring_lock(ring);
-            io_uring_unregister_buffers(&ring->ring);
-            ring_unlock(ring);
+            io_uring_unregister_buffers(&engine->rings[i].ring);
         }
 
         free(engine->registered_buffers);
@@ -515,12 +525,11 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         engine->buffers_unreg_pending = false;
     }
 
-    if (engine->files_registered && engine->files_unreg_pending) {
+    if (engine->files_registered && engine->files_unreg_pending &&
+        fixed_file_inflight_total(engine) == 0) {
+        /* Same rationale as above — no ring_lock needed. */
         for (int i = 0; i < engine->ring_count; i++) {
-            ring_ctx_t *ring = &engine->rings[i];
-            ring_lock(ring);
-            io_uring_unregister_files(&ring->ring);
-            ring_unlock(ring);
+            io_uring_unregister_files(&engine->rings[i].ring);
         }
 
         free(engine->registered_files);
@@ -624,6 +633,9 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
  * Flushes if batch threshold reached and releases ring lock.
  */
 static void submit_end(submit_ctx_t *ctx) {
+    if (ctx->req->uses_registered_file) {
+        atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
+    }
     if (ring_should_flush(ctx->ring)) {
         if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
             latch_fatal_submit_errno(ctx->engine, errno);
@@ -1309,11 +1321,14 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
          * We must abort (not end) to return the request slot to the pool, since
          * no SQE was submitted and the request will never complete via CQ. */
         if (errno == ENOSYS) {
+            /* Invoke callback with the allocated request so it has a
+             * valid req pointer (matching the API contract), then abort
+             * to return the slot to the pool. */
+            if (callback) {
+                callback(ctx.req, -ENOSYS, user_data);
+            }
             submit_abort(&ctx);
             resolve_file_end(&file_guard);
-            if (callback) {
-                callback(NULL, -ENOSYS, user_data);
-            }
             return NULL;
         }
         submit_abort(&ctx);

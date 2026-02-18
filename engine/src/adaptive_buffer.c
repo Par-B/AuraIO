@@ -43,7 +43,8 @@ static _Thread_local thread_cache_t *tls_cache = NULL;
 /* pthread key for TLS destructor (fires on thread exit to clean up cache) */
 static pthread_key_t tls_key;
 static pthread_once_t tls_key_once = PTHREAD_ONCE_INIT;
-static bool tls_key_valid = false; /* Set once by pthread_once; only read after */
+static _Atomic bool tls_key_valid =
+    false; /* Set once by pthread_once; read from multiple threads */
 
 /* Forward declarations for TLS destructor (defined after cache_flush) */
 static void tls_destructor(void *arg);
@@ -261,8 +262,12 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
              * so we can't free the struct (pool destroy will do that).
              * Mark cleaned_up so pool destroy skips the redundant flush.
              * If old pool is being destroyed concurrently, fall through to
-             * FREE mode (direct free) to avoid dereferencing freed shards. */
+             * FREE mode (direct free) to avoid dereferencing freed shards.
+             *
+             * We must hold active_users while accessing shards to prevent
+             * a concurrent pool_destroy from freeing them under us. */
             buffer_pool_t *old_pool = cache->pool;
+            atomic_fetch_add_explicit(&old_pool->active_users, 1, memory_order_acq_rel);
             pthread_mutex_lock(&cache->cleanup_mutex);
             if (atomic_load_explicit(&old_pool->destroyed, memory_order_acquire)) {
                 cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FREE);
@@ -270,6 +275,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
                 cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FLUSH);
             }
             pthread_mutex_unlock(&cache->cleanup_mutex);
+            atomic_fetch_sub_explicit(&old_pool->active_users, 1, memory_order_acq_rel);
         }
         tls_cache = NULL;
         if (tls_key_valid) {
@@ -296,6 +302,7 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
 
     cache->pool = pool;
     cache->pool_id = pool->pool_id;
+    cache->owner_thread = pthread_self();
     if (pthread_mutex_init(&cache->cleanup_mutex, NULL) != 0) {
         free(cache);
         atomic_fetch_sub_explicit(&pool->registrations_inflight, 1, memory_order_acq_rel);
@@ -671,11 +678,15 @@ static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
 
             pthread_mutex_unlock(&cache->cleanup_mutex);
 
-            if (tls_cache == cache) {
-                /* This is the calling thread's own cache */
-                tls_cache = NULL;
-                if (tls_key_valid) {
-                    pthread_setspecific(tls_key, NULL);
+            if (tls_cache == cache || pthread_equal(cache->owner_thread, pthread_self())) {
+                /* This is the calling thread's own cache.  tls_cache may
+                 * already be NULL if the thread switched pools, so also
+                 * check owner_thread to avoid leaking the struct. */
+                if (tls_cache == cache) {
+                    tls_cache = NULL;
+                    if (tls_key_valid) {
+                        pthread_setspecific(tls_key, NULL);
+                    }
                 }
                 pthread_mutex_destroy(&cache->cleanup_mutex);
                 free(cache);
@@ -931,7 +942,11 @@ int buf_size_map_init(buf_size_map_t *map) {
     atomic_init(&map->count, 0);
     map->entries = calloc(map->capacity, sizeof(buf_map_entry_t));
     if (!map->entries) return -1;
-    pthread_mutex_init(&map->lock, NULL);
+    if (pthread_mutex_init(&map->lock, NULL) != 0) {
+        free(map->entries);
+        map->entries = NULL;
+        return -1;
+    }
     return 0;
 }
 

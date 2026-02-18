@@ -72,6 +72,7 @@ typedef struct thread_cache {
     struct buffer_pool *pool;        /**< Parent pool (for slow path) */
     uint64_t pool_id;                /**< Pool generation ID (detect stale cache) */
     struct thread_cache *next;       /**< Next in pool's cache list (for cleanup) */
+    pthread_t owner_thread;          /**< Thread that created this cache */
     int shard_id;                    /**< Assigned shard for slow-path operations */
     int counts[BUFFER_SIZE_CLASSES]; /**< Buffer count per size class */
 

@@ -106,8 +106,14 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
     if (stats.p99_ms >= 0) {
         window_add(ctrl->p99_window, &ctrl->p99_head, &ctrl->p99_count, ADAPTIVE_P99_WINDOW,
                    stats.p99_ms);
-        window_add(ctrl->baseline_window, &ctrl->baseline_head, &ctrl->baseline_count,
-                   ADAPTIVE_BASELINE_WINDOW, stats.p99_ms);
+        /* Only add to baseline window during stable phases to prevent
+         * congestion-inflated latency from raising the guard threshold. */
+        adaptive_phase_t phase = atomic_load_explicit(&ctrl->phase, memory_order_relaxed);
+        if (phase != ADAPTIVE_PHASE_BACKOFF &&
+            !(phase == ADAPTIVE_PHASE_SETTLING && ctrl->entered_via_backoff)) {
+            window_add(ctrl->baseline_window, &ctrl->baseline_head, &ctrl->baseline_count,
+                       ADAPTIVE_BASELINE_WINDOW, stats.p99_ms);
+        }
     }
     window_add(ctrl->throughput_window, &ctrl->throughput_head, &ctrl->throughput_count,
                ADAPTIVE_THROUGHPUT_WINDOW, stats.throughput_bps);
@@ -222,8 +228,11 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
         }
     }
 
-    /* Should not reach here, but return lowest bucket */
-    return (double)LATENCY_BUCKET_WIDTH_US / 2000.0;
+    /* Bucket sum didn't reach target — likely a race between hist_reset and
+     * a stale hist_record that incremented total_count after buckets were
+     * zeroed.  Treat as no data rather than returning a spurious near-zero
+     * value that could corrupt the baseline. */
+    return -1.0;
 }
 
 /* ============================================================================
@@ -411,7 +420,7 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
                 if (in_flight_limit > ctrl->max_queue_depth)
                     in_flight_limit = ctrl->max_queue_depth;
                 atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                      memory_order_relaxed);
+                                      memory_order_release);
                 params_changed = true;
             }
             ctrl->plateau_count = 0;
@@ -425,7 +434,7 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
                 if (in_flight_limit > ctrl->max_queue_depth)
                     in_flight_limit = ctrl->max_queue_depth;
                 atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit,
-                                      memory_order_relaxed);
+                                      memory_order_release);
                 params_changed = true;
             }
             ctrl->plateau_count = 0;
@@ -505,7 +514,7 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
     int reduced = (int)ceil((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
     in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
-    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_relaxed);
+    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_release);
 
     ctrl->plateau_count = 0;
     ctrl->entered_via_backoff = true;
@@ -613,7 +622,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
 
     /* =========== OUTER LOOP: AIMD State Machine =========== */
     bool state_changed_params = false;
-    switch (ctrl->phase) {
+    switch (atomic_load_explicit(&ctrl->phase, memory_order_relaxed)) {
     case ADAPTIVE_PHASE_BASELINE:
         state_changed_params = handle_baseline_phase(ctrl, &stats);
         break;

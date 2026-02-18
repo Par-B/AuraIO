@@ -141,6 +141,7 @@ typedef struct {
         bytes_completed;                 /**< Total bytes actually transferred (from CQE results) */
     int64_t ops_completed;               /**< Total ops completed */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
+    _Atomic uint32_t fixed_file_inflight; /**< Registered-file ops currently in-flight */
 
     /* CQE drain batch size, derived from queue depth at init time.
      * Keeps lock hold time bounded while amortizing lock overhead. */
@@ -214,6 +215,10 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx);
  * Submit a read operation
  *
  * Queues the operation in the submission ring.
+ *
+ * @note On failure, the caller MUST return the request slot via
+ *       ring_put_request(). The submit functions do not free the slot
+ *       on error — ownership remains with the caller.
  *
  * @param ctx Ring context
  * @param req Request to submit
