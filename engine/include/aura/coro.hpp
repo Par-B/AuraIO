@@ -329,6 +329,10 @@ template <> class Task<void> {
  * is undefined behavior. The bare Engine& reference is safe only because
  * awaitables are transient co_await-only objects created and consumed within
  * a single co_await expression.
+ *
+ * @warning Do NOT call Engine::wait(), poll(), or run() from within a
+ * coroutine resumed by a completion callback. The callback holds the
+ * event_loop_mutex_, so re-entering the event loop will deadlock.
  */
 class IoAwaitable {
     friend class Engine;
@@ -442,8 +446,7 @@ class MetadataAwaitable {
     enum class Op { Close, Fallocate, Ftruncate, SyncFileRange };
 
     // Close
-    MetadataAwaitable(Engine &engine, int fd, Op op)
-        : engine_(engine), fd_(fd), op_(op) {}
+    MetadataAwaitable(Engine &engine, int fd, Op op) : engine_(engine), fd_(fd), op_(op) {}
 
     // Fallocate / Ftruncate / SyncFileRange
     MetadataAwaitable(Engine &engine, int fd, Op op, int mode, off_t offset, off_t len,
@@ -462,10 +465,18 @@ class MetadataAwaitable {
             int err = (pos >= 1 && pos <= 4095) ? static_cast<int>(pos) : EIO;
             const char *name = "async_metadata";
             switch (op_) {
-            case Op::Close: name = "async_close"; break;
-            case Op::Fallocate: name = "async_fallocate"; break;
-            case Op::Ftruncate: name = "async_ftruncate"; break;
-            case Op::SyncFileRange: name = "async_sync_file_range"; break;
+            case Op::Close:
+                name = "async_close";
+                break;
+            case Op::Fallocate:
+                name = "async_fallocate";
+                break;
+            case Op::Ftruncate:
+                name = "async_ftruncate";
+                break;
+            case Op::SyncFileRange:
+                name = "async_sync_file_range";
+                break;
             }
             throw Error(err, name);
         }

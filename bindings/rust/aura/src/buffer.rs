@@ -147,10 +147,8 @@ fn make_buf(ptr: *mut std::ffi::c_void) -> aura_sys::aura_buf_t {
 /// Helper function to create a registered buffer descriptor
 /// (equivalent to the C inline function aura_buf_fixed)
 fn make_buf_fixed(index: i32, offset: usize) -> aura_sys::aura_buf_t {
+    assert!(index >= 0, "BufferRef::fixed: index must be non-negative, got {}", index);
     let mut buf: aura_sys::aura_buf_t = unsafe { std::mem::zeroed() };
-    if index < 0 {
-        return buf; // Returns UNREGISTERED with ptr=NULL, matching C aura_buf_fixed()
-    }
     buf.type_ = aura_sys::aura_buf_type_t_AURA_BUF_REGISTERED;
     buf.u.fixed.index = index;
     buf.u.fixed.offset = offset;

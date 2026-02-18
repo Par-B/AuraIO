@@ -45,10 +45,11 @@ impl CallbackContext {
 /// `ptr` must be a valid pointer previously obtained from
 /// `Box::into_raw(CallbackContext::new(...))`.
 pub(crate) unsafe fn drop_context(ptr: *mut std::ffi::c_void) {
-    if !ptr.is_null() {
-        // Clear magic before dropping to prevent confusion in future checks
-        (*(ptr as *mut CallbackContext)).magic = 0;
+    if ptr.is_null() {
+        return;
     }
+    // Clear magic before dropping to prevent confusion in future checks
+    (*(ptr as *mut CallbackContext)).magic = 0;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         drop(Box::from_raw(ptr as *mut CallbackContext));
     }));

@@ -120,18 +120,19 @@ impl Drop for IoFuture {
         // Lock is dropped before FFI call to avoid holding the Mutex
         // while calling into the C library (which acquires its own locks).
         if needs_cancel {
-            // Re-check request_consumed to narrow the TOCTOU window: the
-            // callback may have fired between our lock release and here,
-            // invalidating the request pointer per the C API contract.
+            // Re-check request_consumed to narrow the TOCTOU window.
             //
-            // A residual TOCTOU race exists: the callback could set
-            // request_consumed between this load and the aura_cancel()
-            // call below, making the request pointer invalid. In practice
-            // aura_cancel() checks req->pending (atomic) and returns
-            // EALREADY if the op already completed, so the worst case is
-            // a harmless failed cancel attempt. Fully closing this race
-            // would require the C API to provide a combined
-            // "cancel-if-still-pending" primitive.
+            // A residual TOCTOU race exists: the callback could fire
+            // between this load and the aura_cancel() call. This is safe
+            // because:
+            // 1. Request slots are pool-allocated in a fixed array and
+            //    never freed until ring destruction, so self.request
+            //    always points to valid memory while the engine is alive.
+            // 2. aura_cancel() acquires the ring lock and checks
+            //    req->pending atomically — if the slot was recycled, it
+            //    returns EALREADY without side effects.
+            // 3. We hold an Arc<InnerEngine>, so the engine (and its
+            //    request pool) cannot be destroyed during this call.
             if !self.request_consumed.load(Ordering::Acquire) {
                 unsafe {
                     aura_sys::aura_cancel(self.engine.raw(), self.request);

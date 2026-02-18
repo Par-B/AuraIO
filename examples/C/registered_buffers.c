@@ -14,6 +14,7 @@
 
 #define _POSIX_C_SOURCE 199309L
 #include <aura.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@
 #define NUM_BUFFERS 4
 #define NUM_OPS 50
 
-static int completed = 0;
+static _Atomic int completed = 0;
 
 void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -35,7 +36,7 @@ void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     if (result < 0) {
         fprintf(stderr, "I/O error: %zd\n", result);
     }
-    __sync_add_and_fetch(&completed, 1);
+    atomic_fetch_add_explicit(&completed, 1, memory_order_relaxed);
 }
 
 double run_benchmark(aura_engine_t *engine, int fd, int use_registered, void *unreg_bufs[]) {

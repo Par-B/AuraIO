@@ -13,6 +13,7 @@
 
 #define _POSIX_C_SOURCE 199309L
 #include <aura.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@
 #define BUF_SIZE 4096
 #define NUM_OPS 20
 
-static int completed = 0;
+static _Atomic int completed = 0;
 
 void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -33,7 +34,7 @@ void completion_callback(aura_request_t *req, ssize_t result, void *user_data) {
     if (result < 0) {
         fprintf(stderr, "I/O error: %zd\n", result);
     }
-    __sync_add_and_fetch(&completed, 1);
+    atomic_fetch_add_explicit(&completed, 1, memory_order_relaxed);
 }
 
 void print_stats(const char *config_name, aura_engine_t *engine, double elapsed_ms) {

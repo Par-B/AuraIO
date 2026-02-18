@@ -847,10 +847,15 @@ class Engine {
     template <Callback F, typename CApiCall>
     [[nodiscard]] Request submit_io(F &&callback, const char *op_name, CApiCall &&c_api_call) {
         auto *ctx = pool_->allocate();
-        ctx->callback = std::forward<F>(callback);
+        try {
+            ctx->callback = std::forward<F>(callback);
 
-        auto *pool_ptr = pool_.get();
-        ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+            auto *pool_ptr = pool_.get();
+            ctx->on_complete = [pool_ptr, ctx]() { pool_ptr->release(ctx); };
+        } catch (...) {
+            pool_->release(ctx);
+            throw;
+        }
 
         aura_request_t *req = std::forward<CApiCall>(c_api_call)(ctx);
 
