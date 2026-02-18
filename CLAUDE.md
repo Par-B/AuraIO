@@ -38,7 +38,6 @@ cd tests && make test_ring && ./test_ring
 - `examples/` - C, C++, and Rust examples
 - `tests/` - Unit tests, stress tests, benchmarks, and analysis scripts
 
-For detailed architecture, see [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md).
 
 ## Code Style
 
