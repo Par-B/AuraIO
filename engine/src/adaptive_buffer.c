@@ -955,10 +955,18 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     if (cache && cache->counts[class_idx] >= THREAD_CACHE_SIZE) {
         cache_flush(pool, cache, class_idx, bucket_size);
 
-        /* Now there should be room in the cache */
+        /* Now there should be room in the cache.  Must hold cleanup_mutex
+         * to prevent a race with buffer_pool_destroy's cleanup phase. */
         if (cache->counts[class_idx] < THREAD_CACHE_SIZE) {
             pool_leave(pool);
+            pthread_mutex_lock(&cache->cleanup_mutex);
+            if (cache->cleaned_up || atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+                pthread_mutex_unlock(&cache->cleanup_mutex);
+                free(buf);
+                return;
+            }
             cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
+            pthread_mutex_unlock(&cache->cleanup_mutex);
             return;
         }
     }

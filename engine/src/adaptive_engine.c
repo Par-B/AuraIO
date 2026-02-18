@@ -213,7 +213,8 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
      * is far noisier and causes spurious backoff decisions. */
     uint32_t target;
     if (total >= 100) {
-        target = (total + 99) / 100;
+        target = total / 100;
+        if (target == 0) target = 1;
     } else {
         target = (total + 19) / 20; /* P95 for small sample sets */
         if (target == 0) target = 1;
@@ -539,15 +540,16 @@ static inline bool handle_backoff_phase(adaptive_controller_t *ctrl, const tick_
     int in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
     int reduced = (int)floor((double)in_flight_limit * ADAPTIVE_AIMD_DECREASE);
-    in_flight_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
-    atomic_store_explicit(&ctrl->current_in_flight_limit, in_flight_limit, memory_order_release);
+    int new_limit = reduced > ctrl->min_in_flight ? reduced : ctrl->min_in_flight;
+    bool changed = (new_limit != in_flight_limit);
+    atomic_store_explicit(&ctrl->current_in_flight_limit, new_limit, memory_order_release);
 
     ctrl->plateau_count = 0;
     ctrl->entered_via_backoff = true;
     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
     ctrl->settling_timer = 0;
 
-    return true; /* Params changed */
+    return changed;
 }
 
 /**
@@ -581,7 +583,12 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     int64_t now_ns = get_time_ns();
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
     int64_t elapsed_ns = now_ns - start_ns;
-    if (elapsed_ns < 0) elapsed_ns = 0; /* clock step-back: treat as no time elapsed */
+    if (elapsed_ns < 0) {
+        /* Clock step-back: reset sample_start_ns to avoid stalling the
+         * controller until the max sample window expires. */
+        atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
+        elapsed_ns = 0;
+    }
     int64_t elapsed_ms = elapsed_ns / 1000000LL;
     bool params_changed = false;
 

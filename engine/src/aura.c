@@ -307,7 +307,7 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
  * Skip in single_thread mode: direct poll callers don't use epoll.
  */
 static inline void drain_eventfd(aura_engine_t *engine) {
-    if (!engine->rings[0].single_thread) {
+    if (!engine->rings[0].single_thread && engine->event_fd >= 0) {
         uint64_t eventfd_val;
         if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
             /* Intentionally ignored — EAGAIN expected if no data */
@@ -1667,7 +1667,11 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             drain_eventfd(engine);
             int completed = 0;
             for (int j = 0; j < engine->ring_count; j++) {
-                int n = ring_poll(&engine->rings[j]);
+                ring_ctx_t *r = &engine->rings[j];
+                ring_lock(r);
+                (void)flush_ring_checked(engine, r);
+                ring_unlock(r);
+                int n = ring_poll(r);
                 if (n > 0) completed += n;
             }
             if (maybe_finalize_deferred_unregistration(engine) != 0) {

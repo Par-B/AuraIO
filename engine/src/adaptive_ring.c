@@ -634,6 +634,14 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         return retire;
     }
 
+    /* Guard against double-completion: if pending is already false, this CQE
+     * is a duplicate (e.g., io_uring can deliver both a cancel CQE and the
+     * original op's CQE).  Skip processing to avoid double-decrementing
+     * inflight counters and double-freeing the request slot. */
+    if (!atomic_load_explicit(&req->pending, memory_order_acquire)) {
+        return retire;
+    }
+
     /* Save callback info and retirement data BEFORE any state changes.
      * The callback may submit new operations that reuse this request slot,
      * so we must capture everything we need before potential reuse. */
