@@ -171,7 +171,7 @@ Before `1.0`, the exporter schema is explicitly versioned and marked experimenta
 
 **Data consistency:** Observability reads are intentionally lock-free best-effort snapshots. Values may be updated while being read, and minor cross-field skew is expected. Metrics are intended for trends and alerting, not strict accounting.
 
-**Change process:** Any change to exporter metric names or labels requires an updated metric snapshot (`api/snapshots/prometheus_metrics.txt`), an RFC under `docs/rfcs/`, and a documentation update.
+**Change process:** Any change to exporter metric names or labels requires a `CHANGELOG.md` entry and a documentation update.
 
 ### Building
 

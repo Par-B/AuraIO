@@ -34,12 +34,12 @@
 // Constants
 // ============================================================================
 
-#define DEFAULT_CHUNK_SIZE  (256 * 1024)   /* 256 KiB */
-#define DEFAULT_PIPELINE    8
-#define MAX_PIPELINE        64
+#define DEFAULT_CHUNK_SIZE (256 * 1024) /* 256 KiB */
+#define DEFAULT_PIPELINE 8
+#define MAX_PIPELINE 64
 #define PROGRESS_INTERVAL_MS 200
-#define SECTOR_SIZE         512
-#define NFTW_MAX_FDS        64
+#define SECTOR_SIZE 512
+#define NFTW_MAX_FDS 64
 
 // ============================================================================
 // Configuration
@@ -83,7 +83,7 @@ typedef struct file_task {
 typedef struct {
     file_task_t *head;
     file_task_t *tail;
-    file_task_t *current;   /* next task needing reads */
+    file_task_t *current; /* next task needing reads */
     int total_files;
     int completed_files;
     off_t total_bytes;
@@ -94,11 +94,7 @@ typedef struct {
 // Pipeline buffer slots
 // ============================================================================
 
-typedef enum {
-    BUF_FREE = 0,
-    BUF_READING,
-    BUF_WRITING
-} buf_state_t;
+typedef enum { BUF_FREE = 0, BUF_READING, BUF_WRITING } buf_state_t;
 
 struct copy_ctx;
 
@@ -143,11 +139,22 @@ static ssize_t parse_size(const char *str) {
     if (endp == str || val < 0) return -1;
 
     switch (*endp) {
-    case 'G': case 'g': val *= 1024.0 * 1024.0 * 1024.0; break;
-    case 'M': case 'm': val *= 1024.0 * 1024.0; break;
-    case 'K': case 'k': val *= 1024.0; break;
-    case '\0': break;
-    default: return -1;
+    case 'G':
+    case 'g':
+        val *= 1024.0 * 1024.0 * 1024.0;
+        break;
+    case 'M':
+    case 'm':
+        val *= 1024.0 * 1024.0;
+        break;
+    case 'K':
+    case 'k':
+        val *= 1024.0;
+        break;
+    case '\0':
+        break;
+    default:
+        return -1;
     }
 
     if (val > (double)SSIZE_MAX) return -1;
@@ -161,23 +168,17 @@ static ssize_t parse_size(const char *str) {
 static void format_bytes(char *buf, size_t bufsz, double bytes) {
     if (bytes >= 1024.0 * 1024.0 * 1024.0)
         snprintf(buf, bufsz, "%.1f GiB", bytes / (1024.0 * 1024.0 * 1024.0));
-    else if (bytes >= 1024.0 * 1024.0)
-        snprintf(buf, bufsz, "%.1f MiB", bytes / (1024.0 * 1024.0));
-    else if (bytes >= 1024.0)
-        snprintf(buf, bufsz, "%.1f KiB", bytes / 1024.0);
-    else
-        snprintf(buf, bufsz, "%.0f B", bytes);
+    else if (bytes >= 1024.0 * 1024.0) snprintf(buf, bufsz, "%.1f MiB", bytes / (1024.0 * 1024.0));
+    else if (bytes >= 1024.0) snprintf(buf, bufsz, "%.1f KiB", bytes / 1024.0);
+    else snprintf(buf, bufsz, "%.0f B", bytes);
 }
 
 static void format_rate(char *buf, size_t bufsz, double bps) {
     if (bps >= 1024.0 * 1024.0 * 1024.0)
         snprintf(buf, bufsz, "%.1f GiB/s", bps / (1024.0 * 1024.0 * 1024.0));
-    else if (bps >= 1024.0 * 1024.0)
-        snprintf(buf, bufsz, "%.1f MiB/s", bps / (1024.0 * 1024.0));
-    else if (bps >= 1024.0)
-        snprintf(buf, bufsz, "%.1f KiB/s", bps / 1024.0);
-    else
-        snprintf(buf, bufsz, "%.0f B/s", bps);
+    else if (bps >= 1024.0 * 1024.0) snprintf(buf, bufsz, "%.1f MiB/s", bps / (1024.0 * 1024.0));
+    else if (bps >= 1024.0) snprintf(buf, bufsz, "%.1f KiB/s", bps / 1024.0);
+    else snprintf(buf, bufsz, "%.0f B/s", bps);
 }
 
 // ============================================================================
@@ -192,12 +193,11 @@ static void progress_update(const copy_ctx_t *ctx, bool final) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
 
-    if (!final && (now_ns - g_last_progress_ns) < PROGRESS_INTERVAL_MS * 1000000ULL)
-        return;
+    if (!final && (now_ns - g_last_progress_ns) < PROGRESS_INTERVAL_MS * 1000000ULL) return;
     g_last_progress_ns = now_ns;
 
-    double elapsed = (double)(now.tv_sec - g_start_time.tv_sec)
-                   + (double)(now.tv_nsec - g_start_time.tv_nsec) / 1e9;
+    double elapsed = (double)(now.tv_sec - g_start_time.tv_sec) +
+                     (double)(now.tv_nsec - g_start_time.tv_nsec) / 1e9;
     double done = (double)ctx->queue->total_written;
     double total = (double)ctx->queue->total_bytes;
     double pct = (total > 0) ? done / total * 100.0 : 100.0;
@@ -231,8 +231,8 @@ static void progress_update(const copy_ctx_t *ctx, bool final) {
         snprintf(eta, sizeof(eta), "ETA %d:%02d", mins, secs);
     }
 
-    fprintf(stderr, "\r  %s / %s  [%s]  %3.0f%%  %s  %s   ",
-            done_str, total_str, bar, pct, rate_str, eta);
+    fprintf(stderr, "\r  %s / %s  [%s]  %3.0f%%  %s  %s   ", done_str, total_str, bar, pct,
+            rate_str, eta);
 
     if (final) fprintf(stderr, "\n");
 }
@@ -247,10 +247,8 @@ static void queue_init(task_queue_t *q) {
 
 static void queue_push(task_queue_t *q, file_task_t *task) {
     task->next = NULL;
-    if (q->tail)
-        q->tail->next = task;
-    else
-        q->head = task;
+    if (q->tail) q->tail->next = task;
+    else q->head = task;
     q->tail = task;
     if (!q->current) q->current = task;
     q->total_files++;
@@ -291,8 +289,7 @@ static char *path_join(const char *dir, const char *name) {
 /* Given src root, dst root, and a full src path, compute dst path.
  * E.g., src_root="/tmp/src", dst_root="/tmp/dst", fpath="/tmp/src/a/b.txt"
  * → "/tmp/dst/a/b.txt" */
-static char *remap_path(const char *src_root, const char *dst_root,
-                        const char *fpath) {
+static char *remap_path(const char *src_root, const char *dst_root, const char *fpath) {
     size_t rootlen = strlen(src_root);
     /* Skip trailing slashes on src_root */
     while (rootlen > 1 && src_root[rootlen - 1] == '/') rootlen--;
@@ -326,30 +323,32 @@ typedef struct {
 
 static walk_ctx_t *g_walk_ctx; /* nftw doesn't support user_data */
 
-static int nftw_callback(const char *fpath, const struct stat *sb,
-                         int typeflag, struct FTW *ftwbuf) {
+static int nftw_callback(const char *fpath, const struct stat *sb, int typeflag,
+                         struct FTW *ftwbuf) {
     (void)ftwbuf;
     walk_ctx_t *wc = g_walk_ctx;
 
     if (typeflag == FTW_D) {
         /* Create corresponding directory in destination */
         char *dst = remap_path(wc->src_root, wc->dst_root, fpath);
-        if (!dst) { wc->errors++; return 0; }
+        if (!dst) {
+            wc->errors++;
+            return 0;
+        }
 
         /* Skip the root destination dir itself (created by caller or existing) */
         if (strcmp(fpath, wc->src_root) == 0) {
             struct stat dst_st;
             if (stat(dst, &dst_st) != 0) {
                 if (mkdir(dst, sb->st_mode & 07777) != 0 && errno != EEXIST) {
-                    fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                            dst, strerror(errno));
+                    fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst,
+                            strerror(errno));
                     wc->errors++;
                 }
             }
         } else {
             if (mkdir(dst, sb->st_mode & 07777) != 0 && errno != EEXIST) {
-                fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                        dst, strerror(errno));
+                fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst, strerror(errno));
                 wc->errors++;
             }
         }
@@ -359,10 +358,17 @@ static int nftw_callback(const char *fpath, const struct stat *sb,
 
     if (typeflag == FTW_F) {
         char *dst = remap_path(wc->src_root, wc->dst_root, fpath);
-        if (!dst) { wc->errors++; return 0; }
+        if (!dst) {
+            wc->errors++;
+            return 0;
+        }
 
         file_task_t *task = calloc(1, sizeof(*task));
-        if (!task) { free(dst); wc->errors++; return 0; }
+        if (!task) {
+            free(dst);
+            wc->errors++;
+            return 0;
+        }
         task->src_path = strdup(fpath);
         task->dst_path = dst;
         task->file_size = sb->st_size;
@@ -375,14 +381,13 @@ static int nftw_callback(const char *fpath, const struct stat *sb,
 
     /* Skip special files (symlinks to non-regular, devices, etc.) */
     if (typeflag != FTW_SL) {
-        if (!wc->config->quiet)
-            fprintf(stderr, "auracp: skipping special file: %s\n", fpath);
+        if (!wc->config->quiet) fprintf(stderr, "auracp: skipping special file: %s\n", fpath);
     }
     return 0;
 }
 
-static int build_recursive(const char *src, const char *dst,
-                           task_queue_t *queue, const config_t *config) {
+static int build_recursive(const char *src, const char *dst, task_queue_t *queue,
+                           const config_t *config) {
     walk_ctx_t wc = {
         .src_root = src,
         .dst_root = dst,
@@ -440,8 +445,8 @@ static int build_task_list(const config_t *config, task_queue_t *queue) {
 
             /* Create top-level destination directory */
             if (mkdir(dst_dir, src_st.st_mode & 07777) != 0 && errno != EEXIST) {
-                fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                        dst_dir, strerror(errno));
+                fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst_dir,
+                        strerror(errno));
                 free(dst_dir);
                 return -1;
             }
@@ -464,18 +469,19 @@ static int build_task_list(const config_t *config, task_queue_t *queue) {
             /* Check same file */
             if (dst_is_dir) {
                 struct stat check_st;
-                if (stat(dst_path, &check_st) == 0 &&
-                    src_st.st_dev == check_st.st_dev &&
+                if (stat(dst_path, &check_st) == 0 && src_st.st_dev == check_st.st_dev &&
                     src_st.st_ino == check_st.st_ino) {
-                    fprintf(stderr, "auracp: '%s' and '%s' are the same file\n",
-                            src, dst_path);
+                    fprintf(stderr, "auracp: '%s' and '%s' are the same file\n", src, dst_path);
                     free(dst_path);
                     return -1;
                 }
             }
 
             file_task_t *task = calloc(1, sizeof(*task));
-            if (!task) { free(dst_path); return -1; }
+            if (!task) {
+                free(dst_path);
+                return -1;
+            }
             task->src_path = strdup(src);
             task->dst_path = dst_path;
             task->file_size = src_st.st_size;
@@ -500,7 +506,7 @@ static int build_task_list(const config_t *config, task_queue_t *queue) {
 // ============================================================================
 
 static void on_write_complete(aura_request_t *req, ssize_t result, void *user_data);
-static void finish_task(copy_ctx_t *ctx, file_task_t *task);
+static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot);
 
 static void on_read_complete(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -510,8 +516,8 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
 
     if (result <= 0) {
         if (result < 0 && ctx->error == 0) {
-            fprintf(stderr, "auracp: read error on '%s': %s\n",
-                    task->src_path, strerror(-(int)result));
+            fprintf(stderr, "auracp: read error on '%s': %s\n", task->src_path,
+                    strerror(-(int)result));
             ctx->error = (int)result;
         }
         slot->state = BUF_FREE;
@@ -525,13 +531,12 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
     slot->bytes = (size_t)result;
     slot->state = BUF_WRITING;
 
-    aura_request_t *wreq = aura_write(ctx->engine, task->dst_fd,
-                                       aura_buf(slot->buf), slot->bytes,
-                                       slot->offset, on_write_complete, slot);
+    aura_request_t *wreq = aura_write(ctx->engine, task->dst_fd, aura_buf(slot->buf), slot->bytes,
+                                      slot->offset, on_write_complete, slot);
     if (!wreq) {
         if (ctx->error == 0) {
-            fprintf(stderr, "auracp: write submit failed on '%s': %s\n",
-                    task->dst_path, strerror(errno));
+            fprintf(stderr, "auracp: write submit failed on '%s': %s\n", task->dst_path,
+                    strerror(errno));
             ctx->error = -errno;
         }
         slot->state = BUF_FREE;
@@ -543,8 +548,15 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
 
 static void on_fsync_complete(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
-    file_task_t *task = (file_task_t *)user_data;
-    (void)result; /* fsync failure is non-fatal for pipeline flow */
+    buf_slot_t *slot = (buf_slot_t *)user_data;
+    copy_ctx_t *ctx = slot->ctx;
+    file_task_t *task = slot->task;
+
+    if (result < 0) {
+        fprintf(stderr, "auracp: fsync failed for '%s': %s\n", task->dst_path,
+                strerror(-(int)result));
+        if (ctx->error == 0) ctx->error = (int)result;
+    }
 
     /* Close both fds */
     close(task->src_fd);
@@ -552,9 +564,10 @@ static void on_fsync_complete(aura_request_t *req, ssize_t result, void *user_da
     task->src_fd = -1;
     task->dst_fd = -1;
     task->done = true;
+    slot->task = NULL;
 }
 
-static void finish_task(copy_ctx_t *ctx, file_task_t *task) {
+static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot) {
     ctx->queue->completed_files++;
 
     /* Preserve timestamps if requested */
@@ -568,10 +581,13 @@ static void finish_task(copy_ctx_t *ctx, file_task_t *task) {
 
     /* Fsync if requested, then close */
     if (!ctx->config->no_fsync && task->dst_fd >= 0) {
-        aura_request_t *freq = aura_fsync(ctx->engine, task->dst_fd,
-                                           AURA_FSYNC_DATASYNC,
-                                           on_fsync_complete, task);
+        /* Temporarily associate slot with task so the fsync callback can
+           access both ctx (via slot->ctx) and task (via slot->task). */
+        slot->task = task;
+        aura_request_t *freq =
+            aura_fsync(ctx->engine, task->dst_fd, AURA_FSYNC_DATASYNC, on_fsync_complete, slot);
         if (!freq) {
+            slot->task = NULL;
             /* Fallback: sync and close synchronously */
             fdatasync(task->dst_fd);
             close(task->src_fd);
@@ -598,8 +614,8 @@ static void on_write_complete(aura_request_t *req, ssize_t result, void *user_da
 
     if (result < 0) {
         if (ctx->error == 0) {
-            fprintf(stderr, "auracp: write error on '%s': %s\n",
-                    task->dst_path, strerror(-(int)result));
+            fprintf(stderr, "auracp: write error on '%s': %s\n", task->dst_path,
+                    strerror(-(int)result));
             ctx->error = (int)result;
         }
     } else if ((size_t)result != slot->bytes) {
@@ -619,7 +635,7 @@ static void on_write_complete(aura_request_t *req, ssize_t result, void *user_da
 
     /* Check if this file is fully done */
     if (task->reads_done && task->active_ops == 0 && !task->done) {
-        finish_task(ctx, task);
+        finish_task(ctx, task, slot);
     }
 }
 
@@ -633,8 +649,7 @@ static int open_task(file_task_t *task, const config_t *config) {
 
     task->src_fd = open(task->src_path, src_flags);
     if (task->src_fd < 0) {
-        fprintf(stderr, "auracp: cannot open '%s': %s\n",
-                task->src_path, strerror(errno));
+        fprintf(stderr, "auracp: cannot open '%s': %s\n", task->src_path, strerror(errno));
         return -1;
     }
 
@@ -643,16 +658,14 @@ static int open_task(file_task_t *task, const config_t *config) {
 
     task->dst_fd = open(task->dst_path, dst_flags, task->mode & 07777);
     if (task->dst_fd < 0) {
-        fprintf(stderr, "auracp: cannot create '%s': %s\n",
-                task->dst_path, strerror(errno));
+        fprintf(stderr, "auracp: cannot create '%s': %s\n", task->dst_path, strerror(errno));
         close(task->src_fd);
         task->src_fd = -1;
         return -1;
     }
 
     /* Pre-allocate destination (best-effort) */
-    if (task->file_size > 0)
-        posix_fallocate(task->dst_fd, 0, task->file_size);
+    if (task->file_size > 0) posix_fallocate(task->dst_fd, 0, task->file_size);
 
     /* Copy permissions */
     fchmod(task->dst_fd, task->mode & 07777);
@@ -686,7 +699,7 @@ static void submit_next_read(copy_ctx_t *ctx, buf_slot_t *slot) {
         /* Handle zero-length file */
         if (task->file_size == 0) {
             task->reads_done = true;
-            finish_task(ctx, task);
+            finish_task(ctx, task, slot);
             q->current = task->next;
             submit_next_read(ctx, slot);
             return;
@@ -708,13 +721,12 @@ static void submit_next_read(copy_ctx_t *ctx, buf_slot_t *slot) {
         q->current = task->next;
     }
 
-    aura_request_t *req = aura_read(ctx->engine, task->src_fd,
-                                     aura_buf(slot->buf), chunk,
-                                     slot->offset, on_read_complete, slot);
+    aura_request_t *req = aura_read(ctx->engine, task->src_fd, aura_buf(slot->buf), chunk,
+                                    slot->offset, on_read_complete, slot);
     if (!req) {
         if (ctx->error == 0) {
-            fprintf(stderr, "auracp: read submit failed on '%s': %s\n",
-                    task->src_path, strerror(errno));
+            fprintf(stderr, "auracp: read submit failed on '%s': %s\n", task->src_path,
+                    strerror(errno));
             ctx->error = -errno;
         }
         slot->state = BUF_FREE;
@@ -788,23 +800,23 @@ static void cleanup_partial_files(const task_queue_t *q, bool keep) {
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s [OPTIONS] SOURCE... DEST\n"
-        "\n"
-        "Async pipelined file copy powered by AuraIO.\n"
-        "\n"
-        "Options:\n"
-        "  -r, --recursive      Copy directories recursively\n"
-        "  -b, --block-size N   I/O block size (default: 256K). Suffixes: K, M, G\n"
-        "  -d, --direct         Use O_DIRECT (bypass page cache)\n"
-        "  -p, --pipeline N     In-flight I/O buffer slots (default: %d, max: %d)\n"
-        "  -q, --quiet          Suppress all output\n"
-        "  --no-fsync           Skip per-file fsync\n"
-        "  --no-progress        Disable progress bar\n"
-        "  --preserve           Preserve timestamps (mtime, atime)\n"
-        "  --keep-partial       Don't delete partial files on error\n"
-        "  -v, --verbose        Show AuraIO stats after copy\n"
-        "  -h, --help           Show this help\n",
-        argv0, DEFAULT_PIPELINE, MAX_PIPELINE);
+            "Usage: %s [OPTIONS] SOURCE... DEST\n"
+            "\n"
+            "Async pipelined file copy powered by AuraIO.\n"
+            "\n"
+            "Options:\n"
+            "  -r, --recursive      Copy directories recursively\n"
+            "  -b, --block-size N   I/O block size (default: 256K). Suffixes: K, M, G\n"
+            "  -d, --direct         Use O_DIRECT (bypass page cache)\n"
+            "  -p, --pipeline N     In-flight I/O buffer slots (default: %d, max: %d)\n"
+            "  -q, --quiet          Suppress all output\n"
+            "  --no-fsync           Skip per-file fsync\n"
+            "  --no-progress        Disable progress bar\n"
+            "  --preserve           Preserve timestamps (mtime, atime)\n"
+            "  --keep-partial       Don't delete partial files on error\n"
+            "  -v, --verbose        Show AuraIO stats after copy\n"
+            "  -h, --help           Show this help\n",
+            argv0, DEFAULT_PIPELINE, MAX_PIPELINE);
 }
 
 static int parse_args(int argc, char **argv, config_t *config) {
@@ -813,24 +825,20 @@ static int parse_args(int argc, char **argv, config_t *config) {
     config->pipeline_depth = DEFAULT_PIPELINE;
 
     static struct option long_opts[] = {
-        {"recursive",    no_argument,       0, 'r'},
-        {"block-size",   required_argument, 0, 'b'},
-        {"direct",       no_argument,       0, 'd'},
-        {"pipeline",     required_argument, 0, 'p'},
-        {"quiet",        no_argument,       0, 'q'},
-        {"no-fsync",     no_argument,       0, 'F'},
-        {"no-progress",  no_argument,       0, 'P'},
-        {"preserve",     no_argument,       0, 'T'},
-        {"keep-partial", no_argument,       0, 'K'},
-        {"verbose",      no_argument,       0, 'v'},
-        {"help",         no_argument,       0, 'h'},
-        {0, 0, 0, 0}
+        { "recursive", no_argument, 0, 'r' },    { "block-size", required_argument, 0, 'b' },
+        { "direct", no_argument, 0, 'd' },       { "pipeline", required_argument, 0, 'p' },
+        { "quiet", no_argument, 0, 'q' },        { "no-fsync", no_argument, 0, 'F' },
+        { "no-progress", no_argument, 0, 'P' },  { "preserve", no_argument, 0, 'T' },
+        { "keep-partial", no_argument, 0, 'K' }, { "verbose", no_argument, 0, 'v' },
+        { "help", no_argument, 0, 'h' },         { 0, 0, 0, 0 }
     };
 
     int opt;
     while ((opt = getopt_long(argc, argv, "rb:dp:qvh", long_opts, NULL)) != -1) {
         switch (opt) {
-        case 'r': config->recursive = true; break;
+        case 'r':
+            config->recursive = true;
+            break;
         case 'b': {
             ssize_t sz = parse_size(optarg);
             if (sz <= 0) {
@@ -840,7 +848,9 @@ static int parse_args(int argc, char **argv, config_t *config) {
             config->chunk_size = (size_t)sz;
             break;
         }
-        case 'd': config->use_direct = true; break;
+        case 'd':
+            config->use_direct = true;
+            break;
         case 'p':
             config->pipeline_depth = atoi(optarg);
             if (config->pipeline_depth < 1 || config->pipeline_depth > MAX_PIPELINE) {
@@ -848,14 +858,31 @@ static int parse_args(int argc, char **argv, config_t *config) {
                 return -1;
             }
             break;
-        case 'q': config->quiet = true; config->no_progress = true; break;
-        case 'v': config->verbose = true; break;
-        case 'F': config->no_fsync = true; break;
-        case 'P': config->no_progress = true; break;
-        case 'T': config->preserve = true; break;
-        case 'K': config->keep_partial = true; break;
-        case 'h': print_usage(argv[0]); exit(0);
-        default:  print_usage(argv[0]); return -1;
+        case 'q':
+            config->quiet = true;
+            config->no_progress = true;
+            break;
+        case 'v':
+            config->verbose = true;
+            break;
+        case 'F':
+            config->no_fsync = true;
+            break;
+        case 'P':
+            config->no_progress = true;
+            break;
+        case 'T':
+            config->preserve = true;
+            break;
+        case 'K':
+            config->keep_partial = true;
+            break;
+        case 'h':
+            print_usage(argv[0]);
+            exit(0);
+        default:
+            print_usage(argv[0]);
+            return -1;
         }
     }
 
@@ -871,8 +898,7 @@ static int parse_args(int argc, char **argv, config_t *config) {
     config->dest = argv[argc - 1];
 
     if (config->use_direct && (config->chunk_size % SECTOR_SIZE) != 0) {
-        fprintf(stderr,
-                "auracp: block size must be sector-aligned (%d) with --direct\n",
+        fprintf(stderr, "auracp: block size must be sector-aligned (%d) with --direct\n",
                 SECTOR_SIZE);
         return -1;
     }
@@ -886,8 +912,7 @@ static int parse_args(int argc, char **argv, config_t *config) {
 
 int main(int argc, char **argv) {
     config_t config;
-    if (parse_args(argc, argv, &config) != 0)
-        return 1;
+    if (parse_args(argc, argv, &config) != 0) return 1;
 
     /* Install SIGINT handler */
     struct sigaction sa;
@@ -898,14 +923,13 @@ int main(int argc, char **argv) {
 
     /* Build task list */
     task_queue_t queue;
-    if (build_task_list(&config, &queue) != 0)
-        return 1;
+    if (build_task_list(&config, &queue) != 0) return 1;
 
     if (!config.quiet) {
         char total_str[32];
         format_bytes(total_str, sizeof(total_str), (double)queue.total_bytes);
-        fprintf(stderr, "auracp: %d file%s (%s)\n",
-                queue.total_files, queue.total_files == 1 ? "" : "s", total_str);
+        fprintf(stderr, "auracp: %d file%s (%s)\n", queue.total_files,
+                queue.total_files == 1 ? "" : "s", total_str);
     }
 
     /* Create AuraIO engine */
@@ -944,8 +968,7 @@ int main(int argc, char **argv) {
         slots[i].buf = aura_buffer_alloc(engine, config.chunk_size);
         if (!slots[i].buf) {
             fprintf(stderr, "auracp: buffer allocation failed\n");
-            for (int j = 0; j < i; j++)
-                aura_buffer_free(engine, slots[j].buf);
+            for (int j = 0; j < i; j++) aura_buffer_free(engine, slots[j].buf);
             free(slots);
             aura_destroy(engine);
             queue_free(&queue);
@@ -966,30 +989,26 @@ int main(int argc, char **argv) {
     if (config.verbose && err == 0 && !g_interrupted) {
         struct timespec end;
         clock_gettime(CLOCK_MONOTONIC, &end);
-        double elapsed = (double)(end.tv_sec - g_start_time.tv_sec)
-                       + (double)(end.tv_nsec - g_start_time.tv_nsec) / 1e9;
+        double elapsed = (double)(end.tv_sec - g_start_time.tv_sec) +
+                         (double)(end.tv_nsec - g_start_time.tv_nsec) / 1e9;
 
         char size_str[32], rate_str[32], chunk_str[32], pipe_str[32];
         format_bytes(size_str, sizeof(size_str), (double)queue.total_written);
         format_rate(rate_str, sizeof(rate_str),
                     elapsed > 0 ? (double)queue.total_written / elapsed : 0);
         format_bytes(chunk_str, sizeof(chunk_str), (double)config.chunk_size);
-        format_bytes(pipe_str, sizeof(pipe_str),
-                     (double)config.chunk_size * config.pipeline_depth);
+        format_bytes(pipe_str, sizeof(pipe_str), (double)config.chunk_size * config.pipeline_depth);
 
-        fprintf(stderr, "Copied %d file%s (%s) in %.2fs\n",
-                queue.completed_files, queue.completed_files == 1 ? "" : "s",
-                size_str, elapsed);
+        fprintf(stderr, "Copied %d file%s (%s) in %.2fs\n", queue.completed_files,
+                queue.completed_files == 1 ? "" : "s", size_str, elapsed);
         fprintf(stderr, "Throughput: %s\n", rate_str);
-        fprintf(stderr, "Pipeline: %d buffers x %s = %s\n",
-                config.pipeline_depth, chunk_str, pipe_str);
+        fprintf(stderr, "Pipeline: %d buffers x %s = %s\n", config.pipeline_depth, chunk_str,
+                pipe_str);
 
         aura_ring_stats_t rstats;
         if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0) {
-            fprintf(stderr, "AuraIO: depth=%d, phase=%s, p99=%.2fms\n",
-                    rstats.in_flight_limit,
-                    aura_phase_name(rstats.aimd_phase),
-                    rstats.p99_latency_ms);
+            fprintf(stderr, "AuraIO: depth=%d, phase=%s, p99=%.2fms\n", rstats.in_flight_limit,
+                    aura_phase_name(rstats.aimd_phase), rstats.p99_latency_ms);
         }
     }
 

@@ -471,8 +471,7 @@ See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and 
 AuraIO is currently pre-1.0 (`0.x`).
 
 1. API and ABI may still evolve between minor releases.
-2. API/ABI surface snapshots are tracked in `api/snapshots/` for visibility.
-3. Breaking changes require an RFC in `docs/rfcs/`.
+2. Breaking changes are documented in `CHANGELOG.md` with migration guidance.
 
 ## Contributing
 

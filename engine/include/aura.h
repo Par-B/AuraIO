@@ -10,8 +10,10 @@
  *   aura_engine_t *engine = aura_create();
  *   void *buf = aura_buffer_alloc(engine, size);
  *   aura_request_t *req = aura_read(engine, fd, aura_buf(buf), size, 0,
- * callback, user_data); aura_wait(engine, -1); aura_buffer_free(engine,
- * buf, size); aura_destroy(engine);
+ *                                    callback, user_data);
+ *   aura_wait(engine, -1);
+ *   aura_buffer_free(engine, buf);
+ *   aura_destroy(engine);
  * @endcode
  *
  * Event loop integration:

@@ -11,7 +11,7 @@
  */
 
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE
+#    define _GNU_SOURCE
 #endif
 #include <aura.hpp>
 
@@ -126,7 +126,9 @@ static volatile sig_atomic_t g_interrupted = 0;
 static struct timespec g_start_time;
 static uint64_t g_last_progress_ns = 0;
 
-static void sigint_handler(int /*sig*/) { g_interrupted = 1; }
+static void sigint_handler(int /*sig*/) {
+    g_interrupted = 1;
+}
 
 // ============================================================================
 // Size parsing
@@ -135,22 +137,28 @@ static void sigint_handler(int /*sig*/) { g_interrupted = 1; }
 static ssize_t parse_size(const char *str) {
     char *endp;
     double val = strtod(str, &endp);
-    if (endp == str || val < 0)
-        return -1;
+    if (endp == str || val < 0) return -1;
 
     switch (*endp) {
     case 'G':
-    case 'g': val *= 1024.0 * 1024.0 * 1024.0; break;
+    case 'g':
+        val *= 1024.0 * 1024.0 * 1024.0;
+        break;
     case 'M':
-    case 'm': val *= 1024.0 * 1024.0; break;
+    case 'm':
+        val *= 1024.0 * 1024.0;
+        break;
     case 'K':
-    case 'k': val *= 1024.0; break;
-    case '\0': break;
-    default: return -1;
+    case 'k':
+        val *= 1024.0;
+        break;
+    case '\0':
+        break;
+    default:
+        return -1;
     }
 
-    if (val > static_cast<double>(SSIZE_MAX))
-        return -1;
+    if (val > static_cast<double>(SSIZE_MAX)) return -1;
     return static_cast<ssize_t>(val);
 }
 
@@ -161,43 +169,33 @@ static ssize_t parse_size(const char *str) {
 static void format_bytes(char *buf, size_t bufsz, double bytes) {
     if (bytes >= 1024.0 * 1024.0 * 1024.0)
         snprintf(buf, bufsz, "%.1f GiB", bytes / (1024.0 * 1024.0 * 1024.0));
-    else if (bytes >= 1024.0 * 1024.0)
-        snprintf(buf, bufsz, "%.1f MiB", bytes / (1024.0 * 1024.0));
-    else if (bytes >= 1024.0)
-        snprintf(buf, bufsz, "%.1f KiB", bytes / 1024.0);
-    else
-        snprintf(buf, bufsz, "%.0f B", bytes);
+    else if (bytes >= 1024.0 * 1024.0) snprintf(buf, bufsz, "%.1f MiB", bytes / (1024.0 * 1024.0));
+    else if (bytes >= 1024.0) snprintf(buf, bufsz, "%.1f KiB", bytes / 1024.0);
+    else snprintf(buf, bufsz, "%.0f B", bytes);
 }
 
 static void format_rate(char *buf, size_t bufsz, double bps) {
     if (bps >= 1024.0 * 1024.0 * 1024.0)
         snprintf(buf, bufsz, "%.1f GiB/s", bps / (1024.0 * 1024.0 * 1024.0));
-    else if (bps >= 1024.0 * 1024.0)
-        snprintf(buf, bufsz, "%.1f MiB/s", bps / (1024.0 * 1024.0));
-    else if (bps >= 1024.0)
-        snprintf(buf, bufsz, "%.1f KiB/s", bps / 1024.0);
-    else
-        snprintf(buf, bufsz, "%.0f B/s", bps);
+    else if (bps >= 1024.0 * 1024.0) snprintf(buf, bufsz, "%.1f MiB/s", bps / (1024.0 * 1024.0));
+    else if (bps >= 1024.0) snprintf(buf, bufsz, "%.1f KiB/s", bps / 1024.0);
+    else snprintf(buf, bufsz, "%.0f B/s", bps);
 }
 
 // ============================================================================
 // Progress display
 // ============================================================================
 
-static void progress_update(const Config &config, const TaskQueue &queue,
-                            bool final) {
-    if (config.quiet || config.no_progress)
-        return;
-    if (!final && !isatty(STDERR_FILENO))
-        return;
+static void progress_update(const Config &config, const TaskQueue &queue, bool final) {
+    if (config.quiet || config.no_progress) return;
+    if (!final && !isatty(STDERR_FILENO)) return;
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t now_ns =
         static_cast<uint64_t>(now.tv_sec) * 1000000000ULL + static_cast<uint64_t>(now.tv_nsec);
 
-    if (!final && (now_ns - g_last_progress_ns) < PROGRESS_INTERVAL_MS * 1000000ULL)
-        return;
+    if (!final && (now_ns - g_last_progress_ns) < PROGRESS_INTERVAL_MS * 1000000ULL) return;
     g_last_progress_ns = now_ns;
 
     double elapsed = static_cast<double>(now.tv_sec - g_start_time.tv_sec) +
@@ -215,17 +213,14 @@ static void progress_update(const Config &config, const TaskQueue &queue,
     // Progress bar
     int bar_width = 30;
     int filled = (total > 0) ? static_cast<int>(pct / 100.0 * bar_width) : bar_width;
-    if (filled > bar_width)
-        filled = bar_width;
+    if (filled > bar_width) filled = bar_width;
 
     char bar[64];
     int i;
-    for (i = 0; i < filled && i < bar_width; i++)
-        bar[i] = '=';
+    for (i = 0; i < filled && i < bar_width; i++) bar[i] = '=';
     if (filled < bar_width) {
         bar[filled] = '>';
-        for (i = filled + 1; i < bar_width; i++)
-            bar[i] = ' ';
+        for (i = filled + 1; i < bar_width; i++) bar[i] = ' ';
     }
     bar[bar_width] = '\0';
 
@@ -241,8 +236,7 @@ static void progress_update(const Config &config, const TaskQueue &queue,
     fprintf(stderr, "\r  %s / %s  [%s]  %3.0f%%  %s  %s   ", done_str, total_str, bar, pct,
             rate_str, eta);
 
-    if (final)
-        fprintf(stderr, "\n");
+    if (final) fprintf(stderr, "\n");
 }
 
 // ============================================================================
@@ -252,25 +246,20 @@ static void progress_update(const Config &config, const TaskQueue &queue,
 static std::string path_join(const char *dir, const char *name) {
     std::string d(dir);
     // Trim trailing slashes
-    while (d.size() > 1 && d.back() == '/')
-        d.pop_back();
+    while (d.size() > 1 && d.back() == '/') d.pop_back();
     d += '/';
     d += name;
     return d;
 }
 
-static std::string remap_path(const char *src_root, const char *dst_root,
-                               const char *fpath) {
+static std::string remap_path(const char *src_root, const char *dst_root, const char *fpath) {
     size_t rootlen = strlen(src_root);
-    while (rootlen > 1 && src_root[rootlen - 1] == '/')
-        rootlen--;
+    while (rootlen > 1 && src_root[rootlen - 1] == '/') rootlen--;
     const char *suffix = fpath + rootlen;
-    if (*suffix == '/')
-        suffix++;
+    if (*suffix == '/') suffix++;
 
     std::string d(dst_root);
-    while (d.size() > 1 && d.back() == '/')
-        d.pop_back();
+    while (d.size() > 1 && d.back() == '/') d.pop_back();
     d += '/';
     d += suffix;
     return d;
@@ -291,7 +280,7 @@ struct WalkContext {
 static WalkContext *g_walk_ctx; // nftw doesn't support user_data
 
 static int nftw_callback(const char *fpath, const struct stat *sb, int typeflag,
-                          struct FTW * /*ftwbuf*/) {
+                         struct FTW * /*ftwbuf*/) {
     WalkContext *wc = g_walk_ctx;
 
     if (typeflag == FTW_D) {
@@ -301,15 +290,15 @@ static int nftw_callback(const char *fpath, const struct stat *sb, int typeflag,
             struct stat dst_st;
             if (stat(dst.c_str(), &dst_st) != 0) {
                 if (mkdir(dst.c_str(), sb->st_mode & 07777) != 0 && errno != EEXIST) {
-                    fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                            dst.c_str(), strerror(errno));
+                    fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst.c_str(),
+                            strerror(errno));
                     wc->errors++;
                 }
             }
         } else {
             if (mkdir(dst.c_str(), sb->st_mode & 07777) != 0 && errno != EEXIST) {
-                fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                        dst.c_str(), strerror(errno));
+                fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst.c_str(),
+                        strerror(errno));
                 wc->errors++;
             }
         }
@@ -329,14 +318,13 @@ static int nftw_callback(const char *fpath, const struct stat *sb, int typeflag,
     }
 
     if (typeflag != FTW_SL) {
-        if (!wc->config->quiet)
-            fprintf(stderr, "auracp: skipping special file: %s\n", fpath);
+        if (!wc->config->quiet) fprintf(stderr, "auracp: skipping special file: %s\n", fpath);
     }
     return 0;
 }
 
 static int build_recursive(const char *src, const char *dst, TaskQueue &queue,
-                            const Config &config) {
+                           const Config &config) {
     WalkContext wc = {src, dst, &queue, &config, 0};
     g_walk_ctx = &wc;
 
@@ -366,8 +354,7 @@ static int build_task_list(const Config &config, TaskQueue &queue) {
 
         if (S_ISDIR(src_st.st_mode)) {
             if (!config.recursive) {
-                fprintf(stderr, "auracp: -r not specified; omitting directory '%s'\n",
-                        src);
+                fprintf(stderr, "auracp: -r not specified; omitting directory '%s'\n", src);
                 return -1;
             }
 
@@ -382,13 +369,12 @@ static int build_task_list(const Config &config, TaskQueue &queue) {
             }
 
             if (mkdir(dst_dir.c_str(), src_st.st_mode & 07777) != 0 && errno != EEXIST) {
-                fprintf(stderr, "auracp: cannot create directory '%s': %s\n",
-                        dst_dir.c_str(), strerror(errno));
+                fprintf(stderr, "auracp: cannot create directory '%s': %s\n", dst_dir.c_str(),
+                        strerror(errno));
                 return -1;
             }
 
-            if (build_recursive(src, dst_dir.c_str(), queue, config) != 0)
-                return -1;
+            if (build_recursive(src, dst_dir.c_str(), queue, config) != 0) return -1;
         } else if (S_ISREG(src_st.st_mode)) {
             std::string dst_path;
             if (dst_is_dir) {
@@ -402,8 +388,7 @@ static int build_task_list(const Config &config, TaskQueue &queue) {
             // Check same file
             if (dst_is_dir) {
                 struct stat check_st;
-                if (stat(dst_path.c_str(), &check_st) == 0 &&
-                    src_st.st_dev == check_st.st_dev &&
+                if (stat(dst_path.c_str(), &check_st) == 0 && src_st.st_dev == check_st.st_dev &&
                     src_st.st_ino == check_st.st_ino) {
                     fprintf(stderr, "auracp: '%s' and '%s' are the same file\n", src,
                             dst_path.c_str());
@@ -458,32 +443,27 @@ struct CopyContext {
 
 int CopyContext::open_task(FileTask &task) {
     int src_flags = O_RDONLY;
-    if (config.use_direct)
-        src_flags |= O_DIRECT;
+    if (config.use_direct) src_flags |= O_DIRECT;
 
     task.src_fd = open(task.src_path.c_str(), src_flags);
     if (task.src_fd < 0) {
-        fprintf(stderr, "auracp: cannot open '%s': %s\n", task.src_path.c_str(),
-                strerror(errno));
+        fprintf(stderr, "auracp: cannot open '%s': %s\n", task.src_path.c_str(), strerror(errno));
         return -1;
     }
 
     int dst_flags = O_WRONLY | O_CREAT | O_TRUNC;
-    if (config.use_direct)
-        dst_flags |= O_DIRECT;
+    if (config.use_direct) dst_flags |= O_DIRECT;
 
     task.dst_fd = open(task.dst_path.c_str(), dst_flags, task.mode & 07777);
     if (task.dst_fd < 0) {
-        fprintf(stderr, "auracp: cannot create '%s': %s\n", task.dst_path.c_str(),
-                strerror(errno));
+        fprintf(stderr, "auracp: cannot create '%s': %s\n", task.dst_path.c_str(), strerror(errno));
         close(task.src_fd);
         task.src_fd = -1;
         return -1;
     }
 
     // Pre-allocate destination (best-effort)
-    if (task.file_size > 0)
-        posix_fallocate(task.dst_fd, 0, task.file_size);
+    if (task.file_size > 0) posix_fallocate(task.dst_fd, 0, task.file_size);
 
     // Copy permissions
     fchmod(task.dst_fd, task.mode & 07777);
@@ -508,10 +488,16 @@ void CopyContext::finish_task(FileTask &task) {
         try {
             int src_fd = task.src_fd;
             int dst_fd = task.dst_fd;
-            (void)engine.fdatasync(dst_fd, [src_fd, dst_fd](aura::Request &, ssize_t) {
-                close(src_fd);
-                close(dst_fd);
-            });
+            (void)engine.fdatasync(dst_fd,
+                                   [this, &task, src_fd, dst_fd](aura::Request &, ssize_t result) {
+                                       if (result < 0) {
+                                           fprintf(stderr, "auracp: fsync failed for '%s': %s\n",
+                                                   task.dst_path.c_str(), strerror(-(int)result));
+                                           if (error == 0) error = (int)result;
+                                       }
+                                       close(src_fd);
+                                       close(dst_fd);
+                                   });
             task.src_fd = -1;
             task.dst_fd = -1;
             task.done = true;
@@ -554,14 +540,13 @@ void CopyContext::on_read_complete(size_t slot_idx, ssize_t result) {
     slot.state = BufState::Writing;
 
     try {
-        (void)engine.write(task.dst_fd, slot.buf, slot.bytes, slot.offset,
-                          [this, slot_idx](aura::Request &, ssize_t res) {
-                              on_write_complete(slot_idx, res);
-                          });
+        (void)engine.write(
+            task.dst_fd, slot.buf, slot.bytes, slot.offset,
+            [this, slot_idx](aura::Request &, ssize_t res) { on_write_complete(slot_idx, res); });
     } catch (...) {
         if (error == 0) {
-            fprintf(stderr, "auracp: write submit failed on '%s': %s\n",
-                    task.dst_path.c_str(), strerror(errno));
+            fprintf(stderr, "auracp: write submit failed on '%s': %s\n", task.dst_path.c_str(),
+                    strerror(errno));
             error = -errno;
         }
         slot.state = BufState::Free;
@@ -605,12 +590,10 @@ void CopyContext::submit_next_read(size_t slot_idx) {
     size_t idx = queue.current;
     while (idx < queue.tasks.size()) {
         auto &t = queue.tasks[idx];
-        if (!t.reads_done && !t.done)
-            break;
+        if (!t.reads_done && !t.done) break;
         idx++;
     }
-    if (idx >= queue.tasks.size())
-        return; // all reads submitted
+    if (idx >= queue.tasks.size()) return; // all reads submitted
 
     queue.current = idx;
     auto &task = queue.tasks[idx];
@@ -654,15 +637,15 @@ void CopyContext::submit_next_read(size_t slot_idx) {
 
     try {
         (void)engine.read(task.src_fd, slot.buf, chunk, slot.offset,
-                         [this, slot_idx](aura::Request &, ssize_t result) {
-                             on_read_complete(slot_idx, result);
-                         });
+                          [this, slot_idx](aura::Request &, ssize_t result) {
+                              on_read_complete(slot_idx, result);
+                          });
         active_ops++;
         task.active_ops++;
     } catch (...) {
         if (error == 0) {
-            fprintf(stderr, "auracp: read submit failed on '%s': %s\n",
-                    task.src_path.c_str(), strerror(errno));
+            fprintf(stderr, "auracp: read submit failed on '%s': %s\n", task.src_path.c_str(),
+                    strerror(errno));
             error = -errno;
         }
         slot.state = BufState::Free;
@@ -672,8 +655,7 @@ void CopyContext::submit_next_read(size_t slot_idx) {
 
 bool CopyContext::all_tasks_done() const {
     for (const auto &t : queue.tasks) {
-        if (!t.done)
-            return false;
+        if (!t.done) return false;
     }
     return true;
 }
@@ -690,8 +672,7 @@ int CopyContext::copy_pipeline() {
     while (!all_tasks_done() && error == 0 && !g_interrupted) {
         int n = engine.wait(100);
         if (n < 0 && errno != EINTR && errno != ETIME) {
-            if (error == 0)
-                error = -errno;
+            if (error == 0) error = -errno;
             break;
         }
 
@@ -719,8 +700,7 @@ int CopyContext::copy_pipeline() {
 // ============================================================================
 
 static void cleanup_partial_files(const TaskQueue &queue, bool keep) {
-    if (keep)
-        return;
+    if (keep) return;
     for (const auto &t : queue.tasks) {
         if (!t.done && !t.dst_path.empty()) {
             unlink(t.dst_path.c_str());
@@ -767,24 +747,25 @@ static void print_usage(const char *argv0) {
 }
 
 static int parse_args(int argc, char **argv, Config &config) {
-    static struct option long_opts[] = {
-        {"recursive", no_argument, nullptr, 'r'},
-        {"block-size", required_argument, nullptr, 'b'},
-        {"direct", no_argument, nullptr, 'd'},
-        {"pipeline", required_argument, nullptr, 'p'},
-        {"quiet", no_argument, nullptr, 'q'},
-        {"no-fsync", no_argument, nullptr, 'F'},
-        {"no-progress", no_argument, nullptr, 'P'},
-        {"preserve", no_argument, nullptr, 'T'},
-        {"keep-partial", no_argument, nullptr, 'K'},
-        {"verbose", no_argument, nullptr, 'v'},
-        {"help", no_argument, nullptr, 'h'},
-        {nullptr, 0, nullptr, 0}};
+    static struct option long_opts[] = {{"recursive", no_argument, nullptr, 'r'},
+                                        {"block-size", required_argument, nullptr, 'b'},
+                                        {"direct", no_argument, nullptr, 'd'},
+                                        {"pipeline", required_argument, nullptr, 'p'},
+                                        {"quiet", no_argument, nullptr, 'q'},
+                                        {"no-fsync", no_argument, nullptr, 'F'},
+                                        {"no-progress", no_argument, nullptr, 'P'},
+                                        {"preserve", no_argument, nullptr, 'T'},
+                                        {"keep-partial", no_argument, nullptr, 'K'},
+                                        {"verbose", no_argument, nullptr, 'v'},
+                                        {"help", no_argument, nullptr, 'h'},
+                                        {nullptr, 0, nullptr, 0}};
 
     int opt;
     while ((opt = getopt_long(argc, argv, "rb:dp:qvh", long_opts, nullptr)) != -1) {
         switch (opt) {
-        case 'r': config.recursive = true; break;
+        case 'r':
+            config.recursive = true;
+            break;
         case 'b': {
             ssize_t sz = parse_size(optarg);
             if (sz <= 0) {
@@ -794,7 +775,9 @@ static int parse_args(int argc, char **argv, Config &config) {
             config.chunk_size = static_cast<size_t>(sz);
             break;
         }
-        case 'd': config.use_direct = true; break;
+        case 'd':
+            config.use_direct = true;
+            break;
         case 'p':
             config.pipeline_depth = atoi(optarg);
             if (config.pipeline_depth < 1 || config.pipeline_depth > MAX_PIPELINE) {
@@ -806,13 +789,27 @@ static int parse_args(int argc, char **argv, Config &config) {
             config.quiet = true;
             config.no_progress = true;
             break;
-        case 'v': config.verbose = true; break;
-        case 'F': config.no_fsync = true; break;
-        case 'P': config.no_progress = true; break;
-        case 'T': config.preserve = true; break;
-        case 'K': config.keep_partial = true; break;
-        case 'h': print_usage(argv[0]); exit(0);
-        default: print_usage(argv[0]); return -1;
+        case 'v':
+            config.verbose = true;
+            break;
+        case 'F':
+            config.no_fsync = true;
+            break;
+        case 'P':
+            config.no_progress = true;
+            break;
+        case 'T':
+            config.preserve = true;
+            break;
+        case 'K':
+            config.keep_partial = true;
+            break;
+        case 'h':
+            print_usage(argv[0]);
+            exit(0);
+        default:
+            print_usage(argv[0]);
+            return -1;
         }
     }
 
@@ -823,13 +820,11 @@ static int parse_args(int argc, char **argv, Config &config) {
         return -1;
     }
 
-    for (int i = optind; i < argc - 1; i++)
-        config.sources.push_back(argv[i]);
+    for (int i = optind; i < argc - 1; i++) config.sources.push_back(argv[i]);
     config.dest = argv[argc - 1];
 
     if (config.use_direct && (config.chunk_size % SECTOR_SIZE) != 0) {
-        fprintf(stderr,
-                "auracp: block size must be sector-aligned (%d) with --direct\n",
+        fprintf(stderr, "auracp: block size must be sector-aligned (%d) with --direct\n",
                 SECTOR_SIZE);
         return -1;
     }
@@ -843,8 +838,7 @@ static int parse_args(int argc, char **argv, Config &config) {
 
 int main(int argc, char **argv) {
     Config config;
-    if (parse_args(argc, argv, config) != 0)
-        return 1;
+    if (parse_args(argc, argv, config) != 0) return 1;
 
     // Install SIGINT handler
     struct sigaction sa = {};
@@ -854,13 +848,11 @@ int main(int argc, char **argv) {
 
     // Build task list
     TaskQueue queue;
-    if (build_task_list(config, queue) != 0)
-        return 1;
+    if (build_task_list(config, queue) != 0) return 1;
 
     if (!config.quiet) {
         char total_str[32];
-        format_bytes(total_str, sizeof(total_str),
-                     static_cast<double>(queue.total_bytes));
+        format_bytes(total_str, sizeof(total_str), static_cast<double>(queue.total_bytes));
         fprintf(stderr, "auracp: %d file%s (%s)\n", queue.total_files(),
                 queue.total_files() == 1 ? "" : "s", total_str);
     }
@@ -869,8 +861,7 @@ int main(int argc, char **argv) {
         // Create AuraIO engine with options
         aura::Options opts;
         int qd = config.pipeline_depth * 4;
-        if (qd < 64)
-            qd = 64;
+        if (qd < 64) qd = 64;
         opts.queue_depth(qd).single_thread(true);
 
         aura::Engine engine(opts);
@@ -899,20 +890,18 @@ int main(int argc, char **argv) {
                              static_cast<double>(end.tv_nsec - g_start_time.tv_nsec) / 1e9;
 
             char size_str[32], rate_str[32], chunk_str[32], pipe_str[32];
-            format_bytes(size_str, sizeof(size_str),
-                         static_cast<double>(queue.total_written));
+            format_bytes(size_str, sizeof(size_str), static_cast<double>(queue.total_written));
             format_rate(rate_str, sizeof(rate_str),
                         elapsed > 0 ? static_cast<double>(queue.total_written) / elapsed : 0);
-            format_bytes(chunk_str, sizeof(chunk_str),
-                         static_cast<double>(config.chunk_size));
+            format_bytes(chunk_str, sizeof(chunk_str), static_cast<double>(config.chunk_size));
             format_bytes(pipe_str, sizeof(pipe_str),
                          static_cast<double>(config.chunk_size) * config.pipeline_depth);
 
             fprintf(stderr, "Copied %d file%s (%s) in %.2fs\n", queue.completed_files,
                     queue.completed_files == 1 ? "" : "s", size_str, elapsed);
             fprintf(stderr, "Throughput: %s\n", rate_str);
-            fprintf(stderr, "Pipeline: %d buffers x %s = %s\n", config.pipeline_depth,
-                    chunk_str, pipe_str);
+            fprintf(stderr, "Pipeline: %d buffers x %s = %s\n", config.pipeline_depth, chunk_str,
+                    pipe_str);
 
             try {
                 auto rstats = engine.get_ring_stats(0);
