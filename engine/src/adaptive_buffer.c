@@ -27,6 +27,7 @@
 
 #define _GNU_SOURCE
 #include "adaptive_buffer.h"
+#include "log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -684,16 +685,32 @@ static void cleanup_phase_1_mark_destroyed(buffer_pool_t *pool) {
     atomic_store_explicit(&pool->destroyed, true, memory_order_release);
 
     /* Wait for in-flight cache registrations to quiesce so no new nodes can
-     * be published after the final atomic_exchange(NULL) in the drain loop. */
-    while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
+     * be published after the final atomic_exchange(NULL) in the drain loop.
+     * Bounded to avoid infinite hang if a worker thread misbehaves. */
+    int yield_count = 0;
+    while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0 &&
+           yield_count < 10000) {
         sched_yield();
+        yield_count++;
+    }
+    if (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
+        aura_log(AURA_LOG_WARN,
+                 "buffer_pool cleanup: timed out waiting for registrations_inflight (%d)",
+                 (int)atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire));
     }
 
     /* Wait for threads in the shard slow path (alloc/free) to finish.
      * These threads have already passed the destroyed check and are
      * accessing pool->shards — we must not free shards until they exit. */
-    while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
+    yield_count = 0;
+    while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0 &&
+           yield_count < 10000) {
         sched_yield();
+        yield_count++;
+    }
+    if (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
+        aura_log(AURA_LOG_WARN, "buffer_pool cleanup: timed out waiting for active_users (%d)",
+                 (int)atomic_load_explicit(&pool->active_users, memory_order_acquire));
     }
 }
 
