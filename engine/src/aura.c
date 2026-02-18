@@ -1675,7 +1675,10 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             }
             return completed > 0 ? completed : 0;
         }
-        /* pret == 0: timeout, pret < 0: error (EINTR etc.) */
+        if (pret < 0 && errno != EINTR) {
+            return (-1);
+        }
+        /* pret == 0: timeout, pret < 0 with EINTR: signal interrupted */
     } else {
         /* Fallback: no eventfd, block on first pending ring */
         int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
@@ -1735,7 +1738,11 @@ void aura_run(aura_engine_t *engine) {
             }
         }
 
-        if ((!has_pending && completed == 0) || ++drain_iterations >= 100) {
+        if (!has_pending && completed == 0) {
+            break;
+        }
+        if (++drain_iterations >= 100) {
+            aura_log(AURA_LOG_WARN, "aura_run drain timed out with in-flight I/O still pending");
             break;
         }
     }
@@ -2350,8 +2357,10 @@ double aura_histogram_percentile(const aura_histogram_t *hist, double percentile
     for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
         cumulative += hist->buckets[i];
         if (cumulative >= target) {
-            /* Return the upper edge of this bucket */
-            return (double)((i + 1) * hist->bucket_width_us);
+            /* Return the upper edge of this bucket, clamped to max_tracked_us */
+            uint64_t upper = (uint64_t)(i + 1) * (uint64_t)hist->bucket_width_us;
+            if (upper > (uint64_t)hist->max_tracked_us) upper = (uint64_t)hist->max_tracked_us;
+            return (double)upper;
         }
     }
 

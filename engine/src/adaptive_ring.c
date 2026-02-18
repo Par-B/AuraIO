@@ -249,16 +249,18 @@ void ring_destroy(ring_ctx_t *ctx) {
 
     adaptive_destroy(&ctx->adaptive);
 
+    /* Close the ring BEFORE freeing requests to prevent the kernel from
+     * delivering CQEs to freed request memory if the drain timed out. */
+    if (ctx->ring_initialized) {
+        ctx->ring_initialized = false;
+        io_uring_queue_exit(&ctx->ring);
+    }
+
     free(ctx->free_request_stack);
     ctx->free_request_stack = NULL;
 
     free(ctx->requests);
     ctx->requests = NULL;
-
-    if (ctx->ring_initialized) {
-        ctx->ring_initialized = false;
-        io_uring_queue_exit(&ctx->ring);
-    }
 
     /* Destroy per-ring locks */
     pthread_mutex_destroy(&ctx->cq_lock);
@@ -415,15 +417,6 @@ int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
                         io_uring_prep_writev(sqe, req->fd, req->iov, req->iovcnt, req->offset));
 }
 
-int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
-    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_FSYNC, io_uring_prep_fsync(sqe, req->fd, 0));
-}
-
-int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
-    RING_SUBMIT_DATA_OP(ctx, req, AURA_OP_FDATASYNC,
-                        io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC));
-}
-
 int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target) {
     if (!target) {
         errno = EINVAL;
@@ -492,6 +485,15 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
         meta_finish(ctx, req, op_type);                         \
         return (0);                                             \
     } while (0)
+
+int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
+    RING_SUBMIT_META_OP(ctx, req, AURA_OP_FSYNC, io_uring_prep_fsync(sqe, req->fd, 0));
+}
+
+int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
+    RING_SUBMIT_META_OP(ctx, req, AURA_OP_FDATASYNC,
+                        io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC));
+}
 
 int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req) {
     RING_SUBMIT_META_OP(ctx, req, AURA_OP_OPENAT,
@@ -828,7 +830,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 ret = io_uring_wait_cqe_timeout(&ctx->ring, &cqe, &ts);
                 if (ret != -ETIME && ret != -EAGAIN) break;
                 /* Timeout expired — retry if there are still pending ops */
-                if (atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) == 0) break;
+                if (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) == 0) break;
             }
         } else {
             struct __kernel_timespec ts;

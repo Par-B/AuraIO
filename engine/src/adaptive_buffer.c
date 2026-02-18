@@ -739,13 +739,14 @@ static void cleanup_phase_2_process_caches(buffer_pool_t *pool) {
             pthread_mutex_unlock(&cache->cleanup_mutex);
 
             if (pthread_equal(cache->owner_thread, pthread_self())) {
-                /* This is the calling thread's own cache.  tls_cache may
-                 * already be NULL if the thread switched pools. */
+                /* This is the calling thread's own cache.  Always clear both
+                 * tls_cache and the pthread key to prevent use-after-free in
+                 * tls_destructor when the thread eventually exits. */
                 if (tls_cache == cache) {
                     tls_cache = NULL;
-                    if (tls_key_valid) {
-                        pthread_setspecific(tls_key, NULL);
-                    }
+                }
+                if (tls_key_valid) {
+                    pthread_setspecific(tls_key, NULL);
                 }
                 pthread_mutex_destroy(&cache->cleanup_mutex);
                 free(cache);
@@ -929,14 +930,18 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
      * (which holds cleanup_mutex and waits for active_users==0). */
     thread_cache_t *cache = get_thread_cache(pool);
     if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
-        /* Re-check destroyed: if pool was destroyed between our initial check
-         * and here, cleanup_phase_2 may already have cleaned this cache.
-         * Free directly rather than storing into a cleaned-up cache. */
-        if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+        /* Serialize with cleanup_phase_2_process_caches to prevent storing
+         * into a cache that is concurrently being cleaned.  Without this,
+         * a buffer stored after cleanup_cache_buffers_locked reads counts[]
+         * would be leaked (never freed). */
+        pthread_mutex_lock(&cache->cleanup_mutex);
+        if (cache->cleaned_up || atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+            pthread_mutex_unlock(&cache->cleanup_mutex);
             free(buf);
             return;
         }
         cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
+        pthread_mutex_unlock(&cache->cleanup_mutex);
         return;
     }
 

@@ -50,7 +50,7 @@ static double window_min(const double *window, int count) {
  * Used to pass computed values from tick_swap_and_compute_stats() to state handlers.
  */
 typedef struct {
-    int sample_count;
+    uint32_t sample_count;
     double p99_ms;
     double throughput_bps;
     double sqe_ratio;
@@ -219,8 +219,9 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
         if (target == 0) target = 1;
     }
 
-    /* Scan from high to low, counting down */
-    uint32_t count = atomic_load_explicit(&hist->overflow, memory_order_relaxed);
+    /* Scan from high to low, counting down.
+     * Use uint64_t accumulator to prevent overflow at extreme IOPS. */
+    uint64_t count = atomic_load_explicit(&hist->overflow, memory_order_relaxed);
     if (count >= target) {
         /* P99 is in overflow bucket (> 10ms) */
         return (double)LATENCY_MAX_US / 1000.0;
