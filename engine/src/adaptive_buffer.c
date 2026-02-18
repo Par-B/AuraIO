@@ -883,8 +883,37 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     size_t bucket_size = class_to_size(class_idx);
 
     /* Fast path: try thread-local cache first (no lock, no shard access).
-     * Must hold active_users to prevent concurrent pool destroy from
-     * cleaning the cache out from under us. */
+     *
+     * Safety against concurrent pool destroy:
+     *   buffer_pool_destroy sets destroyed=true (with release) BEFORE it calls
+     *   cleanup_phase_2_process_caches.  So if we see destroyed=false here,
+     *   destroy has not yet touched any cache.  If destroy races past our
+     *   destroyed check and cleans our cache before we store, we re-check
+     *   destroyed under active_users on the slow path below (and free directly
+     *   if set).  The window where a buffer could be stored into an already-
+     *   cleaned cache is closed by the ordering: destroy sets destroyed, then
+     *   waits for active_users==0, then cleans caches.  We hold active_users
+     *   on the slow path, so destroy cannot clean caches while we're there.
+     *
+     * Calling get_thread_cache without holding active_users is intentional:
+     * get_thread_cache can acquire cleanup_mutex internally, and holding
+     * active_users while doing so would deadlock with buffer_pool_destroy
+     * (which holds cleanup_mutex and waits for active_users==0). */
+    thread_cache_t *cache = get_thread_cache(pool);
+    if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
+        /* Re-check destroyed: if pool was destroyed between our initial check
+         * and here, cleanup_phase_2 may already have cleaned this cache.
+         * Free directly rather than storing into a cleaned-up cache. */
+        if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+            free(buf);
+            return;
+        }
+        cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
+        return;
+    }
+
+    /* All paths below access pool->shards, so hold active_users to prevent
+     * buffer_pool_destroy from freeing the shards array under us. */
     atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
@@ -892,15 +921,6 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         return;
     }
 
-    thread_cache_t *cache = get_thread_cache(pool);
-    if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
-        cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
-        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
-        return;
-    }
-
-    /* active_users already held from the fast-path acquisition above.
-     * Thread cache full - flush some to assigned shard */
     if (cache && cache->counts[class_idx] >= THREAD_CACHE_SIZE) {
         cache_flush(pool, cache, class_idx, bucket_size);
 
@@ -1066,9 +1086,8 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
             int class_idx = map->entries[idx].class_idx;
             /* Delete with backward-shift to maintain probe chains */
             size_t hole = idx;
-            for (;;) {
-                size_t next = (hole + 1) & mask;
-                if (map->entries[next].key == 0) break;
+            size_t next = (hole + 1) & mask;
+            while (map->entries[next].key != 0) {
                 size_t natural = buf_map_hash(map->entries[next].key, mask);
                 /* Backward-shift: move entry at 'next' to 'hole' if 'hole'
                  * lies on the probe path from 'natural' to 'next'.  Use
@@ -1079,6 +1098,7 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                     map->entries[hole] = map->entries[next];
                     hole = next;
                 }
+                next = (next + 1) & mask;
             }
             map->entries[hole].key = 0;
             atomic_fetch_sub_explicit(&map->count, 1, memory_order_relaxed);

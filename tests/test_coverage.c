@@ -33,6 +33,7 @@ static int test_count = 0;
 #define RUN_TEST(name)            \
     do {                          \
         printf("  %-45s", #name); \
+        fflush(stdout);           \
         test_##name();            \
         printf(" OK\n");          \
         test_count++;             \
