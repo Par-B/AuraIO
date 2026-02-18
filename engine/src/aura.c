@@ -46,12 +46,14 @@ _Static_assert(AURA_O_DIRECT == O_DIRECT, "AURA_O_DIRECT mismatch");
 
 #define DEFAULT_QUEUE_DEPTH 1024 /**< Default ring queue depth */
 static size_t get_page_size(void) {
-    static size_t cached;
-    if (cached == 0) {
+    static _Atomic size_t cached;
+    size_t val = atomic_load_explicit(&cached, memory_order_relaxed);
+    if (val == 0) {
         long ps = sysconf(_SC_PAGESIZE);
-        cached = (ps > 0) ? (size_t)ps : 4096;
+        val = (ps > 0) ? (size_t)ps : 4096;
+        atomic_store_explicit(&cached, val, memory_order_relaxed);
     }
-    return cached;
+    return val;
 }
 #define BUFFER_ALIGNMENT get_page_size() /**< Page alignment for O_DIRECT */
 #define TICK_INTERVAL_MS 10 /**< Adaptive tick interval */
@@ -155,10 +157,10 @@ static ring_ctx_t *select_ring_cpu_local(aura_engine_t *engine) {
     /* Fallback: thread-local sticky assignment.
      * Each thread gets assigned to one ring and stays there.
      * Better than round-robin which can cause hot spots. */
-    if (cached_cpu < 0) {
+    if (cached_cpu < 0 || cached_cpu >= engine->ring_count) {
         cached_cpu = (int)((uintptr_t)pthread_self() % engine->ring_count);
     }
-    return &engine->rings[cached_cpu % engine->ring_count];
+    return &engine->rings[cached_cpu];
 }
 
 /** Spill threshold: 75% of in-flight limit (integer arithmetic). */
@@ -554,8 +556,8 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
 
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (engine->buffers_registered && engine->buffers_unreg_pending &&
-        fixed_buf_inflight_total(engine) == 0) {
+    if (atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
+        engine->buffers_unreg_pending && fixed_buf_inflight_total(engine) == 0) {
         /* No ring_lock needed: reg_lock(write) prevents new registered-buffer
          * submissions, and inflight count is zero so no completions will touch
          * the registered buffer table.  Avoiding ring_lock here prevents a
@@ -572,8 +574,8 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         engine->buffers_unreg_pending = false;
     }
 
-    if (engine->files_registered && engine->files_unreg_pending &&
-        fixed_file_inflight_total(engine) == 0) {
+    if (atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
+        engine->files_unreg_pending && fixed_file_inflight_total(engine) == 0) {
         /* Same rationale as above — no ring_lock needed. */
         for (int i = 0; i < engine->ring_count; i++) {
             io_uring_unregister_files(&engine->rings[i].ring);
@@ -1690,8 +1692,11 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             return (-1);
         }
         /* pret == 0: timeout, pret < 0 with EINTR: signal interrupted.
+         * Clear stale errno (may be EINTR) before the final poll pass
+         * so callers checking errno on return 0 don't see a stale value.
          * Do a final non-blocking poll to catch completions that arrived
          * between the interrupt/timeout and now. */
+        errno = 0;
         {
             int completed = 0;
             for (int j = 0; j < engine->ring_count; j++) {
@@ -1803,11 +1808,11 @@ int aura_drain(aura_engine_t *engine, int timeout_ms) {
         bool has_pending = false;
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
-            ring_lock(ring);
-            if (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0)
+            /* pending_count is atomic; no lock needed for an advisory read. */
+            if (atomic_load_explicit(&ring->pending_count, memory_order_acquire) > 0) {
                 has_pending = true;
-            ring_unlock(ring);
-            if (has_pending) break;
+                break;
+            }
         }
         if (!has_pending) {
             if (maybe_finalize_deferred_unregistration(engine) != 0) {
@@ -2379,22 +2384,32 @@ double aura_histogram_percentile(const aura_histogram_t *hist, double percentile
         return -1.0;
     }
 
-    uint64_t target = (uint64_t)((percentile / 100.0) * hist->total_count);
-    if (target == 0 && percentile > 0.0) {
+    /* Scan from high to low (matching the internal adaptive_hist_p99 approach)
+     * to correctly account for the overflow bucket. The target is the number
+     * of samples in the top (100 - percentile)% of the distribution. */
+    uint32_t total = hist->total_count;
+    uint64_t target = (uint64_t)(((100.0 - percentile) / 100.0) * total);
+    if (target == 0 && percentile < 100.0) {
         target = 1;
     }
 
-    uint64_t cumulative = 0;
-    for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
-        cumulative += hist->buckets[i];
-        if (cumulative >= target && cumulative > 0) {
-            /* Return the upper edge of this bucket, clamped to max_tracked_us */
-            uint64_t upper = (uint64_t)(i + 1) * (uint64_t)hist->bucket_width_us;
-            if (upper > (uint64_t)hist->max_tracked_us) upper = (uint64_t)hist->max_tracked_us;
-            return (double)upper;
+    /* Check overflow bucket first */
+    uint64_t count = hist->overflow;
+    if (count >= target) {
+        return (double)hist->max_tracked_us / 1000.0;
+    }
+
+    /* Scan buckets from high to low */
+    for (int i = AURA_HISTOGRAM_BUCKETS - 1; i >= 0; i--) {
+        count += hist->buckets[i];
+        if (count >= target) {
+            /* Return bucket midpoint in milliseconds (consistent with internal p99
+             * and with all other latency fields in the API which use ms). */
+            double bucket_mid_us = (i + 0.5) * hist->bucket_width_us;
+            return bucket_mid_us / 1000.0;
         }
     }
 
-    /* All samples in overflow — return max tracked value */
-    return (double)hist->max_tracked_us;
+    /* Bucket sum didn't reach target — likely a snapshot inconsistency */
+    return -1.0;
 }

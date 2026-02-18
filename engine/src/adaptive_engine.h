@@ -262,6 +262,12 @@ typedef struct {
 
 _Static_assert(sizeof(double) == sizeof(int64_t),
                "_Atomic double assumes 64-bit double matching int64_t width");
+#if defined(__STDC_NO_ATOMICS__)
+#    error "C11 atomics are required"
+#elif defined(ATOMIC_LLONG_LOCK_FREE)
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
+               "_Atomic double requires lock-free 64-bit atomics (unsafe on this platform)");
+#endif
 
 /* ============================================================================
  * Functions
@@ -273,9 +279,11 @@ _Static_assert(sizeof(double) == sizeof(int64_t),
  * @param ctrl            Controller to initialize
  * @param max_queue_depth Maximum in-flight limit
  * @param initial_inflight Starting in-flight limit
+ * @param min_inflight    Minimum in-flight limit (floor for AIMD backoff)
  * @return 0 on success, -1 on error
  */
-int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_inflight);
+int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_inflight,
+                  int min_inflight);
 
 /**
  * Destroy adaptive controller
@@ -366,8 +374,9 @@ void adaptive_hist_pair_init(adaptive_histogram_pair_t *pair);
 /**
  * Swap active histogram and clear the old one
  *
- * O(1) operation - just swaps the active index and clears the
- * the caller clears the now-inactive histogram with adaptive_hist_reset (atomic stores).
+ * O(1) operation - just swaps the active index.
+ * The caller is responsible for resetting the returned (now-inactive)
+ * histogram via adaptive_hist_reset().
  *
  * @param pair Histogram pair
  * @return Pointer to the histogram that was just deactivated (for reading)

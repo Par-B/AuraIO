@@ -276,6 +276,12 @@ typedef struct {
     uint32_t _reserved[4];     /**< Reserved for future use; must be zero */
 } aura_ring_stats_t;
 
+#ifdef __cplusplus
+static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size changed");
+#else
+_Static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size changed");
+#endif
+
 /** AIMD controller phase constants for aura_ring_stats_t.aimd_phase */
 #define AURA_PHASE_BASELINE 0  /**< Collecting baseline latency */
 #define AURA_PHASE_PROBING 1   /**< Increasing in-flight limit */
@@ -1000,7 +1006,7 @@ AURA_API int aura_request_op_type(const aura_request_t *req);
  * @param engine Engine handle
  * @return Pollable fd, or -1 on error (errno set to EINVAL)
  */
-AURA_API int aura_get_poll_fd(const aura_engine_t *engine);
+AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(const aura_engine_t *engine);
 
 /**
  * Process completed operations (non-blocking)
@@ -1421,8 +1427,8 @@ AURA_API bool aura_in_callback_context(void);
  *
  * @param hist       Histogram snapshot
  * @param percentile Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99)
- * @return Latency in microseconds, or -1.0 if histogram is empty or
- *         percentile is out of range
+ * @return Latency in milliseconds (consistent with p99_latency_ms in stats),
+ *         or -1.0 if histogram is empty or percentile is out of range
  */
 AURA_API double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
 

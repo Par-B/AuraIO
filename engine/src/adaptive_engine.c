@@ -68,15 +68,15 @@ typedef struct {
  * Preserves exact atomic ordering for correctness on weak-memory architectures.
  */
 static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ctrl,
-                                                       int64_t now_ns) {
+                                                       int64_t elapsed_ns) {
     tick_stats_t stats = { 0 };
     stats.efficiency_ratio = NAN; /* NAN = no data; distinct from 0.0 = no change */
 
-    /* Calculate elapsed time */
-    int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
-    stats.elapsed_ns = now_ns - start_ns;
-    /* Guard against clock going backwards (NTP step, VM migration).
-     * Clamp to 1ns to avoid division by zero or negative throughput. */
+    /* Use the elapsed_ns computed by adaptive_tick (which handles clock
+     * step-back correctly) instead of re-reading sample_start_ns here.
+     * Re-reading could produce elapsed_ns=0 after a step-back reset,
+     * which when clamped to 1ns would inflate throughput to ~10^17 bps. */
+    stats.elapsed_ns = elapsed_ns;
     if (stats.elapsed_ns <= 0) {
         stats.elapsed_ns = 1;
     }
@@ -148,15 +148,22 @@ static inline tick_stats_t tick_swap_and_compute_stats(adaptive_controller_t *ct
         (stats.sample_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES && stats.p99_ms >= 0);
     stats.latency_rising = stats.have_valid_p99 && stats.p99_ms >= stats.latency_guard_ms;
 
-    /* Calculate efficiency ratio: change in throughput per change in in-flight */
+    /* Calculate efficiency ratio: change in throughput per change in in-flight.
+     * Only compute when delta_inflight > 0 (we just probed upward).
+     * When delta_inflight < 0 (after backoff), both delta_throughput and
+     * delta_inflight are typically negative, producing a misleadingly
+     * positive ratio that would trigger a spurious aimd_increase. */
     int in_flight_limit =
         atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
     if (ctrl->prev_in_flight_limit > 0 && in_flight_limit != ctrl->prev_in_flight_limit) {
-        double delta_throughput = stats.throughput_bps - ctrl->prev_throughput_bps;
         int delta_inflight = in_flight_limit - ctrl->prev_in_flight_limit;
-        /* delta_inflight != 0 is guaranteed by the outer condition */
-        stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
         stats.delta_inflight = delta_inflight;
+        if (delta_inflight > 0) {
+            double delta_throughput = stats.throughput_bps - ctrl->prev_throughput_bps;
+            stats.efficiency_ratio = delta_throughput / (double)delta_inflight;
+        }
+        /* When delta_inflight <= 0 (backoff), leave efficiency_ratio as NAN.
+         * The PROBING handler treats NAN as "no data" and tries aimd_increase. */
     }
 
     /* Clear the old histogram for next use using atomic stores.
@@ -281,11 +288,14 @@ adaptive_histogram_t *adaptive_hist_swap(adaptive_histogram_pair_t *pair) {
  * Controller Lifecycle
  * ============================================================================ */
 
-int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_inflight) {
+int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_inflight,
+                  int min_inflight) {
     if (!ctrl || max_queue_depth < 1 || initial_inflight < 1) {
         return -1;
     }
 
+    if (min_inflight < 1) min_inflight = 4; /* Default floor */
+    if (initial_inflight < min_inflight) initial_inflight = min_inflight;
     if (initial_inflight > max_queue_depth) initial_inflight = max_queue_depth;
 
     /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
@@ -304,7 +314,7 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
 
     /* Zero all non-atomic fields */
     ctrl->max_queue_depth = max_queue_depth;
-    ctrl->min_in_flight = 4; /* Never go below 4 */
+    ctrl->min_in_flight = min_inflight;
     ctrl->baseline_p99_ms = 0.0;
     ctrl->latency_rise_threshold = 0.0;
     ctrl->max_p99_ms = 0.0;
@@ -478,6 +488,7 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
         ctrl->plateau_count++;
         if (ctrl->plateau_count >= 3) {
             ctrl->entered_via_backoff = false;
+            ctrl->spike_count = 0; /* Reset stale spike count from prior ticks */
             atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_SETTLING, memory_order_release);
             ctrl->settling_timer = 0;
         }
@@ -612,18 +623,21 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     int peek_count = atomic_load_explicit(&active_hist->total_count, memory_order_acquire);
     bool have_min_samples = (peek_count >= ADAPTIVE_LOW_IOPS_MIN_SAMPLES);
     bool have_min_time = (elapsed_ms >= ADAPTIVE_MIN_SAMPLE_WINDOW_MS);
-    bool hit_max_time = (elapsed_ms >= ADAPTIVE_MAX_SAMPLE_WINDOW_MS);
 
-    /* If we don't have enough data and haven't hit max window, accumulate more */
-    if (!have_min_samples && !have_min_time && !hit_max_time) {
+    /* If we don't have enough data and haven't hit the minimum time window,
+     * accumulate more. Note: hit_max_time (elapsed >= MAX_SAMPLE_WINDOW_MS)
+     * is subsumed by have_min_time since MAX >= MIN. */
+    if (!have_min_samples && !have_min_time) {
 #ifndef NDEBUG
         atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
 #endif
         return false; /* Skip this tick, keep accumulating */
     }
 
-    /* Swap histograms and compute statistics */
-    tick_stats_t stats = tick_swap_and_compute_stats(ctrl, now_ns);
+    /* Swap histograms and compute statistics.
+     * Pass elapsed_ns computed above so tick_swap_and_compute_stats does not
+     * re-read sample_start_ns (which was just reset on clock step-back). */
+    tick_stats_t stats = tick_swap_and_compute_stats(ctrl, elapsed_ns);
 
     /* =========== INNER LOOP: Batch Optimizer =========== */
     int batch_threshold =

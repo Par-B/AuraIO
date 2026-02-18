@@ -865,23 +865,29 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     atomic_fetch_add_explicit(&pool->total_allocated, bucket_size, memory_order_relaxed);
     atomic_fetch_add_explicit(&pool->total_buffers, 1, memory_order_relaxed);
 
-    /* Pre-fill thread cache with extra buffers to avoid future heap trips */
+    /* Pre-fill thread cache with extra buffers to avoid future heap trips.
+     * Check cleaned_up under cleanup_mutex to avoid storing into a cache
+     * that buffer_pool_destroy has already processed (would leak buffers). */
     if (cache) {
-        int prefill = 0;
-        while (prefill < THREAD_CACHE_BATCH_SIZE - 1 &&
-               cache->counts[class_idx] < THREAD_CACHE_SIZE) {
-            void *extra = NULL;
-            if (posix_memalign(&extra, pool->alignment, bucket_size) != 0) {
-                break;
+        pthread_mutex_lock(&cache->cleanup_mutex);
+        if (!cache->cleaned_up && !atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
+            int prefill = 0;
+            while (prefill < THREAD_CACHE_BATCH_SIZE - 1 &&
+                   cache->counts[class_idx] < THREAD_CACHE_SIZE) {
+                void *extra = NULL;
+                if (posix_memalign(&extra, pool->alignment, bucket_size) != 0) {
+                    break;
+                }
+                cache->buffers[class_idx][cache->counts[class_idx]++] = extra;
+                prefill++;
             }
-            cache->buffers[class_idx][cache->counts[class_idx]++] = extra;
-            prefill++;
+            if (prefill > 0) {
+                atomic_fetch_add_explicit(&pool->total_allocated, bucket_size * prefill,
+                                          memory_order_relaxed);
+                atomic_fetch_add_explicit(&pool->total_buffers, prefill, memory_order_relaxed);
+            }
         }
-        if (prefill > 0) {
-            atomic_fetch_add_explicit(&pool->total_allocated, bucket_size * prefill,
-                                      memory_order_relaxed);
-            atomic_fetch_add_explicit(&pool->total_buffers, prefill, memory_order_relaxed);
-        }
+        pthread_mutex_unlock(&cache->cleanup_mutex);
     }
 
     return buf;

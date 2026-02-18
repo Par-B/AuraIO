@@ -191,7 +191,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     if (initial_inflight < 4) initial_inflight = 4;
     if (initial_inflight > queue_depth) initial_inflight = queue_depth;
 
-    if (adaptive_init(&ctx->adaptive, queue_depth, initial_inflight) != 0) {
+    if (adaptive_init(&ctx->adaptive, queue_depth, initial_inflight, 4) != 0) {
         goto cleanup_free_stack;
     }
 
@@ -314,6 +314,16 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
         return;
     }
 
+    /* Guard against returning an index that is still marked pending.
+     * If pending is true, this slot was already returned or was never
+     * properly completed — returning it again would alias requests. */
+    if (atomic_load_explicit(&ctx->requests[op_idx].pending, memory_order_relaxed)) {
+        aura_log(AURA_LOG_ERR,
+                 "BUG: ring_put_request called on pending request (op_idx=%d, ring=%p)", op_idx,
+                 (void *)ctx);
+        return;
+    }
+
     ctx->free_request_stack[ctx->free_request_count++] = op_idx;
 }
 
@@ -420,6 +430,12 @@ int ring_submit_writev(ring_ctx_t *ctx, aura_request_t *req) {
 int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *target) {
     if (!target) {
         errno = EINVAL;
+        return (-1);
+    }
+    /* Validate that the target is still pending. If it has already completed
+     * (and its slot potentially reused), the cancel would hit the wrong op. */
+    if (!atomic_load_explicit(&target->pending, memory_order_acquire)) {
+        errno = EALREADY;
         return (-1);
     }
     struct io_uring_sqe *sqe = submit_get_sqe(ctx, req);

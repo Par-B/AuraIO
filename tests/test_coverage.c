@@ -270,7 +270,7 @@ TEST(log_emit_public_truncates) {
 
 TEST(adaptive_inline_getters_direct) {
     adaptive_controller_t ctrl;
-    int rc = adaptive_init(&ctrl, 128, 16);
+    int rc = adaptive_init(&ctrl, 128, 16, 4);
     assert(rc == 0);
 
     assert(adaptive_get_inflight_limit(&ctrl) == 16);

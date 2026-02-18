@@ -84,7 +84,7 @@ TEST(histogram_distribution) {
 TEST(controller_init) {
     adaptive_controller_t ctrl;
 
-    int ret = adaptive_init(&ctrl, 256, 32);
+    int ret = adaptive_init(&ctrl, 256, 32, 4);
     assert(ret == 0);
     assert(ctrl.max_queue_depth == 256);
     assert(ctrl.current_in_flight_limit == 32);
@@ -97,18 +97,18 @@ TEST(controller_init_invalid) {
     adaptive_controller_t ctrl;
 
     /* NULL controller */
-    assert(adaptive_init(NULL, 256, 32) == -1);
+    assert(adaptive_init(NULL, 256, 32, 4) == -1);
 
     /* Invalid queue depth */
-    assert(adaptive_init(&ctrl, 0, 32) == -1);
+    assert(adaptive_init(&ctrl, 0, 32, 4) == -1);
 
     /* Invalid initial inflight */
-    assert(adaptive_init(&ctrl, 256, 0) == -1);
+    assert(adaptive_init(&ctrl, 256, 0, 4) == -1);
 }
 
 TEST(controller_getters) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     assert(adaptive_get_inflight_limit(&ctrl) == 32);
     assert(adaptive_get_batch_threshold(&ctrl) == ADAPTIVE_MIN_BATCH);
@@ -127,7 +127,7 @@ TEST(controller_phase_names) {
 
 TEST(controller_record_completion) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Record some completions */
     for (int i = 0; i < 100; i++) {
@@ -143,7 +143,7 @@ TEST(controller_record_completion) {
 
 TEST(controller_record_submit) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     adaptive_record_submit(&ctrl, 8);
     adaptive_record_submit(&ctrl, 8);
@@ -156,7 +156,7 @@ TEST(controller_record_submit) {
 
 TEST(controller_tick_baseline) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     assert(ctrl.phase == ADAPTIVE_PHASE_BASELINE);
 
@@ -177,7 +177,7 @@ TEST(controller_tick_baseline) {
 
 TEST(controller_min_inflight) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Force backoff repeatedly */
     ctrl.phase = ADAPTIVE_PHASE_BACKOFF;
@@ -193,7 +193,7 @@ TEST(controller_min_inflight) {
 
 TEST(controller_probing_additive_increase) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Ensure adaptive_tick enters PROBING increase path:
      * - enough samples (>= LOW_IOPS_MIN_SAMPLES)
@@ -221,7 +221,7 @@ TEST(controller_probing_additive_increase) {
 
 TEST(low_iops_skips_with_few_samples) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Record only a few completions (< 20) */
     for (int i = 0; i < 5; i++) {
@@ -244,7 +244,7 @@ TEST(low_iops_skips_with_few_samples) {
 
 TEST(low_iops_proceeds_with_min_samples) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Record exactly 20 completions (minimum threshold) */
     for (int i = 0; i < ADAPTIVE_LOW_IOPS_MIN_SAMPLES; i++) {
@@ -263,7 +263,7 @@ TEST(low_iops_proceeds_with_min_samples) {
 
 TEST(low_iops_proceeds_with_min_time) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* Record only a few completions (< 20) */
     for (int i = 0; i < 5; i++) {
@@ -285,7 +285,7 @@ TEST(low_iops_proceeds_with_min_time) {
 
 TEST(low_iops_p99_validity_threshold) {
     adaptive_controller_t ctrl;
-    adaptive_init(&ctrl, 256, 32);
+    adaptive_init(&ctrl, 256, 32, 4);
 
     /* With < 20 samples, latency_rising should NOT trigger backoff */
     for (int i = 0; i < 10; i++) {
