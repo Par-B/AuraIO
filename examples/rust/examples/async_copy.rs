@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Async file copy example using futures
 //!
 //! Demonstrates AuraIO's async/await support for file operations.

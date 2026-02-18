@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file options.hpp
  * @brief Options builder class for AuraIO C++ bindings

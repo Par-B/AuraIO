@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrates cancelling an in-flight I/O operation
 //!
 //! Shows how to use engine.cancel() to abort a pending read.

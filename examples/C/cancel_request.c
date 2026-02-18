@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file cancel_request.c
  * @brief Demonstrates cancelling an in-flight I/O operation

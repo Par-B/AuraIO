@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file job_parser.c
  * @brief FIO-compatible job file and CLI parser for BFFIO

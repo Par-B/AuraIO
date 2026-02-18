@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrate AuraIO custom configuration options (Rust version)
 //!
 //! Shows how to tune the engine for different workload characteristics:

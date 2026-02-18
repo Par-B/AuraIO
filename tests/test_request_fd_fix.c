@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file test_request_fd_fix.c
  * @brief Test that aura_request_fd() returns original fd, not internal index

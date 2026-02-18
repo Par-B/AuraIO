@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Async/await support for AuraIO
 //!
 //! This module provides Future-based async I/O operations that integrate with

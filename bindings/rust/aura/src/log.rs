@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Logging interface for AuraIO
 //!
 //! Provides type-safe wrappers around the C log handler API.

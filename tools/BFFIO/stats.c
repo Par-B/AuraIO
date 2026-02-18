@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file stats.c
  * @brief Stats collection and result computation for BFFIO

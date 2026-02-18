@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Async file copy example
 //!
 //! Demonstrates copying a file using AuraIO's async I/O.

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file test_otel.c
  * @brief Unit tests for OpenTelemetry OTLP/JSON metrics exporter

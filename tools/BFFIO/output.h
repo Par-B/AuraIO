@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 #ifndef BFFIO_OUTPUT_H
 #define BFFIO_OUTPUT_H
 

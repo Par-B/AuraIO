@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 #define _GNU_SOURCE
 #include "aura.h"
 #include <errno.h>

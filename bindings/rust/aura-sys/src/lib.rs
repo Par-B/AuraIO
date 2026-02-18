@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Raw FFI bindings for AuraIO
 //!
 //! This crate provides unsafe, low-level bindings to the AuraIO C library.

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file vectored_io.c
  * @brief Demonstrate vectored (scatter-gather) I/O operations

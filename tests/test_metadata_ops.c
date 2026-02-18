@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file test_metadata_ops.c
  * @brief Tests for lifecycle metadata operations (openat, close, statx,

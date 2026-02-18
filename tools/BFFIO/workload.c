@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file workload.c
  * @brief Core I/O loop, file management, and worker threads for BFFIO

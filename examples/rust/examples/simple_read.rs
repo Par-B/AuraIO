@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Simple async file read example
 //!
 //! Demonstrates basic usage of the AuraIO library to read a file.

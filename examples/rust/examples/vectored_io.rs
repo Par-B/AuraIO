@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrate vectored (scatter-gather) I/O operations (Rust version)
 //!
 //! Shows how to use readv() and writev() for efficient I/O with multiple

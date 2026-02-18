@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file auracp.c
  * @brief auracp - async pipelined file copy powered by AuraIO

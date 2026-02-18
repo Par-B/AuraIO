@@ -3,7 +3,7 @@ name = "aura"
 version = "0.1.0"
 edition = "2021"
 description = "Safe Rust bindings for AuraIO - self-tuning async I/O library"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 keywords = ["io_uring", "async", "io", "performance"]
 categories = ["asynchronous", "filesystem"]
 

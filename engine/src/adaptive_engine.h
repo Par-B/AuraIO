@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file adaptive_engine.h
  * @brief AIMD congestion control for I/O tuning

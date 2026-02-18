@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file file_copy.c
  * @brief Synchronous file copy using AuraIO async I/O

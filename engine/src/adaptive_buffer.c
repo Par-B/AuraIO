@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file adaptive_buffer.c
  * @brief Aligned buffer pool implementation with size-class buckets

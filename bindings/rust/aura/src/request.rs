@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Request handle for pending I/O operations
 
 use std::os::unix::io::RawFd;

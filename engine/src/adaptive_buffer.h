@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file adaptive_buffer.h
  * @brief Aligned buffer pool for O_DIRECT I/O

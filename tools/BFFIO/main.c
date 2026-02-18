@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file main.c
  * @brief BFFIO - Better Faster FIO (powered by Aura)

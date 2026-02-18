@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrates O_DIRECT vs buffered I/O with AuraIO
 //!
 //! Shows that AuraIO is agnostic to I/O mode - it works with both

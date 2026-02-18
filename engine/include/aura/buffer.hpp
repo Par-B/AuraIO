@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file buffer.hpp
  * @brief Buffer and BufferRef classes for AuraIO C++ bindings

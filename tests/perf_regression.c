@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file perf_regression.c
  * @brief Performance regression test: raw io_uring vs AuraIO overhead

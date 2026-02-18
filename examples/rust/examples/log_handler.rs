@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrate AuraIO custom log handler (Rust)
 //!
 //! Shows how to install a custom log callback that formats library

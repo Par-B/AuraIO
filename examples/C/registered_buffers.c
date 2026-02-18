@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file registered_buffers.c
  * @brief Demonstrate registered (fixed) buffers for zero-copy I/O

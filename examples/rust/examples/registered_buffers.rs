@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Demonstrate registered (fixed) buffers for zero-copy I/O (Rust version)
 //!
 //! Pre-registering buffers with the kernel eliminates per-operation mapping

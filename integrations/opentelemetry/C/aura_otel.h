@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file aura_otel.h
  * @brief OpenTelemetry OTLP/JSON metrics formatter for AuraIO

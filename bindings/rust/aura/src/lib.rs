@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! Safe Rust bindings for AuraIO
 //!
 //! AuraIO is a self-tuning async I/O library for Linux built on io_uring.

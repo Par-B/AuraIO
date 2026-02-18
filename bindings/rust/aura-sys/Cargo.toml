@@ -3,7 +3,7 @@ name = "aura-sys"
 version = "0.1.0"
 edition = "2021"
 description = "Raw FFI bindings for AuraIO async I/O library"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 keywords = ["io_uring", "async", "ffi"]
 categories = ["external-ffi-bindings", "asynchronous"]
 

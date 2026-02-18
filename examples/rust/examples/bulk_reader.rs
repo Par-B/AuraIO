@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 //! High-throughput bulk file reader example
 //!
 //! Demonstrates reading many files concurrently with adaptive tuning.

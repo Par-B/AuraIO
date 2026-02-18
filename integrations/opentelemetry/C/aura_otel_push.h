@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 AuraIO Contributors
+
+
 /**
  * @file aura_otel_push.h
  * @brief HTTP push helper for OTLP JSON payloads
