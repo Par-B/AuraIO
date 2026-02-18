@@ -255,8 +255,8 @@ void ring_destroy(ring_ctx_t *ctx) {
     ctx->requests = NULL;
 
     if (ctx->ring_initialized) {
-        io_uring_queue_exit(&ctx->ring);
         ctx->ring_initialized = false;
+        io_uring_queue_exit(&ctx->ring);
     }
 
     /* Destroy per-ring locks */
@@ -1008,7 +1008,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
 
         if (ret < 0) {
             if (ret == -ETIME || ret == -EAGAIN) {
-                return (0);
+                return ring_drain_cqes(ctx);
             }
             if (ret == -EINTR) {
                 /* Signal interrupted the wait — not an error.

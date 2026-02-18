@@ -209,10 +209,21 @@ static void cleanup_cache_buffers_locked(buffer_pool_t *pool, thread_cache_t *ca
     } else {
         /* Free buffers directly (pool being destroyed or NULL) */
         for (int class_idx = 0; class_idx < BUFFER_SIZE_CLASSES; class_idx++) {
-            for (int i = 0; i < cache->counts[class_idx]; i++) {
-                free(cache->buffers[class_idx][i]);
+            int count = cache->counts[class_idx];
+            if (count > 0) {
+                size_t bucket_size = class_to_size(class_idx);
+                for (int i = 0; i < count; i++) {
+                    free(cache->buffers[class_idx][i]);
+                }
+                /* Update stats counters so aura_get_buffer_stats() stays accurate.
+                 * pool may be NULL if destroy already completed. */
+                if (pool) {
+                    atomic_fetch_sub_explicit(&pool->total_allocated, bucket_size * count,
+                                              memory_order_relaxed);
+                    atomic_fetch_sub_explicit(&pool->total_buffers, count, memory_order_relaxed);
+                }
+                cache->counts[class_idx] = 0;
             }
-            cache->counts[class_idx] = 0;
         }
     }
 
@@ -871,15 +882,9 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     int class_idx = size_to_class(size);
     size_t bucket_size = class_to_size(class_idx);
 
-    /* Fast path: try thread-local cache first (no lock, no shard access) */
-    thread_cache_t *cache = get_thread_cache(pool);
-    if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
-        cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
-        return;
-    }
-
-    /* All paths below access pool->shards (flush or direct insert), so we
-     * must hold active_users — same protocol as buffer_pool_alloc. */
+    /* Fast path: try thread-local cache first (no lock, no shard access).
+     * Must hold active_users to prevent concurrent pool destroy from
+     * cleaning the cache out from under us. */
     atomic_fetch_add_explicit(&pool->active_users, 1, memory_order_acq_rel);
     if (atomic_load_explicit(&pool->destroyed, memory_order_acquire)) {
         atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
@@ -887,7 +892,15 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
         return;
     }
 
-    /* Thread cache full - flush some to assigned shard */
+    thread_cache_t *cache = get_thread_cache(pool);
+    if (cache && cache->counts[class_idx] < THREAD_CACHE_SIZE) {
+        cache->buffers[class_idx][cache->counts[class_idx]++] = buf;
+        atomic_fetch_sub_explicit(&pool->active_users, 1, memory_order_release);
+        return;
+    }
+
+    /* active_users already held from the fast-path acquisition above.
+     * Thread cache full - flush some to assigned shard */
     if (cache && cache->counts[class_idx] >= THREAD_CACHE_SIZE) {
         cache_flush(pool, cache, class_idx, bucket_size);
 
@@ -1062,12 +1075,9 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                  * circular distance to handle wrap-around correctly. */
                 size_t dist_natural_to_next = (next - natural) & mask;
                 size_t dist_natural_to_hole = (hole - natural) & mask;
-                bool displaced = dist_natural_to_hole < dist_natural_to_next;
-                if (displaced) {
+                if (dist_natural_to_hole < dist_natural_to_next) {
                     map->entries[hole] = map->entries[next];
                     hole = next;
-                } else {
-                    break;
                 }
             }
             map->entries[hole].key = 0;

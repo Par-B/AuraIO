@@ -241,9 +241,9 @@ typedef struct {
     double current_throughput_bps; /**< Current throughput (bytes/sec) */
     double p99_latency_ms;         /**< 99th percentile latency (ms) */
     int current_in_flight;         /**< Current in-flight operations */
-    int optimal_in_flight;         /**< Tuned optimal in-flight limit */
+    int optimal_in_flight;         /**< Tuned optimal in-flight limit (sum across all rings) */
     int peak_in_flight;            /**< Observed peak in-flight across all rings */
-    int optimal_batch_size;        /**< Tuned optimal batch size */
+    int optimal_batch_size;        /**< Tuned optimal batch size (per-ring average) */
     uint64_t adaptive_spills;      /**< ADAPTIVE mode: times a submission spilled to
                                       another ring */
     uint32_t _reserved[4];         /**< Reserved for future use; must be zero */
@@ -809,8 +809,9 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, 
 /**
  * Submit an asynchronous ftruncate operation.
  *
- * Truncates a file to the specified length.  Requires kernel 6.9+;
- * on older kernels, the callback receives -ENOSYS.
+ * Truncates a file to the specified length.  Requires kernel 6.9+ and
+ * liburing >= 2.7.  If liburing lacks support, returns NULL with errno=ENOSYS.
+ * If the kernel rejects the SQE, the callback receives -ENOSYS.
  * Thread-safe: may be called concurrently from multiple threads.
  *
  * @param engine    Engine handle
@@ -916,9 +917,10 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_writev(aura_engine_t *engine, int
  *               engine is undefined behavior.
  * @return 0 if cancellation was submitted, -1 on error (errno set):
  *         - EINVAL: invalid engine or request handle
- *         - EALREADY: a cancel was already submitted for this request
+ *         - EALREADY: request has already completed
  *         - ESHUTDOWN: engine is shutting down
  *         - ENOMEM: no request slots available for the cancel SQE
+ *         - EBUSY: submission queue is full
  *         Note: 0 does not guarantee the operation will be cancelled.
  *         If the operation completed before the cancel reaches the kernel,
  *         the original completion callback fires normally (not with -ECANCELED).
@@ -1242,11 +1244,13 @@ typedef enum {
  * completion callback, it automatically degrades to the deferred
  * (non-blocking) path — equivalent to aura_request_unregister().
  *
- * Thread-safe: safe to call from any thread.
+ * Thread-safe: safe to call from any thread, but must NOT be called
+ * concurrently with aura_poll/aura_wait/aura_run on the same engine
+ * (it calls aura_wait internally to drain in-flight operations).
  *
  * @param engine Engine handle
  * @param type   Resource type (AURA_REG_BUFFERS or AURA_REG_FILES)
- * @return 0 on success, -1 on error (errno set to EINVAL)
+ * @return 0 on success, -1 on error (errno set to EINVAL, ETIMEDOUT)
  */
 AURA_API int aura_unregister(aura_engine_t *engine, aura_reg_type_t type);
 

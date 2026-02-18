@@ -491,22 +491,30 @@ static inline bool handle_settling_phase(adaptive_controller_t *ctrl, const tick
 static inline bool handle_steady_phase(adaptive_controller_t *ctrl, const tick_stats_t *stats) {
     ctrl->steady_count++;
 
-    /* Check for latency spike */
+    /* Check for latency spike — require 2 consecutive spikes before BACKOFF,
+     * consistent with PROBING and CONVERGED phases. A single noisy P99 tick
+     * should not trigger a 20% throughput cut. */
     if (stats->latency_rising) {
-        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
-        ctrl->steady_count = 0;
-    }
-    /* Re-probe after backoff: the transient spike may have passed, so
-     * try increasing in-flight again rather than staying at a reduced level. */
-    else if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
-        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
-        ctrl->entered_via_backoff = false;
-        ctrl->plateau_count = 0;
+        ctrl->spike_count++;
+        if (ctrl->spike_count >= 2) {
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BACKOFF, memory_order_release);
+            ctrl->steady_count = 0;
+            ctrl->spike_count = 0;
+        }
+    } else {
         ctrl->spike_count = 0;
-    }
-    /* Check for sustained steady state (only from plateau, not backoff) */
-    else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
-        atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
+        /* Re-probe after backoff: the transient spike may have passed, so
+         * try increasing in-flight again rather than staying at a reduced level. */
+        if (ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_REPROBE_INTERVAL) {
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PROBING, memory_order_release);
+            ctrl->entered_via_backoff = false;
+            ctrl->plateau_count = 0;
+            ctrl->spike_count = 0;
+        }
+        /* Check for sustained steady state (only from plateau, not backoff) */
+        else if (!ctrl->entered_via_backoff && ctrl->steady_count >= ADAPTIVE_STEADY_THRESHOLD) {
+            atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_CONVERGED, memory_order_release);
+        }
     }
 
     return false; /* No params changed */
@@ -660,10 +668,12 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     }
     params_changed = params_changed || state_changed_params;
 
-    /* Reset sample start for next period.
+    /* Reset sample start for next period.  Use a fresh timestamp so the next
+     * period's elapsed_ns does not include the processing time of this tick
+     * (histogram scan, state machine, etc.), which would inflate throughput.
      * submit_calls, sqes_submitted, sample_bytes, and histogram are already reset
      * by tick_swap_and_compute_stats(). */
-    atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
+    atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
 
 #ifndef NDEBUG
     atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);

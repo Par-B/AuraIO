@@ -2253,7 +2253,8 @@ int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size
     tmp.current_in_flight = total_in_flight;
     tmp.peak_in_flight = total_peak_in_flight;
     tmp.optimal_in_flight = total_optimal_inflight;
-    /* Guard against division by zero if no rings are active */
+    /* Per-ring average, consistent with optimal_in_flight being a total.
+     * Guard against division by zero if no rings are active. */
     tmp.optimal_batch_size = engine->ring_count > 0 ? total_batch_size / engine->ring_count : 0;
     tmp.current_throughput_bps = total_throughput;
     tmp.p99_latency_ms = max_p99;
