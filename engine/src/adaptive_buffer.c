@@ -1126,7 +1126,7 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                  * circular distance to handle wrap-around correctly. */
                 size_t dist_natural_to_next = (next - natural) & mask;
                 size_t dist_natural_to_hole = (hole - natural) & mask;
-                if (dist_natural_to_hole < dist_natural_to_next) {
+                if (dist_natural_to_hole <= dist_natural_to_next) {
                     map->entries[hole] = map->entries[next];
                     hole = next;
                 }

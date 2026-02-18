@@ -456,7 +456,16 @@ static inline bool handle_probing_phase(adaptive_controller_t *ctrl, const tick_
                               ? stats->throughput_bps * ADAPTIVE_ER_EPSILON_RATIO /
                                     fabs((double)stats->delta_inflight)
                               : 0.0;
-    if (isnan(stats->efficiency_ratio) || stats->efficiency_ratio > er_threshold) {
+    if (isnan(stats->efficiency_ratio)) {
+        /* NaN means no change in in-flight limit (e.g., already at max).
+         * Try to increase; if we can't, count it as a plateau. */
+        if (aimd_increase(ctrl)) {
+            params_changed = true;
+            ctrl->plateau_count = 0;
+        } else {
+            ctrl->plateau_count++;
+        }
+    } else if (stats->efficiency_ratio > er_threshold) {
         /* Still improving - increase */
         params_changed = aimd_increase(ctrl);
         ctrl->plateau_count = 0;
