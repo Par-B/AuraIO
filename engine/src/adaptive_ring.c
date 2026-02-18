@@ -756,10 +756,20 @@ int ring_flush(ring_ctx_t *ctx) {
          * CQEs.  Do NOT correct pending_count here — doing so would cause
          * a double-decrement when those CQEs arrive via ring_retire_batch. */
     }
-    /* Subtract only the submitted count atomically so that concurrent
-     * increments from other threads (via submit functions) are not lost. */
-    atomic_fetch_sub_explicit(&ctx->queued_sqes, submitted > 0 ? submitted : 0,
-                              memory_order_relaxed);
+    /* Subtract the submitted count atomically.  Use a CAS loop to clamp:
+     * io_uring_submit may flush SQEs left over from a prior partial submit,
+     * returning more than our queued_sqes count.  Without clamping, the
+     * counter could go negative and break ring_should_flush. */
+    if (submitted > 0) {
+        int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
+        for (;;) {
+            int sub = submitted < old ? submitted : old;
+            int desired = old - sub;
+            if (atomic_compare_exchange_weak_explicit(&ctx->queued_sqes, &old, desired,
+                                                      memory_order_relaxed, memory_order_relaxed))
+                break;
+        }
+    }
 
     return submitted;
 }
@@ -1023,8 +1033,8 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
 
     /* The blocking wait succeeded (ret >= 0) but drain found nothing —
      * another thread consumed the CQE between our unlock and drain.
-     * Return 1 so the caller doesn't re-block unnecessarily. */
-    if (drained == 0) return 1;
+     * Return 0: no completions were actually processed by this call. */
+    if (drained == 0) return 0;
 
     return drained;
 }
