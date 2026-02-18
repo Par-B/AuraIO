@@ -581,7 +581,8 @@ static int calculate_shard_count(void) {
 }
 
 int buffer_pool_init(buffer_pool_t *pool, size_t alignment) {
-    if (!pool || alignment == 0) {
+    if (!pool || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+        alignment < sizeof(void *)) {
         errno = EINVAL;
         return -1;
     }
