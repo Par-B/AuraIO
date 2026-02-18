@@ -851,13 +851,16 @@ static int parse_args(int argc, char **argv, config_t *config) {
         case 'd':
             config->use_direct = true;
             break;
-        case 'p':
-            config->pipeline_depth = atoi(optarg);
-            if (config->pipeline_depth < 1 || config->pipeline_depth > MAX_PIPELINE) {
+        case 'p': {
+            char *end;
+            long val = strtol(optarg, &end, 10);
+            if (*end != '\0' || val < 1 || val > MAX_PIPELINE) {
                 fprintf(stderr, "auracp: pipeline must be 1-%d\n", MAX_PIPELINE);
                 return -1;
             }
+            config->pipeline_depth = (int)val;
             break;
+        }
         case 'q':
             config->quiet = true;
             config->no_progress = true;

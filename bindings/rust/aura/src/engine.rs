@@ -506,6 +506,8 @@ impl Engine {
     ///
     /// Opens a file relative to a directory fd. The callback receives
     /// `Ok(fd)` with the new file descriptor on success, or `Err(error)` on failure.
+    /// The `pathname` is copied into the io_uring SQE synchronously during
+    /// submission, so it only needs to remain valid for the duration of this call.
     ///
     /// # Arguments
     ///
@@ -940,13 +942,13 @@ impl Engine {
     /// all subsequent submissions fail with `ESHUTDOWN`. Use this to distinguish
     /// a permanently broken engine from transient `EAGAIN`.
     ///
-    /// Returns `Ok(0)` if healthy, `Ok(errno)` if fatally broken.
-    pub fn get_fatal_error(&self) -> Result<i32> {
+    /// Returns `None` if healthy, `Some(io::Error)` if fatally broken.
+    pub fn get_fatal_error(&self) -> Option<io::Error> {
         let ret = unsafe { aura_sys::aura_get_fatal_error(self.inner.raw()) };
-        if ret >= 0 {
-            Ok(ret)
+        if ret > 0 {
+            Some(io::Error::from_raw_os_error(ret))
         } else {
-            Err(Error::Io(io::Error::last_os_error()))
+            None
         }
     }
 }

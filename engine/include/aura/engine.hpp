@@ -464,6 +464,7 @@ class Engine {
      * @param fd File descriptor
      * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
+    [[nodiscard("must be immediately co_await-ed")]]
     inline FsyncAwaitable async_fdatasync(int fd);
 
     // =========================================================================
@@ -772,9 +773,11 @@ class Engine {
      * Get buffer pool statistics
      * @return BufferStats snapshot
      */
-    [[nodiscard]] BufferStats get_buffer_stats() const noexcept {
+    [[nodiscard]] BufferStats get_buffer_stats() const {
         BufferStats bs;
-        aura_get_buffer_stats(handle_, &bs.stats_);
+        if (aura_get_buffer_stats(handle_, &bs.stats_) != 0) {
+            throw Error(errno, "aura_get_buffer_stats");
+        }
         return bs;
     }
 
