@@ -24,6 +24,12 @@ make install   # Install to PREFIX=/usr/local (supports DESTDIR)
 cd tests && make test_ring && ./test_ring
 ```
 
+**Rust bindings** (on Linux or via `orb -m linux bash -c`):
+```bash
+cd bindings/rust && cargo build          # Build bindings
+cd bindings/rust && cargo test           # Run Rust tests
+```
+
 ## Codebase Overview
 
 **Stack**: C11 engine library + C++20 bindings + Rust bindings, io_uring via liburing
@@ -33,8 +39,9 @@ cd tests && make test_ring && ./test_ring
 - `engine/include/aura.h` - Public C API
 - `engine/include/aura.hpp` - C++ bindings with RAII, coroutines, and concepts
 - `bindings/rust/` - Rust bindings (aura-sys FFI + safe aura crate with async support)
-- `integrations/` - External system integrations (Prometheus, OpenTelemetry) with C/C++/Rust examples
+- `integrations/` - External system integrations (Prometheus, OpenTelemetry, syslog) with C/C++/Rust examples
 - `tools/BFFIO/` - FIO-compatible benchmark with AIMD auto-tuning
+- `tools/auracp/` / `tools/auracp_cpp/` - File copy utilities (C and C++ versions)
 - `examples/` - C, C++, and Rust examples
 - `tests/` - Unit tests, stress tests, benchmarks, and analysis scripts
 
