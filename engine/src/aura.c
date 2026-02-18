@@ -1332,27 +1332,10 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
     ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     if (ring_submit_ftruncate(ctx.ring, ctx.req) != 0) {
-        /* If liburing doesn't support ftruncate (ENOSYS), invoke callback and abort.
-         * We must abort (not end) to return the request slot to the pool, since
-         * no SQE was submitted and the request will never complete via CQ. */
-        if (errno == ENOSYS) {
-            /* Clear req->pending so aura_cancel() won't try to cancel a
-             * request that was never submitted.  Release ring lock before
-             * invoking the callback (don't hold locks during user callbacks).
-             * Return the slot to the pool AFTER the callback to prevent
-             * use-after-free (a concurrent submission could reclaim the slot
-             * immediately after ring_put_request). */
-            atomic_store_explicit(&ctx.req->pending, false, memory_order_release);
-            ring_unlock(ctx.ring);
-            resolve_file_end(&file_guard);
-            if (callback) {
-                callback(ctx.req, -ENOSYS, user_data);
-            }
-            ring_lock(ctx.ring);
-            ring_put_request(ctx.ring, ctx.op_idx);
-            ring_unlock(ctx.ring);
-            return NULL;
-        }
+        /* ENOSYS means the kernel (or liburing) doesn't support ftruncate.
+         * Treat it like any other submission failure: abort and return NULL
+         * with errno=ENOSYS.  Do NOT invoke the callback here — the API
+         * contract is that NULL return means the callback will never fire. */
         submit_abort(&ctx);
         resolve_file_end(&file_guard);
         return NULL;
@@ -1603,7 +1586,8 @@ int aura_get_poll_fd(const aura_engine_t *engine) {
 
 int aura_poll(aura_engine_t *engine) {
     if (!engine) {
-        return (0);
+        errno = EINVAL;
+        return (-1);
     }
 
     bool fatal_latched = (get_fatal_submit_errno(engine) != 0);
@@ -1798,8 +1782,12 @@ void aura_run(aura_engine_t *engine) {
         return;
     }
 
-    atomic_store(&engine->running, true);
+    /* Clear stop_requested BEFORE setting running, so a concurrent
+     * aura_stop() that sees running=true will store stop_requested=true
+     * after our clear.  The reverse order had a race: aura_stop() could
+     * set stop_requested between our running=true and the clear. */
     atomic_store(&engine->stop_requested, false);
+    atomic_store_explicit(&engine->running, true, memory_order_release);
 
     int drain_iterations = 0;
     for (;;) {
@@ -2302,6 +2290,7 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
     }
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(stats, 0, stats_size < sizeof(*stats) ? stats_size : sizeof(*stats));
+        errno = EINVAL;
         return -1;
     }
 
@@ -2341,6 +2330,7 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
     }
     if (ring_idx < 0 || ring_idx >= engine->ring_count) {
         memset(hist, 0, hist_size < sizeof(*hist) ? hist_size : sizeof(*hist));
+        errno = EINVAL;
         return -1;
     }
 
@@ -2370,7 +2360,10 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
 }
 
 int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats) {
-    if (!engine || !stats) return -1;
+    if (!engine || !stats) {
+        errno = EINVAL;
+        return -1;
+    }
 
     memset(stats, 0, sizeof(*stats));
 
