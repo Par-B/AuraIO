@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <time.h>
 #include <pthread.h>
+#include <math.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -145,8 +146,8 @@ static double lat_percentile(const lat_hist_t *h, double pct) {
         cumul += h->buckets[i];
         if (cumul >= target) return (double)(i + 1) * LAT_BUCKET_US;
     }
-    /* Target falls in the overflow bucket — return ceiling as lower bound */
-    return (double)(LAT_BUCKETS + 1) * LAT_BUCKET_US;
+    /* Target falls in the overflow bucket — true value is unknown */
+    return NAN;
 }
 
 static double lat_avg(const lat_hist_t *h) {
@@ -688,7 +689,8 @@ static void fmt_comma(char *buf, size_t bufsz, int64_t val) {
 }
 
 static void fmt_lat(char *buf, size_t bufsz, double us) {
-    snprintf(buf, bufsz, "%.2f ms", us / 1000.0);
+    if (isnan(us)) snprintf(buf, bufsz, ">%.0f ms", (double)LAT_BUCKETS * LAT_BUCKET_US / 1000.0);
+    else snprintf(buf, bufsz, "%.2f ms", us / 1000.0);
 }
 
 /* Bandwidth in base-1000 MB/s (fio convention); IO sizes in binary KiB/MiB */
@@ -758,7 +760,10 @@ static void sigint_handler(int sig) {
 }
 
 static int create_test_file(const char *path, off_t size) {
-    /* Use O_DIRECT to avoid polluting the page cache with GiBs of write data */
+    /* Write the file sequentially rather than using fallocate — this mimics
+     * real application behavior (logs, backups, data ingest) and exercises
+     * the filesystem allocator the way actual workloads do. O_DIRECT avoids
+     * polluting the page cache with GiBs of setup data. */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0600);
     if (fd < 0) {
         /* Fall back to buffered if O_DIRECT not supported */
