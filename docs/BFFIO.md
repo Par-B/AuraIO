@@ -186,11 +186,11 @@ test: (g=0): rw=randread, bs=(R) 4096B, ioengine=AuraIO, direct=1
 
 Matches the FIO 3.36 JSON structure (`jobs[].read/write` with `lat_ns`, percentiles, BW/IOPS samples). Compatible with `fio-plot`, `jq`, and any tool that parses FIO JSON.
 
-Added `"AuraIO"` section per job:
+Added `"Aura"` section per job:
 
 ```json
 {
-  "AuraIO": {
+  "Aura": {
     "final_depth": 64,
     "phase": "CONVERGED",
     "p99_ms": 0.08,
@@ -209,7 +209,7 @@ make BFFIO-test
 cd tools/BFFIO && ./test_BFFIO.sh [--quick]
 ```
 
-Runs 17 test cases covering: basic I/O patterns (randread, randwrite, seqread, seqwrite, mixed), JSON output validation, job file parsing, multi-job files, multi-thread with group_reporting, ramp time, size-based mode (no runtime), error handling, target-p99 latency mode (ms/us suffixes, concurrency output, JSON fields), and AuraIO branding.
+Runs 18 test cases covering: basic I/O patterns (randread, randwrite, seqread, seqwrite, mixed), JSON output validation, job file parsing, multi-job files, multi-thread with group_reporting, ramp time, size-based mode (no runtime), error handling, target-p99 latency mode (ms/us suffixes, concurrency output, JSON fields), and AuraIO branding.
 
 ### FIO Baseline Comparison
 
@@ -226,6 +226,16 @@ Options:
 - `--standard` — 5s per test (default)
 - `--full` — Longer runs for statistical confidence
 - `--skip-fio` — Reuse previous FIO results
+
+### Interpreting Baseline Results
+
+BFFIO will typically show higher IOPS than FIO on small random I/O workloads (4K randread/randwrite), while large sequential workloads converge to identical throughput. This is a real structural difference, not a measurement error.
+
+FIO's io_uring engine calls `io_uring_submit()` after preparing each individual SQE. AuraIO batches multiple SQEs into a single submit call, amortizing the kernel entry cost across many operations. On a 3-second randwrite test, FIO makes ~4,500 syscalls while BFFIO makes ~225 for the same workload — a 20× reduction.
+
+This matters most on **low-latency storage** (NVMe, tmpfs, RAM-backed VM disks) where per-I/O device latency is microseconds and syscall overhead is a significant fraction of total time. On slower media (SATA SSDs, HDDs), device latency dominates and the gap narrows. On bandwidth-saturated workloads (large sequential I/O), both tools hit the same device limit regardless of submission strategy.
+
+FIO's `sqthread_poll=1` option partially closes the gap by offloading submission to a kernel thread, but it requires `CAP_SYS_NICE` and still doesn't batch SQE preparation. The baseline comparison uses FIO's default configuration since that's what most users run.
 
 ## Architecture
 
