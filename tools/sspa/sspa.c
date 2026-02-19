@@ -195,6 +195,11 @@ typedef struct worker_ctx {
     double max_p99_latency_ms;
     struct timespec warmup_end; /* completions before this are excluded from stats */
 
+    /* Measurement timing — set on first post-warmup completion */
+    struct timespec measure_start;
+    struct timespec measure_end;
+    bool measure_started;
+
     /* Results (thread-local, no synchronization needed — each worker has its
      * own engine with single_thread=true, so callbacks run on the same thread
      * that calls aura_wait). */
@@ -239,6 +244,13 @@ static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
         if (!wctx->stopping && wctx->error == 0) submit_one(wctx, slot);
         return;
     }
+
+    /* Track actual measurement window */
+    if (!wctx->measure_started) {
+        wctx->measure_start = now;
+        wctx->measure_started = true;
+    }
+    wctx->measure_end = now;
 
     double lat_us = (double)(now.tv_sec - slot->submit_time.tv_sec) * 1e6 +
                     (double)(now.tv_nsec - slot->submit_time.tv_nsec) / 1e3;
@@ -472,6 +484,9 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
                     double duration_sec, double max_p99_latency_ms, test_result_t *result) {
     memset(result, 0, sizeof(*result));
 
+    /* IO size must be 512-aligned for O_DIRECT */
+    if (w->io_size == 0 || w->io_size % 512 != 0) return EINVAL;
+
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -485,12 +500,16 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
 
         worker_run(&wctx, duration_sec);
 
-        struct timespec end;
-        clock_gettime(CLOCK_MONOTONIC, &end);
-        double total_sec =
-            (double)(end.tv_sec - start.tv_sec) + (double)(end.tv_nsec - start.tv_nsec) / 1e9;
-        double warmup = (max_p99_latency_ms > 0) ? 3.0 : 0.0;
-        result->elapsed_sec = total_sec - warmup;
+        if (wctx.measure_started) {
+            result->elapsed_sec =
+                (double)(wctx.measure_end.tv_sec - wctx.measure_start.tv_sec) +
+                (double)(wctx.measure_end.tv_nsec - wctx.measure_start.tv_nsec) / 1e9;
+        } else {
+            struct timespec end;
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            result->elapsed_sec =
+                (double)(end.tv_sec - start.tv_sec) + (double)(end.tv_nsec - start.tv_nsec) / 1e9;
+        }
         if (result->elapsed_sec < 0.1) result->elapsed_sec = 0.1;
         result->bytes_read = wctx.bytes_read;
         result->bytes_written = wctx.bytes_written;
@@ -534,12 +553,30 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
 
     for (int i = 0; i < num_threads; i++) pthread_join(threads[i], NULL);
 
-    struct timespec end;
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double total_sec =
-        (double)(end.tv_sec - start.tv_sec) + (double)(end.tv_nsec - start.tv_nsec) / 1e9;
-    double warmup = (max_p99_latency_ms > 0) ? 3.0 : 0.0;
-    result->elapsed_sec = total_sec - warmup;
+    /* Use actual measurement window: earliest start to latest end across workers */
+    struct timespec m_start = { 0 }, m_end = { 0 };
+    bool any_measured = false;
+    for (int i = 0; i < num_threads; i++) {
+        if (!workers[i].wctx.measure_started) continue;
+        struct timespec ws = workers[i].wctx.measure_start;
+        struct timespec we = workers[i].wctx.measure_end;
+        if (!any_measured || ws.tv_sec < m_start.tv_sec ||
+            (ws.tv_sec == m_start.tv_sec && ws.tv_nsec < m_start.tv_nsec))
+            m_start = ws;
+        if (!any_measured || we.tv_sec > m_end.tv_sec ||
+            (we.tv_sec == m_end.tv_sec && we.tv_nsec > m_end.tv_nsec))
+            m_end = we;
+        any_measured = true;
+    }
+    if (any_measured) {
+        result->elapsed_sec = (double)(m_end.tv_sec - m_start.tv_sec) +
+                              (double)(m_end.tv_nsec - m_start.tv_nsec) / 1e9;
+    } else {
+        struct timespec end;
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        result->elapsed_sec =
+            (double)(end.tv_sec - start.tv_sec) + (double)(end.tv_nsec - start.tv_nsec) / 1e9;
+    }
     if (result->elapsed_sec < 0.1) result->elapsed_sec = 0.1;
 
     int err = 0;
