@@ -31,6 +31,7 @@
 #include <grp.h>
 #include <limits.h>
 #include <sched.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 #include <aura.h>
@@ -298,7 +299,8 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         if (!config->show_hidden && ent->d_name[0] == '.') continue;
 
         char path[PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s", dir_node->full_path, ent->d_name);
+        int plen = snprintf(path, sizeof(path), "%s/%s", dir_node->full_path, ent->d_name);
+        if (plen < 0 || (size_t)plen >= sizeof(path)) continue; /* path too long */
 
         tree_node_t *child = node_create(ent->d_name, path);
         if (!child) continue;
@@ -774,8 +776,9 @@ static int parse_args(int argc, char **argv, config_t *config) {
         switch (opt) {
         case 'L': {
             char *end;
+            errno = 0;
             long val = strtol(optarg, &end, 10);
-            if (*end != '\0' || val < 0) {
+            if (*end != '\0' || val < 0 || val > INT_MAX || errno == ERANGE) {
                 fprintf(stderr, "atree: invalid depth: %s\n", optarg);
                 return -1;
             }
