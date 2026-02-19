@@ -37,6 +37,7 @@
 #include <stdatomic.h>
 #include <sched.h>
 #include <unistd.h>
+#include <assert.h>
 
 /* Global pool generation counter for unique IDs */
 static _Atomic uint64_t pool_generation_counter = 0;
@@ -935,6 +936,9 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Guard against size=0: size_to_class(0) returns class 0, which would
      * place the buffer in the wrong bucket. Free directly instead. */
     if (size == 0) {
+        /* Caller error: size=0 buffers can't be pool-allocated, so we can't
+         * update stats or return to a bucket.  Free directly. */
+        assert(0 && "buffer_pool_free called with size=0");
         free(buf);
         return;
     }
@@ -1161,7 +1165,7 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
             /* Delete with backward-shift to maintain probe chains */
             size_t hole = idx;
             size_t next = (hole + 1) & mask;
-            while (map->entries[next].key != 0) {
+            for (size_t shift = 0; shift < map->capacity && map->entries[next].key != 0; shift++) {
                 size_t natural = buf_map_hash(map->entries[next].key, mask);
                 /* Backward-shift: move entry at 'next' to 'hole' if 'hole'
                  * lies on the probe path from 'natural' to 'next'.  Use

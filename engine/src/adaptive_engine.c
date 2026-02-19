@@ -220,7 +220,7 @@ void adaptive_hist_record(adaptive_histogram_t *hist, int64_t latency_us) {
 }
 
 double adaptive_hist_p99(adaptive_histogram_t *hist) {
-    uint32_t total = atomic_load_explicit(&hist->total_count, memory_order_acquire);
+    uint64_t total = atomic_load_explicit(&hist->total_count, memory_order_acquire);
     if (total == 0) {
         return -1.0; /* No data */
     }

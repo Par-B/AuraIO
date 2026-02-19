@@ -216,7 +216,7 @@ typedef enum {
 typedef struct {
     _Atomic uint32_t buckets[LATENCY_BUCKET_COUNT]; /**< Latency buckets */
     _Atomic uint32_t overflow;                      /**< Count > max tracked */
-    _Atomic uint32_t total_count;                   /**< Total samples */
+    _Atomic uint64_t total_count;                   /**< Total samples */
 } adaptive_histogram_t;
 
 /**

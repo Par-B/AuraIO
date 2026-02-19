@@ -1259,7 +1259,7 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
 
 aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
                             mode_t mode, aura_callback_t callback, void *user_data) {
-    if (!engine || !pathname) {
+    if (!engine || !pathname || (dirfd < 0 && dirfd != AT_FDCWD)) {
         errno = EINVAL;
         return NULL;
     }
@@ -1317,7 +1317,7 @@ aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callba
 aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
                            unsigned int mask, struct statx *statxbuf, aura_callback_t callback,
                            void *user_data) {
-    if (!engine || !pathname || !statxbuf) {
+    if (!engine || !pathname || !statxbuf || (dirfd < 0 && dirfd != AT_FDCWD)) {
         errno = EINVAL;
         return NULL;
     }
@@ -2366,7 +2366,8 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
         tmp.buckets[i] = atomic_load_explicit(&active->buckets[i], memory_order_relaxed);
     }
     tmp.overflow = atomic_load_explicit(&active->overflow, memory_order_relaxed);
-    tmp.total_count = atomic_load_explicit(&active->total_count, memory_order_relaxed);
+    uint64_t total = atomic_load_explicit(&active->total_count, memory_order_relaxed);
+    tmp.total_count = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
     tmp.bucket_width_us = LATENCY_BUCKET_WIDTH_US;
     tmp.max_tracked_us = LATENCY_MAX_US;
 
