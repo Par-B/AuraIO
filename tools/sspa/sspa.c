@@ -886,7 +886,10 @@ int main(int argc, char **argv) {
     }
 
     int fd = open(g_tmpfile, O_RDWR | O_DIRECT);
-    if (fd < 0) fd = open(g_tmpfile, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "  Warning: O_DIRECT not supported, results may reflect page cache\n\n");
+        fd = open(g_tmpfile, O_RDWR);
+    }
     if (fd < 0) {
         fprintf(stderr, "sspa: cannot open test file: %s\n", strerror(errno));
         return 1;
