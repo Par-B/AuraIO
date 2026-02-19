@@ -306,26 +306,29 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 
     if (dir_node->num_children == 0) return 0;
 
-    /* Batch statx for all children */
-    atomic_int remaining = dir_node->num_children;
+    /* Heap-allocate remaining counter — shared with async callbacks, so it must
+       outlive this function if we ever bail out of the drain loop early. */
+    atomic_int *remaining = malloc(sizeof(*remaining));
+    if (!remaining) return -1;
+    atomic_store(remaining, dir_node->num_children);
 
     for (int i = 0; i < dir_node->num_children; i++) {
         tree_node_t *child = dir_node->children[i];
 
         statx_ctx_t *ctx = malloc(sizeof(*ctx));
         if (!ctx) {
-            atomic_fetch_sub(&remaining, 1);
+            atomic_fetch_sub(remaining, 1);
             continue;
         }
         ctx->node = child;
-        ctx->remaining = &remaining;
+        ctx->remaining = remaining;
 
         aura_request_t *req =
             aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW, STATX_MASK,
                        &child->st, on_statx_complete, ctx);
         if (!req) {
             free(ctx);
-            atomic_fetch_sub(&remaining, 1);
+            atomic_fetch_sub(remaining, 1);
             /* Fallback: synchronous statx */
             struct statx stx;
             if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW, STATX_MASK, &stx) == 0) {
@@ -335,11 +338,21 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         }
     }
 
-    /* Drain completions */
-    while (atomic_load(&remaining) > 0 && !g_interrupted) {
+    /* Drain completions — must wait for all to complete before freeing */
+    while (atomic_load(remaining) > 0 && !g_interrupted) {
         int n = aura_wait(engine, 100);
-        if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) break;
+        if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) {
+            /* Hard error: keep draining until all callbacks fire */
+            while (atomic_load(remaining) > 0) {
+                if (aura_wait(engine, 100) < 0 && errno != EINTR && errno != ETIME &&
+                    errno != ETIMEDOUT)
+                    break;
+            }
+            break;
+        }
     }
+
+    free(remaining);
 
     return 0;
 }
