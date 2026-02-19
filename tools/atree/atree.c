@@ -71,8 +71,8 @@ typedef struct tree_node {
     struct statx st;
     bool is_dir;
     struct tree_node **children;
-    int num_children;
-    int cap_children;
+    size_t num_children;
+    size_t cap_children;
     int depth;
     /* Aggregates (dirs only) */
     off_t total_size;
@@ -81,7 +81,7 @@ typedef struct tree_node {
 } tree_node_t;
 
 // ============================================================================
-// Visited set for symlink cycle detection (dev/ino pairs)
+// Visited set for symlink cycle detection (dev/ino hash set)
 // ============================================================================
 
 typedef struct {
@@ -89,45 +89,101 @@ typedef struct {
     ino_t ino;
 } devino_t;
 
+typedef struct visited_entry {
+    devino_t key;
+    bool occupied;
+} visited_entry_t;
+
 typedef struct {
-    devino_t *entries;
+    visited_entry_t *buckets;
+    size_t cap; /* always a power of 2 */
     size_t count;
-    size_t cap;
     pthread_mutex_t lock;
 } visited_set_t;
 
+#define VISITED_INIT_CAP 64
+#define VISITED_LOAD_MAX 70 /* percent */
+
+static uint64_t visited_hash(dev_t dev, ino_t ino) {
+    /* FNV-1a style mixing */
+    uint64_t h = 14695981039346656037ULL;
+    h ^= (uint64_t)dev;
+    h *= 1099511628211ULL;
+    h ^= (uint64_t)ino;
+    h *= 1099511628211ULL;
+    return h;
+}
+
 static void visited_init(visited_set_t *vs) {
-    vs->entries = NULL;
+    vs->cap = VISITED_INIT_CAP;
     vs->count = 0;
-    vs->cap = 0;
+    vs->buckets = calloc(vs->cap, sizeof(*vs->buckets));
     pthread_mutex_init(&vs->lock, NULL);
 }
 
 static void visited_destroy(visited_set_t *vs) {
-    free(vs->entries);
+    free(vs->buckets);
     pthread_mutex_destroy(&vs->lock);
+}
+
+static bool visited_probe(visited_entry_t *buckets, size_t cap, dev_t dev, ino_t ino,
+                          size_t *out_idx) {
+    size_t mask = cap - 1;
+    size_t idx = (size_t)visited_hash(dev, ino) & mask;
+    for (;;) {
+        if (!buckets[idx].occupied) {
+            *out_idx = idx;
+            return false; /* empty slot */
+        }
+        if (buckets[idx].key.dev == dev && buckets[idx].key.ino == ino) {
+            *out_idx = idx;
+            return true; /* found */
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static bool visited_grow(visited_set_t *vs) {
+    size_t newcap = vs->cap * 2;
+    visited_entry_t *newbuckets = calloc(newcap, sizeof(*newbuckets));
+    if (!newbuckets) return false;
+    for (size_t i = 0; i < vs->cap; i++) {
+        if (vs->buckets[i].occupied) {
+            size_t idx;
+            visited_probe(newbuckets, newcap, vs->buckets[i].key.dev, vs->buckets[i].key.ino, &idx);
+            newbuckets[idx] = vs->buckets[i];
+        }
+    }
+    free(vs->buckets);
+    vs->buckets = newbuckets;
+    vs->cap = newcap;
+    return true;
 }
 
 /* Returns true if newly inserted, false if already present. */
 static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
     pthread_mutex_lock(&vs->lock);
-    for (size_t i = 0; i < vs->count; i++) {
-        if (vs->entries[i].dev == dev && vs->entries[i].ino == ino) {
-            pthread_mutex_unlock(&vs->lock);
-            return false;
-        }
+    if (!vs->buckets) {
+        pthread_mutex_unlock(&vs->lock);
+        return false;
     }
-    if (vs->count >= vs->cap) {
-        size_t newcap = vs->cap ? vs->cap * 2 : 64;
-        devino_t *tmp = realloc(vs->entries, newcap * sizeof(*tmp));
-        if (!tmp) {
-            pthread_mutex_unlock(&vs->lock);
-            return false; /* treat as already visited on OOM */
-        }
-        vs->entries = tmp;
-        vs->cap = newcap;
+    size_t idx;
+    if (visited_probe(vs->buckets, vs->cap, dev, ino, &idx)) {
+        pthread_mutex_unlock(&vs->lock);
+        return false; /* already present */
     }
-    vs->entries[vs->count++] = (devino_t){ .dev = dev, .ino = ino };
+    /* Grow if load factor exceeded */
+    if (vs->count * 100 / vs->cap >= VISITED_LOAD_MAX) {
+        if (!visited_grow(vs)) {
+            pthread_mutex_unlock(&vs->lock);
+            return false; /* treat as visited on OOM */
+        }
+        /* Re-probe after grow */
+        visited_probe(vs->buckets, vs->cap, dev, ino, &idx);
+    }
+    vs->buckets[idx].key = (devino_t){ .dev = dev, .ino = ino };
+    vs->buckets[idx].occupied = true;
+    vs->count++;
     pthread_mutex_unlock(&vs->lock);
     return true;
 }
@@ -292,8 +348,8 @@ static tree_node_t *node_create(const char *name, const char *full_path) {
 
 static bool node_add_child(tree_node_t *parent, tree_node_t *child) {
     if (parent->num_children >= parent->cap_children) {
-        int newcap = parent->cap_children ? parent->cap_children * 2 : 16;
-        tree_node_t **tmp = realloc(parent->children, (size_t)newcap * sizeof(*tmp));
+        size_t newcap = parent->cap_children ? parent->cap_children * 2 : 16;
+        tree_node_t **tmp = realloc(parent->children, newcap * sizeof(*tmp));
         if (!tmp) return false;
         parent->children = tmp;
         parent->cap_children = newcap;
@@ -319,7 +375,7 @@ static void node_free(tree_node_t *n) {
         tree_node_t *cur = stack[sp - 1];
         if (cur->num_children > 0) {
             /* Push children, then clear so we don't re-push */
-            for (int i = 0; i < cur->num_children; i++) {
+            for (size_t i = 0; i < cur->num_children; i++) {
                 if (sp >= cap) {
                     cap *= 2;
                     tree_node_t **tmp = realloc(stack, cap * sizeof(*tmp));
@@ -420,7 +476,7 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
     if (!remaining) return -1;
     atomic_store(remaining, dir_node->num_children);
 
-    for (int i = 0; i < dir_node->num_children; i++) {
+    for (size_t i = 0; i < dir_node->num_children; i++) {
         tree_node_t *child = dir_node->children[i];
 
         statx_ctx_t *ctx = malloc(sizeof(*ctx));
@@ -547,7 +603,7 @@ static void *worker_fn(void *arg) {
         (void)scan_directory(node, engine, wctx->config, node->depth, wctx->wq->visited);
 
         /* Enqueue child directories for scanning */
-        for (int i = 0; i < node->num_children; i++) {
+        for (size_t i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir) {
                 atomic_fetch_add(&wctx->wq->pending, 1);
                 if (!wq_push(wctx->wq, node->children[i])) {
@@ -603,7 +659,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
 
     /* Count child directories to decide on parallelism */
     int child_dirs = 0;
-    for (int i = 0; i < root->num_children; i++) {
+    for (size_t i = 0; i < root->num_children; i++) {
         if (root->children[i]->is_dir) child_dirs++;
     }
 
@@ -624,7 +680,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     wq.visited = &visited;
 
     /* Seed work queue with child directories */
-    for (int i = 0; i < root->num_children; i++) {
+    for (size_t i = 0; i < root->num_children; i++) {
         if (root->children[i]->is_dir) {
             atomic_fetch_add(&wq.pending, 1);
             if (!wq_push(&wq, root->children[i])) {
@@ -701,7 +757,7 @@ static void aggregate(tree_node_t *root) {
             frame->child_idx = 0;
         }
 
-        if (frame->child_idx < node->num_children) {
+        if ((size_t)frame->child_idx < node->num_children) {
             tree_node_t *c = node->children[frame->child_idx];
             frame->child_idx++;
 
@@ -726,7 +782,7 @@ static void aggregate(tree_node_t *root) {
             }
         } else {
             /* All children processed — accumulate dir children */
-            for (int i = 0; i < node->num_children; i++) {
+            for (size_t i = 0; i < node->num_children; i++) {
                 tree_node_t *c = node->children[i];
                 if (c->is_dir) {
                     node->total_dirs += 1 + c->total_dirs;
@@ -775,10 +831,10 @@ static void sort_tree(tree_node_t *root, bool by_size) {
         tree_node_t *node = stack[--sp];
         if (!node->is_dir || node->num_children == 0) continue;
 
-        qsort(node->children, (size_t)node->num_children, sizeof(tree_node_t *),
+        qsort(node->children, node->num_children, sizeof(tree_node_t *),
               by_size ? cmp_size : cmp_alpha);
 
-        for (int i = 0; i < node->num_children; i++) {
+        for (size_t i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir && node->children[i]->num_children > 0) {
                 if (sp >= cap) {
                     cap *= 2;
@@ -848,7 +904,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
 
         struct passwd pw_buf, *pw_result;
         struct group gr_buf, *gr_result;
-        char pw_str[256], gr_str[256];
+        char pw_str[1024], gr_str[1024];
         getpwuid_r(node->st.stx_uid, &pw_buf, pw_str, sizeof(pw_str), &pw_result);
         getgrgid_r(node->st.stx_gid, &gr_buf, gr_str, sizeof(gr_str), &gr_result);
         const char *uname = pw_result ? pw_result->pw_name : "?";
@@ -954,7 +1010,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         }
 
         /* Find next visible child */
-        int ci = frame->child_idx;
+        size_t ci = (size_t)frame->child_idx;
         while (ci < node->num_children) {
             if (!config->dirs_only || node->children[ci]->is_dir) break;
             ci++;
@@ -967,11 +1023,11 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             continue;
         }
 
-        frame->child_idx = ci + 1;
+        frame->child_idx = (int)(ci + 1);
 
         /* Determine if this child is the last visible one */
         bool child_is_last = true;
-        for (int j = ci + 1; j < node->num_children; j++) {
+        for (size_t j = ci + 1; j < node->num_children; j++) {
             if (!config->dirs_only || node->children[j]->is_dir) {
                 child_is_last = false;
                 break;
