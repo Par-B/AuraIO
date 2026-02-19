@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`aura_get_stats()` returns `int`**: Was `void`. Now returns `0` on success, `-1` with `errno=EINVAL` on NULL/invalid input
 
 ### Added
+- **aura-hash checksum tool** (`tools/aura-hash/`): Parallel file checksum utility (sha256sum/md5sum replacement) using AuraIO read pipelining with OpenSSL EVP. Supports SHA-256, SHA-1, MD5, recursive directory hashing, O_DIRECT mode, and coreutils-compatible output format
 - **auracp file copy tool** (`tools/auracp/`): Production-quality async pipelined file copy with cross-file I/O pipeline, recursive directory support, O_DIRECT mode, progress bar, and AIMD stats reporting
 - **C++ auracp tool** (`tools/auracp_cpp/`): C++20 port of auracp with RAII, lambda callbacks, and identical CLI
 - **C++ lifecycle bindings**: `Engine::openat()`, `close()`, `statx()`, `fallocate()`, `ftruncate()`, `sync_file_range()` with callback and coroutine variants (`async_openat`, `async_close`, `async_statx`, `async_fallocate`, `async_ftruncate`, `async_sync_file_range`)

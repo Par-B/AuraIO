@@ -42,6 +42,7 @@ cd bindings/rust && cargo test           # Run Rust tests
 - `integrations/` - External system integrations (Prometheus, OpenTelemetry, syslog) with C/C++/Rust examples
 - `tools/BFFIO/` - FIO-compatible benchmark with AIMD auto-tuning
 - `tools/auracp/` / `tools/auracp_cpp/` - File copy utilities (C and C++ versions)
+- `tools/aura-hash/` - Parallel file checksum tool (sha256/sha1/md5)
 - `examples/` - C, C++, and Rust examples
 - `tests/` - Unit tests, stress tests, benchmarks, and analysis scripts
 

@@ -412,7 +412,11 @@ auracp: engine
 auracp-cpp: engine
 	$(MAKE) -C tools/auracp_cpp
 
-.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp
+# Build aura-hash checksum tool
+aura-hash: engine
+	$(MAKE) -C tools/aura-hash
+
+.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash
 
 # =============================================================================
 # Installation
@@ -463,6 +467,7 @@ clean: rust-clean
 	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
 	-$(MAKE) -C tools/auracp clean 2>/dev/null || true
 	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
+	-$(MAKE) -C tools/aura-hash clean 2>/dev/null || true
 	rm -f integrations/prometheus/C/prometheus_example
 	rm -f integrations/opentelemetry/C/otel_example
 	rm -f integrations/syslog/C/syslog_example
@@ -648,6 +653,9 @@ help:
 	@echo "auracp (async file copy):"
 	@echo "  make auracp         Build auracp async file copy tool"
 	@echo "  make auracp-cpp     Build auracp C++ async file copy tool"
+	@echo ""
+	@echo "aura-hash (parallel checksum):"
+	@echo "  make aura-hash      Build aura-hash parallel checksum tool"
 	@echo ""
 	@echo "Integrations:"
 	@echo "  make integrations   Build integrations (Prometheus + OpenTelemetry + Syslog)"
