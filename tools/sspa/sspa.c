@@ -653,8 +653,8 @@ static void cleanup_tmpfile(void) {
 }
 
 static void sigint_handler(int sig) {
+    (void)sig;
     g_interrupted = 1;
-    signal(sig, SIG_DFL);
 }
 
 static int create_test_file(const char *path, off_t size) {
@@ -735,8 +735,7 @@ int main(int argc, char **argv) {
     double max_p99_latency_ms = 0;
 
     int opt;
-    opterr = 0;
-    while ((opt = getopt(argc, argv, "h?l:")) != -1) {
+    while ((opt = getopt(argc, argv, "hl:")) != -1) {
         switch (opt) {
         case 'l': {
             char *endp;
@@ -748,7 +747,6 @@ int main(int argc, char **argv) {
             break;
         }
         case 'h':
-        case '?':
             print_usage(argv[0]);
             return 0;
         default:
@@ -808,8 +806,10 @@ int main(int argc, char **argv) {
 
     snprintf(g_tmpfile, sizeof(g_tmpfile), "%s/%s", test_dir, TMP_FILENAME);
     atexit(cleanup_tmpfile);
-    signal(SIGINT, sigint_handler);
-    signal(SIGTERM, sigint_handler);
+    struct sigaction sa = { .sa_handler = sigint_handler, .sa_flags = SA_RESETHAND };
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     int64_t size_mib = test_size / (1024 * 1024);
     char size_str[32];
