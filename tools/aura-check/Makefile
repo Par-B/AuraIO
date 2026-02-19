@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 AuraIO Contributors
+#
 # aura-check - simple storage performance analyzer powered by AuraIO
 #
 # Build: make
