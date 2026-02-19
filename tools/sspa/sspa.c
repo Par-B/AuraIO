@@ -46,7 +46,7 @@
 #define TMP_FILENAME ".sspa.tmp"
 #define WAIT_TIMEOUT_MS 100 /* aura_wait timeout between progress checks */
 
-static _Atomic int g_interrupted = 0;
+static volatile sig_atomic_t g_interrupted = 0;
 
 #define LAT_BUCKETS 4096
 #define LAT_BUCKET_US 10 /* 10us per bucket = 0-40.96ms range */
