@@ -335,8 +335,8 @@ Three scenarios:
 ### C/C++ Library
 
 ```bash
-git clone https://github.com/your-org/auraio.git
-cd auraio
+git clone https://github.com/Par-B/AuraIO.git
+cd AuraIO
 make
 sudo make install
 ```
@@ -378,6 +378,8 @@ make rust-examples  # Build Rust examples
 - **C11 compiler** (C API)
 - **C++20 compiler** (C++ API, optional)
 - **Rust 1.70+** (Rust bindings, optional)
+
+Run `make deps` to install all build and test dependencies, or `make deps-check` to verify what's installed.
 
 ## API Overview
 
@@ -454,6 +456,28 @@ make BFFIO
 
 See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and [docs/BFFIO.md](docs/BFFIO.md) for design overview and baseline comparisons.
 
+## auracp — Async File Copy
+
+A high-performance file copy tool built on AuraIO, available in both C and C++:
+
+```bash
+make auracp       # Build C version
+make auracp-cpp   # Build C++ version
+./tools/auracp/auracp src dst
+```
+
+## Integrations
+
+Built-in metric exporters for observability stacks:
+
+| Integration | Build target | Description |
+|-------------|-------------|-------------|
+| **Prometheus** | `make integration-prometheus` | Per-ring stats, latency histograms, AIMD phase |
+| **OpenTelemetry** | `make integration-otel` | Push-based metrics export |
+| **Syslog** | `make integration-syslog` | Structured logging for I/O events |
+
+Build all with `make integrations`. See the [Observability Guide](docs/observability.md) for usage.
+
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
@@ -464,7 +488,6 @@ See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and 
 - [Performance Guide](docs/performance.md) — Tuning constants, benchmark methodology
 - [BFFIO Overview](docs/BFFIO.md) — FIO-compatible benchmark design and baseline comparisons
 - [BFFIO Usage Guide](tools/BFFIO/USAGE.md) — Complete CLI reference, options, examples
-- [Codebase Map](docs/CODEBASE_MAP.md) — File-level guide for contributors
 - [Examples](examples/) — Working code samples
 
 ## Stability and Versioning
@@ -474,13 +497,22 @@ AuraIO is currently pre-1.0 (`0.x`).
 1. API and ABI may still evolve between minor releases.
 2. Breaking changes are documented in `CHANGELOG.md` with migration guidance.
 
+## Development
+
+```bash
+make test             # Build everything + run all tests (C, C++, Rust)
+make test-sanitizers  # Run Valgrind, ThreadSanitizer, and AddressSanitizer
+make lint             # Static analysis (cppcheck or clang-tidy)
+make coverage         # Generate code coverage report
+```
+
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Submit a Pull Request
 
-For bugs and features: [open an issue](https://github.com/your-org/auraio/issues)
+For bugs and features: [open an issue](https://github.com/Par-B/AuraIO/issues)
 
 ## License
 
