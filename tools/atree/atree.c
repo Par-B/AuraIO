@@ -18,6 +18,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdatomic.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -76,8 +77,8 @@ typedef struct tree_node {
     int depth;
     /* Aggregates (dirs only) */
     off_t total_size;
-    int total_files;
-    int total_dirs;
+    int64_t total_files;
+    int64_t total_dirs;
 } tree_node_t;
 
 // ============================================================================
@@ -114,11 +115,16 @@ static uint64_t visited_hash(dev_t dev, ino_t ino) {
     return h;
 }
 
-static void visited_init(visited_set_t *vs) {
+static bool visited_init(visited_set_t *vs) {
     vs->cap = VISITED_INIT_CAP;
     vs->count = 0;
     vs->buckets = calloc(vs->cap, sizeof(*vs->buckets));
+    if (!vs->buckets) {
+        vs->cap = 0;
+        return false;
+    }
     pthread_mutex_init(&vs->lock, NULL);
+    return true;
 }
 
 static void visited_destroy(visited_set_t *vs) {
@@ -301,7 +307,7 @@ static void format_size(char *buf, size_t bufsz, off_t bytes, bool raw) {
     else snprintf(buf, bufsz, "%lld", (long long)bytes);
 }
 
-static void format_mode(char *buf, uint16_t mode) {
+static void format_mode(char *buf, uint32_t mode) {
     buf[0] = S_ISDIR(mode)    ? 'd'
              : S_ISLNK(mode)  ? 'l'
              : S_ISBLK(mode)  ? 'b'
@@ -358,6 +364,18 @@ static bool node_add_child(tree_node_t *parent, tree_node_t *child) {
     return true;
 }
 
+static void node_free_recursive(tree_node_t *n, int depth) {
+    if (!n) return;
+    if (depth < 1000) {
+        for (size_t i = 0; i < n->num_children; i++) node_free_recursive(n->children[i], depth + 1);
+    }
+    /* Children beyond depth 1000 leak to avoid stack overflow */
+    free(n->children);
+    free(n->name);
+    free(n->full_path);
+    free(n);
+}
+
 static void node_free(tree_node_t *n) {
     if (!n) return;
 
@@ -365,7 +383,8 @@ static void node_free(tree_node_t *n) {
        stack overflow on deeply nested directory trees. */
     size_t cap = 256;
     tree_node_t **stack = malloc(cap * sizeof(*stack));
-    if (!stack) { /* fallback: just leak */
+    if (!stack) {
+        node_free_recursive(n, 0);
         return;
     }
     size_t sp = 0;
@@ -630,7 +649,10 @@ static void *worker_fn(void *arg) {
 
 static int scan_tree(tree_node_t *root, const config_t *config) {
     visited_set_t visited;
-    visited_init(&visited);
+    if (!visited_init(&visited)) {
+        fprintf(stderr, "atree: out of memory\n");
+        return -1;
+    }
 
     /* Register root directory to prevent cycles back to it */
     {
@@ -729,7 +751,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
 
 typedef struct {
     tree_node_t *node;
-    int child_idx; /* next child to process; -1 = not yet initialized */
+    ssize_t child_idx; /* next child to process; -1 = not yet initialized */
 } agg_frame_t;
 
 static void aggregate(tree_node_t *root) {
@@ -758,7 +780,7 @@ static void aggregate(tree_node_t *root) {
         }
 
         if ((size_t)frame->child_idx < node->num_children) {
-            tree_node_t *c = node->children[frame->child_idx];
+            tree_node_t *c = node->children[(size_t)frame->child_idx];
             frame->child_idx++;
 
             /* If child already processed (leaf or previously visited), accumulate */
@@ -913,14 +935,15 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         if (node->is_dir) {
             char sz[32];
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
-            int fc = node->total_files;
-            int dc = node->total_dirs;
+            int64_t fc = node->total_files;
+            int64_t dc = node->total_dirs;
             if (dc > 0) {
-                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%d file%s, %d dir%s, %s]", mode_str,
+                snprintf(stats, sizeof(stats),
+                         "%s  %-8s %-8s  [%" PRId64 " file%s, %" PRId64 " dir%s, %s]", mode_str,
                          uname, gname, fc, fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
             } else {
-                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%d file%s, %s]", mode_str, uname,
-                         gname, fc, fc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%" PRId64 " file%s, %s]", mode_str,
+                         uname, gname, fc, fc == 1 ? "" : "s", sz);
             }
         } else {
             char sz[32], date[16];
@@ -933,13 +956,14 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         if (node->is_dir) {
             char sz[32];
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
-            int fc = node->total_files;
-            int dc = node->total_dirs;
+            int64_t fc = node->total_files;
+            int64_t dc = node->total_dirs;
             if (dc > 0) {
-                snprintf(stats, sizeof(stats), "[%d file%s, %d dir%s, %s]", fc, fc == 1 ? "" : "s",
-                         dc, dc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "[%" PRId64 " file%s, %" PRId64 " dir%s, %s]", fc,
+                         fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
             } else {
-                snprintf(stats, sizeof(stats), "[%d file%s, %s]", fc, fc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "[%" PRId64 " file%s, %s]", fc, fc == 1 ? "" : "s",
+                         sz);
             }
         } else {
             char sz[32], date[16];
@@ -968,7 +992,7 @@ typedef struct {
     char *prefix; /* heap-allocated prefix for children */
     bool is_last;
     int depth;
-    int child_idx; /* next visible child to process; -1 = node not yet printed */
+    ssize_t child_idx; /* next visible child to process; -1 = node not yet printed */
 } print_frame_t;
 
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
@@ -1010,7 +1034,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         }
 
         /* Find next visible child */
-        size_t ci = (size_t)frame->child_idx;
+        size_t ci = (size_t)frame->child_idx; /* safe: child_idx >= 0 here */
         while (ci < node->num_children) {
             if (!config->dirs_only || node->children[ci]->is_dir) break;
             ci++;
@@ -1023,7 +1047,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             continue;
         }
 
-        frame->child_idx = (int)(ci + 1);
+        frame->child_idx = (ssize_t)(ci + 1);
 
         /* Determine if this child is the last visible one */
         bool child_is_last = true;
