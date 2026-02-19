@@ -804,11 +804,15 @@ static int create_test_file(const char *path, off_t size) {
             return -1;
         }
         if (n == 0) break;
-        /* Re-align to 512 after short writes to keep O_DIRECT happy */
+        /* Re-align to 512 after short writes to keep O_DIRECT happy.
+         * We discard any sub-512 fractional bytes — this is fine since
+         * the test file content is arbitrary PRNG data with no integrity
+         * requirement; the next iteration overwrites from the aligned
+         * position. */
         written += (n / 512) * 512;
         if (n % 512 != 0) {
-            /* Partial block written — lseek corrects the file position
-             * to our computed aligned offset in case it diverges. */
+            /* Seek to the aligned position so subsequent O_DIRECT
+             * writes start on a block boundary. */
             written = lseek(fd, written, SEEK_SET);
             if (written < 0) {
                 free(buf);
