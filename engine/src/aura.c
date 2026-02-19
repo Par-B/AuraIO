@@ -1727,7 +1727,12 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             }
         }
     } else {
-        /* Fallback: no eventfd, block on first pending ring */
+        /* Fallback: no eventfd, block on first pending ring.
+         * NOTE: With timeout_ms == -1 and multiple rings, this can block
+         * indefinitely on one ring while completions arrive on others.
+         * Deferred: eventfd() failure on modern Linux (2.6.22+) is near-
+         * impossible unless the fd limit is hit, and the timeout path
+         * handles it adequately. Not worth adding complexity here. */
         int completed = ring_wait(&engine->rings[first_pending], timeout_ms);
         if (completed > 0) {
             for (int j = 0; j < engine->ring_count; j++) {

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_ring.c
  * @brief io_uring ring management implementation
@@ -861,6 +860,8 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
          * - CQ head is only written by io_uring_cqe_seen, always under cq_lock
          * - CQ tail is only written by the kernel with store-release semantics
          * - io_uring_enter (the blocking syscall) is thread-safe
+         * This is a stable liburing API contract (peek+wait never advances
+         * CQ head — only cqe_seen does), not an implementation detail.
          * This allows other threads to poll/peek CQEs concurrently.
          * After the wait returns, we fall through to ring_drain_cqes
          * which acquires cq_lock, handling the case where another
