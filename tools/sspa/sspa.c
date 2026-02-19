@@ -346,6 +346,8 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
     wctx->slots = slots;
 
     for (int i = 0; i < PIPELINE_DEPTH; i++) {
+        /* aura_buffer_alloc returns page-aligned memory (via posix_memalign),
+         * which satisfies O_DIRECT alignment requirements. */
         slots[i].buf = aura_buffer_alloc(engine, wctx->io_size);
         if (!slots[i].buf) {
             wctx->error = ENOMEM;
@@ -711,7 +713,12 @@ static void sigint_handler(int sig) {
 }
 
 static int create_test_file(const char *path, off_t size) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    /* Use O_DIRECT to avoid polluting the page cache with GiBs of write data */
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0600);
+    if (fd < 0) {
+        /* Fall back to buffered if O_DIRECT not supported */
+        fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    }
     if (fd < 0) return -1;
 
     const size_t chunk = 1024 * 1024;
