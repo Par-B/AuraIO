@@ -7,6 +7,8 @@
  *
  * A sha256sum/md5sum replacement that uses AuraIO's pipelined async I/O
  * to read multiple files concurrently and hash data as completions arrive.
+ * When multiple files are present, spawns one worker thread per CPU core,
+ * each with its own AuraIO engine (one ring per thread).
  *
  * Usage: aura-hash [OPTIONS] FILE...
  */
@@ -17,6 +19,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,6 +28,9 @@
 #include <math.h>
 #include <getopt.h>
 #include <ftw.h>
+#include <pthread.h>
+#include <limits.h>
+#include <sched.h>
 #include <sys/stat.h>
 
 #include <openssl/evp.h>
@@ -38,6 +44,7 @@
 #define DEFAULT_CHUNK_SIZE (256 * 1024) /* 256 KiB */
 #define DEFAULT_PIPELINE 8
 #define MAX_PIPELINE 64
+#define MAX_WORKERS 64
 #define PROGRESS_INTERVAL_MS 200
 #define SECTOR_SIZE 512
 #define NFTW_MAX_FDS 64
@@ -68,6 +75,7 @@ typedef struct file_task {
     off_t file_size;
     int fd;
     off_t read_offset;
+    off_t hash_offset; /* next byte offset to feed into hash */
     int active_ops;
     bool reads_done;
     bool done;
@@ -90,7 +98,7 @@ typedef struct {
 // Pipeline buffer slots
 // ============================================================================
 
-typedef enum { BUF_FREE = 0, BUF_READING } buf_state_t;
+typedef enum { BUF_FREE = 0, BUF_READING, BUF_DONE } buf_state_t;
 
 struct hash_ctx;
 
@@ -113,12 +121,26 @@ typedef struct hash_ctx {
 } hash_ctx_t;
 
 // ============================================================================
+// Worker thread context
+// ============================================================================
+
+typedef struct {
+    int worker_id;
+    const config_t *config;
+    task_queue_t queue;
+    int error;
+} worker_ctx_t;
+
+// ============================================================================
 // Global state
 // ============================================================================
 
 static volatile sig_atomic_t g_interrupted = 0;
 static struct timespec g_start_time;
 static uint64_t g_last_progress_ns = 0;
+static pthread_mutex_t g_output_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_llong g_total_bytes_read = 0;
+static atomic_llong g_total_bytes = 0;
 
 static void sigint_handler(int sig) {
     (void)sig;
@@ -178,11 +200,11 @@ static void format_rate(char *buf, size_t bufsz, double bps) {
 }
 
 // ============================================================================
-// Progress display
+// Progress display (reads atomic globals for multi-threaded progress)
 // ============================================================================
 
-static void progress_update(const hash_ctx_t *ctx, bool final) {
-    if (ctx->config->quiet) return;
+static void progress_update_global(const config_t *config, bool final) {
+    if (config->quiet) return;
     if (!final && !isatty(STDERR_FILENO)) return;
 
     struct timespec now;
@@ -194,8 +216,8 @@ static void progress_update(const hash_ctx_t *ctx, bool final) {
 
     double elapsed = (double)(now.tv_sec - g_start_time.tv_sec) +
                      (double)(now.tv_nsec - g_start_time.tv_nsec) / 1e9;
-    double done = (double)ctx->queue->bytes_read;
-    double total = (double)ctx->queue->total_bytes;
+    double done = (double)atomic_load(&g_total_bytes_read);
+    double total = (double)atomic_load(&g_total_bytes);
     double pct = (total > 0) ? done / total * 100.0 : 100.0;
     double rate = (elapsed > 0.01) ? done / elapsed : 0.0;
 
@@ -354,24 +376,66 @@ static int build_task_list(const config_t *config, task_queue_t *queue) {
 // Hash finalization and output
 // ============================================================================
 
-static void finalize_task(file_task_t *task, const config_t *config) {
+static void finalize_task(file_task_t *task) {
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digest_len = 0;
 
     EVP_DigestFinal_ex(task->md_ctx, digest, &digest_len);
 
-    /* Print in coreutils format: <hex>  <filename> */
+    /* Build output line, then write under lock for thread safety */
+    char line[EVP_MAX_MD_SIZE * 2 + PATH_MAX + 4];
+    int pos = 0;
     for (unsigned int i = 0; i < digest_len; i++) {
-        printf("%02x", digest[i]);
+        pos += snprintf(line + pos, sizeof(line) - (size_t)pos, "%02x", digest[i]);
     }
-    printf("  %s\n", task->path);
+    pos += snprintf(line + pos, sizeof(line) - (size_t)pos, "  %s\n", task->path);
 
-    (void)config;
+    pthread_mutex_lock(&g_output_lock);
+    fwrite(line, 1, (size_t)pos, stdout);
+    pthread_mutex_unlock(&g_output_lock);
 }
 
 // ============================================================================
 // I/O callbacks
 // ============================================================================
+
+/* Drain completed slots for a task in offset order.
+ * Slots may complete out of order from io_uring, but hash updates
+ * must be fed sequentially. */
+static void drain_completed(hash_ctx_t *ctx, file_task_t *task) {
+    int depth = ctx->config->pipeline_depth;
+    bool progress = true;
+
+    while (progress) {
+        progress = false;
+        for (int i = 0; i < depth; i++) {
+            buf_slot_t *s = &ctx->slots[i];
+            if (s->state == BUF_DONE && s->task == task && s->offset == task->hash_offset) {
+                EVP_DigestUpdate(task->md_ctx, s->buf, s->bytes);
+                task->bytes_hashed += (off_t)s->bytes;
+                ctx->queue->bytes_read += (off_t)s->bytes;
+                atomic_fetch_add(&g_total_bytes_read, (long long)s->bytes);
+                task->hash_offset += (off_t)s->bytes;
+
+                s->state = BUF_FREE;
+                s->task = NULL;
+                ctx->active_ops--;
+                task->active_ops--;
+                progress = true;
+                break; /* restart scan — new hash_offset may match another slot */
+            }
+        }
+    }
+
+    /* Check if this file is fully hashed */
+    if (task->reads_done && task->active_ops == 0 && !task->done) {
+        finalize_task(task);
+        close(task->fd);
+        task->fd = -1;
+        task->done = true;
+        ctx->queue->completed_files++;
+    }
+}
 
 static void on_read_complete(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
@@ -392,24 +456,10 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
         return;
     }
 
-    /* Feed data into hash context */
-    EVP_DigestUpdate(task->md_ctx, slot->buf, (size_t)result);
-    task->bytes_hashed += result;
-    ctx->queue->bytes_read += result;
-
-    slot->state = BUF_FREE;
-    slot->task = NULL;
-    ctx->active_ops--;
-    task->active_ops--;
-
-    /* Check if this file is fully hashed */
-    if (task->reads_done && task->active_ops == 0 && !task->done) {
-        finalize_task(task, ctx->config);
-        close(task->fd);
-        task->fd = -1;
-        task->done = true;
-        ctx->queue->completed_files++;
-    }
+    /* Mark slot as done with its actual read size, then drain in order */
+    slot->bytes = (size_t)result;
+    slot->state = BUF_DONE;
+    drain_completed(ctx, task);
 }
 
 // ============================================================================
@@ -444,7 +494,7 @@ static void submit_next_read(hash_ctx_t *ctx, buf_slot_t *slot) {
         /* Handle zero-length file */
         if (task->file_size == 0) {
             task->reads_done = true;
-            finalize_task(task, ctx->config);
+            finalize_task(task);
             close(task->fd);
             task->fd = -1;
             task->done = true;
@@ -515,8 +565,6 @@ static int hash_pipeline(hash_ctx_t *ctx) {
                 submit_next_read(ctx, &ctx->slots[i]);
             }
         }
-
-        progress_update(ctx, false);
     }
 
     /* Drain remaining ops */
@@ -525,6 +573,193 @@ static int hash_pipeline(hash_ctx_t *ctx) {
     }
 
     return ctx->error;
+}
+
+// ============================================================================
+// Worker thread: runs an independent engine + pipeline on its file subset
+// ============================================================================
+
+static int run_worker_pipeline(worker_ctx_t *wctx) {
+    const config_t *config = wctx->config;
+
+    if (wctx->queue.total_files == 0) return 0;
+
+    /* Create per-worker AuraIO engine */
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.queue_depth = config->pipeline_depth * 4;
+    if (opts.queue_depth < 64) opts.queue_depth = 64;
+    opts.single_thread = true;
+    opts.ring_count = 1;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    if (!engine) {
+        fprintf(stderr, "aura-hash: worker %d: failed to create engine: %s\n", wctx->worker_id,
+                strerror(errno));
+        return -1;
+    }
+
+    /* Allocate pipeline buffer slots */
+    buf_slot_t *slots = calloc((size_t)config->pipeline_depth, sizeof(buf_slot_t));
+    if (!slots) {
+        aura_destroy(engine);
+        return -1;
+    }
+
+    hash_ctx_t ctx = {
+        .engine = engine,
+        .config = config,
+        .queue = &wctx->queue,
+        .slots = slots,
+        .active_ops = 0,
+        .error = 0,
+    };
+
+    for (int i = 0; i < config->pipeline_depth; i++) {
+        slots[i].buf = aura_buffer_alloc(engine, config->chunk_size);
+        if (!slots[i].buf) {
+            for (int j = 0; j < i; j++) aura_buffer_free(engine, slots[j].buf);
+            free(slots);
+            aura_destroy(engine);
+            return -1;
+        }
+        slots[i].state = BUF_FREE;
+        slots[i].ctx = &ctx;
+    }
+
+    int err = hash_pipeline(&ctx);
+
+    for (int i = 0; i < config->pipeline_depth; i++) {
+        if (slots[i].buf) aura_buffer_free(engine, slots[i].buf);
+    }
+    free(slots);
+    aura_destroy(engine);
+
+    return err;
+}
+
+static void *worker_thread_fn(void *arg) {
+    worker_ctx_t *wctx = (worker_ctx_t *)arg;
+
+    /* Pin thread to its designated CPU core */
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(wctx->worker_id, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+
+    wctx->error = run_worker_pipeline(wctx);
+    return NULL;
+}
+
+// ============================================================================
+// Multi-threaded dispatch: partition files across workers
+// ============================================================================
+
+static int get_num_cpus(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
+    return (int)n;
+}
+
+static int run_multithreaded(const config_t *config, task_queue_t *master_queue) {
+    int num_workers = get_num_cpus();
+    if (num_workers > master_queue->total_files) num_workers = master_queue->total_files;
+    if (num_workers < 1) num_workers = 1;
+
+    if (!config->quiet) {
+        fprintf(stderr, "aura-hash: using %d worker%s\n", num_workers, num_workers == 1 ? "" : "s");
+    }
+
+    /* Single worker — just run directly, no thread overhead */
+    if (num_workers == 1) {
+        worker_ctx_t wctx = {
+            .worker_id = 0,
+            .config = config,
+            .queue = *master_queue,
+            .error = 0,
+        };
+        /* Transfer ownership — don't let caller free */
+        memset(master_queue, 0, sizeof(*master_queue));
+        int err = run_worker_pipeline(&wctx);
+        queue_free(&wctx.queue);
+        return err;
+    }
+
+    /* Initialize per-worker queues */
+    worker_ctx_t *workers = calloc((size_t)num_workers, sizeof(worker_ctx_t));
+    if (!workers) return -1;
+
+    for (int i = 0; i < num_workers; i++) {
+        workers[i].worker_id = i;
+        workers[i].config = config;
+        queue_init(&workers[i].queue);
+    }
+
+    /* Round-robin partition files across workers */
+    int idx = 0;
+    file_task_t *t = master_queue->head;
+    while (t) {
+        file_task_t *next = t->next;
+        t->next = NULL;
+        queue_push(&workers[idx % num_workers].queue, t);
+        idx++;
+        t = next;
+    }
+    /* Master queue no longer owns the tasks */
+    memset(master_queue, 0, sizeof(*master_queue));
+
+    /* Spawn worker threads */
+    pthread_t *threads = calloc((size_t)num_workers, sizeof(pthread_t));
+    if (!threads) {
+        for (int i = 0; i < num_workers; i++) queue_free(&workers[i].queue);
+        free(workers);
+        return -1;
+    }
+
+    for (int i = 0; i < num_workers; i++) {
+        int rc = pthread_create(&threads[i], NULL, worker_thread_fn, &workers[i]);
+        if (rc != 0) {
+            fprintf(stderr, "aura-hash: pthread_create failed: %s\n", strerror(rc));
+            /* Wait for already-started threads */
+            for (int j = 0; j < i; j++) pthread_join(threads[j], NULL);
+            for (int j = 0; j < num_workers; j++) queue_free(&workers[j].queue);
+            free(threads);
+            free(workers);
+            return -1;
+        }
+    }
+
+    /* Progress updates from main thread while workers run */
+    bool all_done = false;
+    while (!all_done && !g_interrupted) {
+        usleep(PROGRESS_INTERVAL_MS * 1000);
+        progress_update_global(config, false);
+
+        /* Check if all workers finished (non-blocking) */
+        all_done = true;
+        for (int i = 0; i < num_workers; i++) {
+            if (pthread_tryjoin_np(threads[i], NULL) != 0) {
+                all_done = false;
+                break;
+            }
+        }
+    }
+
+    /* Join remaining threads */
+    for (int i = 0; i < num_workers; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    int err = 0;
+    for (int i = 0; i < num_workers; i++) {
+        if (workers[i].error != 0 && err == 0) err = workers[i].error;
+        queue_free(&workers[i].queue);
+    }
+
+    free(threads);
+    free(workers);
+    return err;
 }
 
 // ============================================================================
@@ -542,10 +777,13 @@ static void print_usage(const char *argv0) {
             "  -r, --recursive      Hash directories recursively\n"
             "  -d, --direct         Use O_DIRECT (bypass page cache)\n"
             "  -b, --block-size N   Read chunk size (default: 256K). Suffixes: K, M, G\n"
-            "  -p, --pipeline N     In-flight read slots (default: %d, max: %d)\n"
+            "  -p, --pipeline N     In-flight read slots per worker (default: %d, max: %d)\n"
             "  -q, --quiet          Suppress progress\n"
             "  -v, --verbose        Show AuraIO stats after hashing\n"
-            "  -h, --help           Show this help\n",
+            "  -h, --help           Show this help\n"
+            "\n"
+            "When multiple files are present, spawns one worker thread per CPU core,\n"
+            "each with its own AuraIO engine (one io_uring ring per thread).\n",
             argv0, DEFAULT_PIPELINE, MAX_PIPELINE);
 }
 
@@ -663,6 +901,9 @@ int main(int argc, char **argv) {
     task_queue_t queue;
     if (build_task_list(&config, &queue) != 0) return 1;
 
+    /* Set global total for progress tracking */
+    atomic_store(&g_total_bytes, (long long)queue.total_bytes);
+
     if (!config.quiet) {
         char total_str[32];
         format_bytes(total_str, sizeof(total_str), (double)queue.total_bytes);
@@ -670,58 +911,11 @@ int main(int argc, char **argv) {
                 queue.total_files == 1 ? "" : "s", total_str, config.algorithm);
     }
 
-    /* Create AuraIO engine */
-    aura_options_t opts;
-    aura_options_init(&opts);
-    opts.queue_depth = config.pipeline_depth * 4;
-    if (opts.queue_depth < 64) opts.queue_depth = 64;
-    opts.single_thread = true;
-
-    aura_engine_t *engine = aura_create_with_options(&opts);
-    if (!engine) {
-        fprintf(stderr, "aura-hash: failed to create I/O engine: %s\n", strerror(errno));
-        queue_free(&queue);
-        return 1;
-    }
-
-    /* Allocate pipeline buffer slots */
-    buf_slot_t *slots = calloc((size_t)config.pipeline_depth, sizeof(buf_slot_t));
-    if (!slots) {
-        fprintf(stderr, "aura-hash: out of memory\n");
-        aura_destroy(engine);
-        queue_free(&queue);
-        return 1;
-    }
-
-    hash_ctx_t ctx = {
-        .engine = engine,
-        .config = &config,
-        .queue = &queue,
-        .slots = slots,
-        .active_ops = 0,
-        .error = 0,
-    };
-
-    for (int i = 0; i < config.pipeline_depth; i++) {
-        slots[i].buf = aura_buffer_alloc(engine, config.chunk_size);
-        if (!slots[i].buf) {
-            fprintf(stderr, "aura-hash: buffer allocation failed\n");
-            for (int j = 0; j < i; j++) aura_buffer_free(engine, slots[j].buf);
-            free(slots);
-            aura_destroy(engine);
-            queue_free(&queue);
-            return 1;
-        }
-        slots[i].state = BUF_FREE;
-        slots[i].ctx = &ctx;
-    }
-
-    /* Run hash pipeline */
     clock_gettime(CLOCK_MONOTONIC, &g_start_time);
-    int err = hash_pipeline(&ctx);
+    int err = run_multithreaded(&config, &queue);
 
     /* Final progress */
-    if (!config.quiet) progress_update(&ctx, true);
+    if (!config.quiet) progress_update_global(&config, true);
 
     /* Verbose stats */
     if (config.verbose && err == 0 && !g_interrupted) {
@@ -730,30 +924,17 @@ int main(int argc, char **argv) {
         double elapsed = (double)(end.tv_sec - g_start_time.tv_sec) +
                          (double)(end.tv_nsec - g_start_time.tv_nsec) / 1e9;
 
+        long long total_read = atomic_load(&g_total_bytes_read);
         char size_str[32], rate_str[32];
-        format_bytes(size_str, sizeof(size_str), (double)queue.bytes_read);
-        format_rate(rate_str, sizeof(rate_str),
-                    elapsed > 0 ? (double)queue.bytes_read / elapsed : 0);
+        format_bytes(size_str, sizeof(size_str), (double)total_read);
+        format_rate(rate_str, sizeof(rate_str), elapsed > 0 ? (double)total_read / elapsed : 0);
 
-        fprintf(stderr, "Hashed %d file%s (%s) in %.2fs\n", queue.completed_files,
-                queue.completed_files == 1 ? "" : "s", size_str, elapsed);
+        fprintf(stderr, "Hashed (%s) in %.2fs\n", size_str, elapsed);
         fprintf(stderr, "Throughput: %s\n", rate_str);
-        fprintf(stderr, "Algorithm: %s, pipeline: %d slots\n", config.algorithm,
-                config.pipeline_depth);
-
-        aura_ring_stats_t rstats;
-        if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0) {
-            fprintf(stderr, "AuraIO: depth=%d, phase=%s, p99=%.2fms\n", rstats.in_flight_limit,
-                    aura_phase_name(rstats.aimd_phase), rstats.p99_latency_ms);
-        }
+        fprintf(stderr, "Algorithm: %s, pipeline: %d slots/worker, workers: %d\n", config.algorithm,
+                config.pipeline_depth, get_num_cpus());
     }
 
-    /* Cleanup */
-    for (int i = 0; i < config.pipeline_depth; i++) {
-        if (slots[i].buf) aura_buffer_free(engine, slots[i].buf);
-    }
-    free(slots);
-    aura_destroy(engine);
     queue_free(&queue);
 
     if (err != 0 || g_interrupted) {
