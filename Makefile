@@ -420,7 +420,10 @@ aura-hash: engine
 sspa: engine
 	$(MAKE) -C tools/sspa
 
-.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash sspa
+# Build all tools
+tools: BFFIO auracp auracp-cpp aura-hash sspa
+
+.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash sspa tools
 
 # =============================================================================
 # Installation
@@ -649,6 +652,9 @@ help:
 	@echo "  make compdb         Generate compile_commands.json"
 	@echo "  make coverage       Build/run tests with llvm-cov and generate coverage artifacts"
 	@echo "  make coverage-check MIN_LINE_COVERAGE=N enforce minimum line coverage percentage"
+	@echo ""
+	@echo "Tools:"
+	@echo "  make tools          Build all tools (BFFIO, auracp, aura-hash, sspa)"
 	@echo ""
 	@echo "BFFIO (Better Faster FIO):"
 	@echo "  make BFFIO          Build BFFIO benchmark tool"
