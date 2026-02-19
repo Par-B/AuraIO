@@ -443,11 +443,13 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
     case PATTERN_RAND_READ:
         wctx->force_read = true;
         break;
-    case PATTERN_MULTI_SEQ_WRITE:
+    case PATTERN_MULTI_SEQ_WRITE: {
         wctx->force_write = true;
         wctx->sequential = true;
-        wctx->seq_offset = (wctx->file_size / total_threads) * thread_id;
+        off_t region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
+        wctx->seq_offset = region * thread_id;
         break;
+    }
     case PATTERN_KV_STORE:
         if (thread_id == 0) {
             wctx->force_write = true;
@@ -460,20 +462,22 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         wctx->force_read = true;
         if (thread_id == 0) wctx->sequential = true;
         break;
-    case PATTERN_LAKEHOUSE:
+    case PATTERN_LAKEHOUSE: {
+        off_t lh_region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
         if (thread_id < (total_threads * 4 + 9) / 10 || total_threads == 1) {
             wctx->force_read = true;
             wctx->sequential = true;
-            wctx->seq_offset = (wctx->file_size / total_threads) * thread_id;
+            wctx->seq_offset = lh_region * thread_id;
         } else if (thread_id < (total_threads * 7 + 9) / 10) {
             wctx->force_write = true;
             wctx->sequential = true;
-            wctx->seq_offset = (wctx->file_size / total_threads) * thread_id;
+            wctx->seq_offset = lh_region * thread_id;
         } else {
             wctx->force_read = true;
             wctx->io_size = 4096;
         }
         break;
+    }
     }
 }
 
