@@ -32,12 +32,26 @@ PKGCONFIG = engine/lib/libaura.pc
 PREFIX ?= /usr/local
 DESTDIR ?=
 
+# Rust environment setup (source cargo if installed via rustup)
+CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
+RUST_LIB_PATH = $(CURDIR)/engine/lib
+
+# Integration build settings
+INTEGRATION_CFLAGS = $(CFLAGS)
+INTEGRATION_LDFLAGS = -Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
+
+# =============================================================================
+# Core build targets
+# =============================================================================
+
 # Default target
 # Build library, bindings, and integrations (examples are opt-in via 'make examples')
 all: engine rust integrations
+.PHONY: all
 
 # Engine library artifacts only (fast path for local iteration)
 engine: $(LIB_SHARED) $(LIB_STATIC) $(PKGCONFIG)
+.PHONY: engine
 
 # Create lib directory
 engine/lib:
@@ -65,6 +79,91 @@ engine/src/%.o: engine/src/%.c
 	$(CC) $(CFLAGS) -MMD -MP -DAURA_SHARED_BUILD -c $< -o $@
 
 -include $(DEP)
+
+# Debug build
+debug: CFLAGS += -g -O0 -DDEBUG
+debug: engine
+.PHONY: debug
+
+# =============================================================================
+# Integrations (individual + aggregate)
+# =============================================================================
+
+integration-prometheus: engine
+	$(CC) $(INTEGRATION_CFLAGS) -Iintegrations/prometheus/C \
+		integrations/prometheus/C/example.c integrations/prometheus/C/aura_prometheus.c \
+		-o integrations/prometheus/C/prometheus_example \
+		$(INTEGRATION_LDFLAGS)
+
+integration-otel: engine
+	$(CC) $(INTEGRATION_CFLAGS) -Iintegrations/opentelemetry/C \
+		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/aura_otel.c integrations/opentelemetry/C/aura_otel_push.c \
+		-o integrations/opentelemetry/C/otel_example \
+		$(INTEGRATION_LDFLAGS)
+
+integration-syslog: engine
+	$(CC) $(INTEGRATION_CFLAGS) -Iintegrations/syslog/C \
+		integrations/syslog/C/example.c integrations/syslog/C/aura_syslog.c \
+		-o integrations/syslog/C/syslog_example \
+		$(INTEGRATION_LDFLAGS)
+
+integrations: integration-prometheus integration-otel integration-syslog
+.PHONY: integration-prometheus integration-otel integration-syslog integrations
+
+# =============================================================================
+# Rust Bindings
+# =============================================================================
+
+# Build Rust bindings
+rust: engine
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path bindings/rust/Cargo.toml --release
+
+# Run Rust tests
+rust-test: engine
+	@printf "Running Rust tests...\n"
+	@rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
+	echo "$$rust_out" | sh build-tools/format-rust-tests.sh; \
+	if [ "$$rust_ok" -eq 0 ]; then exit 1; fi
+
+# Build Rust examples
+rust-examples: rust
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path examples/rust/Cargo.toml --examples --release
+
+# Run a specific Rust example
+rust-run-%: rust-examples
+	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) run --manifest-path examples/rust/Cargo.toml --example $* --release
+
+# Clean Rust build artifacts
+rust-clean:
+	-$(CARGO) clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null || true
+	-$(CARGO) clean --manifest-path examples/rust/Cargo.toml 2>/dev/null || true
+
+.PHONY: rust rust-test rust-examples rust-clean
+
+# =============================================================================
+# C++ and examples
+# =============================================================================
+
+# Run C++ tests
+cpp-test: engine
+	$(MAKE) -C tests cpp-test
+
+# Build all examples (C + C++ + Rust)
+examples: c-examples cpp-examples rust-examples
+
+# Build C examples only
+c-examples: engine
+	$(MAKE) -C examples/C
+
+# Build C++ examples only
+cpp-examples: engine
+	$(MAKE) -C examples/cpp
+
+.PHONY: cpp-test examples c-examples cpp-examples
+
+# =============================================================================
+# Testing
+# =============================================================================
 
 # Build and run C tests (local/in-container)
 test-local: engine
@@ -95,23 +194,7 @@ test-all: engine
 	echo ""; \
 	echo "--- Rust Tests ---"; \
 	rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
-	echo "$$rust_out" | awk ' \
-		/^test / { \
-			s=$$NF; line=$$0; \
-			sub(/^test /, "", line); sub(/ \.\.\. [a-zA-Z]+$$/, "", line); \
-			sub(/^tests::/, "", line); \
-			if (line ~ / - /) { \
-				path=line; sub(/ - .*/, "", path); \
-				sub(/^.+\.rs - /, "", line); \
-				gsub(/\(line [0-9]+\)/, "", line); \
-				sub(/ *- *compile */, "", line); \
-				gsub(/^ +| +$$/, "", line); \
-				if (line == "") { n=split(path,a,"/"); line=a[n]; sub(/\.rs$$/, "", line) } \
-			} \
-			if (s=="ok") printf "  %-40s OK\n", line; \
-			else if (s=="FAILED") printf "  %-40s FAIL\n", line; \
-			else if (s=="ignored") printf "  %-40s SKIP\n", line; \
-		}'; \
+	echo "$$rust_out" | sh build-tools/format-rust-tests.sh; \
 	rust_pass=$$(echo "$$rust_out" | grep -oE '[0-9]+ passed' | awk '{s+=$$1} END{print s+0}'); \
 	rust_ignored=$$(echo "$$rust_out" | grep -oE '[0-9]+ ignored' | awk '{s+=$$1} END{print s+0}'); \
 	[ -z "$$rust_pass" ] && rust_pass=0; \
@@ -151,157 +234,22 @@ test-all: engine
 		echo "RESULT: ALL PASSED"; \
 	fi
 
-# Build metrics integrations (Prometheus + OpenTelemetry)
-integrations: engine
-	$(CC) $(CFLAGS) -Iintegrations/prometheus/C \
-		integrations/prometheus/C/example.c integrations/prometheus/C/aura_prometheus.c \
-		-o integrations/prometheus/C/prometheus_example \
-		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
-	$(CC) $(CFLAGS) -Iintegrations/opentelemetry/C \
-		integrations/opentelemetry/C/example.c integrations/opentelemetry/C/aura_otel.c integrations/opentelemetry/C/aura_otel_push.c \
-		-o integrations/opentelemetry/C/otel_example \
-		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
-	$(CC) $(CFLAGS) -Iintegrations/syslog/C \
-		integrations/syslog/C/example.c integrations/syslog/C/aura_syslog.c \
-		-o integrations/syslog/C/syslog_example \
-		-Lengine/lib -laura $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/../../../engine/lib'
+test:
+	$(MAKE) -j4 all
+	$(MAKE) -j1 test-all
 
-# Build BFFIO benchmark tool
-BFFIO: engine
-	$(MAKE) -C tools/BFFIO
+test-memory:
+	$(MAKE) -j4 all
+	$(MAKE) -j1 test-tsan
+	$(MAKE) -j1 test-asan
 
-# Run BFFIO functional tests
-BFFIO-test: BFFIO
-	$(MAKE) -C tools/BFFIO test
+test-strict:
+	$(MAKE) -j4 all integrations
+	$(MAKE) -j1 test-all
+	$(MAKE) -j1 test-tsan
+	$(MAKE) -j1 test-asan
 
-# Run BFFIO vs FIO baseline comparison
-BFFIO-baseline: BFFIO
-	$(MAKE) -C tools/BFFIO baseline
-
-# Build auracp file copy tool
-auracp: engine
-	$(MAKE) -C tools/auracp
-
-# Build C++ auracp file copy tool
-auracp-cpp: engine
-	$(MAKE) -C tools/auracp_cpp
-
-# Build all examples (C + C++ + Rust)
-examples: c-examples cpp-examples rust-examples
-
-# Build C examples only
-c-examples: engine
-	$(MAKE) -C examples/C
-
-# Build C++ examples only
-cpp-examples: engine
-	$(MAKE) -C examples/cpp
-
-# Run C++ tests
-cpp-test: engine
-	$(MAKE) -C tests cpp-test
-
-# =============================================================================
-# Rust Bindings
-# =============================================================================
-
-# Rust environment setup (source cargo if installed via rustup)
-CARGO = $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
-RUST_LIB_PATH = $(CURDIR)/engine/lib
-
-# Build Rust bindings
-rust: engine
-	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path bindings/rust/Cargo.toml --release
-
-# Run Rust tests
-rust-test: engine
-	@printf "Running Rust tests...\n"
-	@rust_out=$$(LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) test --manifest-path bindings/rust/Cargo.toml 2>&1) && rust_ok=1 || rust_ok=0; \
-	echo "$$rust_out" | awk ' \
-		/^test / { \
-			s=$$NF; line=$$0; \
-			sub(/^test /, "", line); sub(/ \.\.\. [a-zA-Z]+$$/, "", line); \
-			sub(/^tests::/, "", line); \
-			if (line ~ / - /) { \
-				path=line; sub(/ - .*/, "", path); \
-				sub(/^.+\.rs - /, "", line); \
-				gsub(/\(line [0-9]+\)/, "", line); \
-				sub(/ *- *compile */, "", line); \
-				gsub(/^ +| +$$/, "", line); \
-				if (line == "") { n=split(path,a,"/"); line=a[n]; sub(/\.rs$$/, "", line) } \
-			} \
-			if (s=="ok") { printf "  %-40s OK\n", line; p++ } \
-			else if (s=="FAILED") { printf "  %-40s FAIL\n", line; f++ } \
-			else if (s=="ignored") { printf "  %-40s SKIP\n", line; ig++ } \
-		} \
-		END { \
-			if (f>0) printf "\n%d tests passed, %d FAILED\n",p,f; \
-			else if (ig>0) printf "\n%d tests passed, %d skipped\n",p,ig; \
-			else printf "\n%d tests passed\n",p \
-		}'; \
-	if [ "$$rust_ok" -eq 0 ]; then exit 1; fi
-
-# Build Rust examples
-rust-examples: rust
-	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) build --manifest-path examples/rust/Cargo.toml --examples --release
-
-# Run a specific Rust example
-rust-run-%: rust-examples
-	LD_LIBRARY_PATH=$(RUST_LIB_PATH) $(CARGO) run --manifest-path examples/rust/Cargo.toml --example $* --release
-
-# Clean Rust build artifacts
-rust-clean:
-	-$(CARGO) clean --manifest-path bindings/rust/Cargo.toml 2>/dev/null || true
-	-$(CARGO) clean --manifest-path examples/rust/Cargo.toml 2>/dev/null || true
-
-# Install
-install: engine
-	install -d $(DESTDIR)$(PREFIX)/lib
-	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
-	install -d $(DESTDIR)$(PREFIX)/include
-	install -d $(DESTDIR)$(PREFIX)/include/aura
-	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
-	ln -sf $(notdir $(LIB_SHARED)) $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
-	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
-	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
-	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
-	install -m 644 engine/include/aura.h $(DESTDIR)$(PREFIX)/include/
-	install -m 644 engine/include/aura/*.hpp $(DESTDIR)$(PREFIX)/include/aura/
-	install -d $(DESTDIR)$(PREFIX)/include/aura/integrations
-	install -m 644 integrations/prometheus/C/aura_prometheus.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
-	install -m 644 integrations/opentelemetry/C/aura_otel.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
-	install -m 644 integrations/opentelemetry/C/aura_otel_push.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
-	install -m 644 integrations/syslog/C/aura_syslog.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
-	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
-
-# Uninstall
-uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.so.$(VERSION)
-	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
-	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
-	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.a
-	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libaura.pc
-	rm -f $(DESTDIR)$(PREFIX)/include/aura.h
-	rm -rf $(DESTDIR)$(PREFIX)/include/aura
-
-# Clean
-clean: rust-clean
-	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
-	rm -f $(LIB_SHARED) engine/lib/$(LIB_SONAME) engine/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
-	rm -rf engine/lib
-	-$(MAKE) -C tests clean 2>/dev/null || true
-	-$(MAKE) -C examples/C clean 2>/dev/null || true
-	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
-	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
-	-$(MAKE) -C tools/auracp clean 2>/dev/null || true
-	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
-	rm -f integrations/prometheus/C/prometheus_example
-	rm -f integrations/opentelemetry/C/otel_example
-	rm -f integrations/syslog/C/syslog_example
-
-# Debug build
-debug: CFLAGS += -g -O0 -DDEBUG
-debug: engine
+.PHONY: test-local test-all test test-memory test-strict
 
 # =============================================================================
 # Sanitizer builds
@@ -333,6 +281,8 @@ $(LIB_ASAN): $(ASAN_OBJ) | engine/lib
 
 asan: $(LIB_ASAN)
 
+.PHONY: tsan asan
+
 # =============================================================================
 # Sanitizer test targets
 # =============================================================================
@@ -355,68 +305,63 @@ test-sanitizers: engine tsan asan
 	@echo "========================================"
 	@echo "  Sanitizer Test Suite"
 	@echo "========================================"
-	@vg_fail=0; tsan_fail=0; asan_fail=0; \
-	echo ""; \
-	echo "--- Valgrind ---"; \
-	$(MAKE) -C tests valgrind 2>&1 && vg_ok=1 || vg_ok=0; \
-	if [ "$$vg_ok" -eq 0 ]; then vg_fail=1; fi; \
-	echo ""; \
-	echo "--- ThreadSanitizer ---"; \
-	$(MAKE) -C tests tsan 2>&1 && tsan_ok=1 || tsan_ok=0; \
-	if [ "$$tsan_ok" -eq 0 ]; then tsan_fail=1; fi; \
-	echo ""; \
-	echo "--- AddressSanitizer ---"; \
-	$(MAKE) -C tests asan 2>&1 && asan_ok=1 || asan_ok=0; \
-	if [ "$$asan_ok" -eq 0 ]; then asan_fail=1; fi; \
+	@failed=""; \
+	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan"; do \
+		name=$${suite%%:*}; target=$${suite#*:}; \
+		echo ""; \
+		echo "--- $$name ---"; \
+		if $(MAKE) -C tests $$target 2>&1; then \
+			eval $${target}_ok=1; \
+		else \
+			eval $${target}_ok=0; failed="$$failed $$name"; \
+		fi; \
+	done; \
 	echo ""; \
 	echo "========================================"; \
 	echo "  Sanitizer Summary"; \
 	echo "========================================"; \
-	if [ "$$vg_fail" -eq 0 ]; then \
-		echo "  Valgrind:  [OK]"; \
-	else \
-		echo "  Valgrind:  FAILED"; \
-	fi; \
-	if [ "$$tsan_fail" -eq 0 ]; then \
-		echo "  TSan:      [OK]"; \
-	else \
-		echo "  TSan:      FAILED"; \
-	fi; \
-	if [ "$$asan_fail" -eq 0 ]; then \
-		echo "  ASan:      [OK]"; \
-	else \
-		echo "  ASan:      FAILED"; \
-	fi; \
+	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan"; do \
+		name=$${suite%%:*}; target=$${suite#*:}; \
+		eval ok=\$$$${target}_ok; \
+		if [ "$$ok" -eq 1 ]; then \
+			printf "  %-12s[OK]\n" "$$name:"; \
+		else \
+			printf "  %-12sFAILED\n" "$$name:"; \
+		fi; \
+	done; \
 	echo "========================================"; \
-	if [ "$$vg_fail" -ne 0 ] || [ "$$tsan_fail" -ne 0 ] || [ "$$asan_fail" -ne 0 ]; then \
+	if [ -n "$$failed" ]; then \
 		echo "RESULT: FAILED"; exit 1; \
 	else \
 		echo "RESULT: ALL PASSED"; \
 	fi
+
+.PHONY: test-valgrind test-tsan test-asan test-sanitizers
 
 # =============================================================================
 # Performance benchmarks (use BENCH_DIR=/path to override test file location)
 # =============================================================================
 BENCH_DIR_FLAG = $(if $(BENCH_DIR),--dir $(BENCH_DIR))
 
-# Quick benchmark (3s per test)
-bench-quick: engine
+# Build perf_bench binary (shared prerequisite for bench targets)
+perf_bench: engine
 	$(MAKE) -C tests perf_bench
+.PHONY: perf_bench
+
+# Quick benchmark (3s per test)
+bench-quick: perf_bench
 	cd tests && ./run_analysis.sh --quick $(BENCH_DIR_FLAG)
 
 # Standard benchmark with FIO comparison (5s per test)
-bench: engine
-	$(MAKE) -C tests perf_bench
+bench: perf_bench
 	cd tests && ./run_analysis.sh --standard $(BENCH_DIR_FLAG)
 
 # Full benchmark (10s per test, more stable numbers)
-bench-full: engine
-	$(MAKE) -C tests perf_bench
+bench-full: perf_bench
 	cd tests && ./run_analysis.sh --full $(BENCH_DIR_FLAG)
 
 # Benchmark without FIO baseline
-bench-no-fio: engine
-	$(MAKE) -C tests perf_bench
+bench-no-fio: perf_bench
 	cd tests && ./run_analysis.sh --skip-fio $(BENCH_DIR_FLAG)
 
 # Check benchmark dependencies (fio, perf, numactl, etc.)
@@ -424,13 +369,11 @@ bench-deps: engine
 	$(MAKE) -C tests check-deps
 
 # Deep performance analysis (flamegraphs, cachegrind, pahole, callgrind)
-bench-deep: engine
-	$(MAKE) -C tests perf_bench
+bench-deep: perf_bench
 	cd tests && ./run_deep_analysis.sh $(BENCH_DIR_FLAG)
 
 # Quick deep analysis (~10 min)
-bench-deep-quick: engine
-	$(MAKE) -C tests perf_bench
+bench-deep-quick: perf_bench
 	cd tests && ./run_deep_analysis.sh --quick $(BENCH_DIR_FLAG)
 
 # Performance regression test: raw io_uring vs AuraIO overhead
@@ -443,6 +386,89 @@ bench-adaptive: engine
 	$(MAKE) -C tests adaptive_value
 	cd tests && ./adaptive_value $(ADAPTIVE_BENCH_ARGS)
 
+.PHONY: bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick perf-regression bench-adaptive
+
+# =============================================================================
+# Tools
+# =============================================================================
+
+# Build BFFIO benchmark tool
+BFFIO: engine
+	$(MAKE) -C tools/BFFIO
+
+# Run BFFIO functional tests
+BFFIO-test: BFFIO
+	$(MAKE) -C tools/BFFIO test
+
+# Run BFFIO vs FIO baseline comparison
+BFFIO-baseline: BFFIO
+	$(MAKE) -C tools/BFFIO baseline
+
+# Build auracp file copy tool
+auracp: engine
+	$(MAKE) -C tools/auracp
+
+# Build C++ auracp file copy tool
+auracp-cpp: engine
+	$(MAKE) -C tools/auracp_cpp
+
+.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp
+
+# =============================================================================
+# Installation
+# =============================================================================
+
+install: engine
+	install -d $(DESTDIR)$(PREFIX)/lib
+	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	install -d $(DESTDIR)$(PREFIX)/include
+	install -d $(DESTDIR)$(PREFIX)/include/aura
+	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
+	ln -sf $(notdir $(LIB_SHARED)) $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
+	ln -sf $(LIB_SONAME) $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
+	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
+	install -m 644 $(PKGCONFIG) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
+	install -m 644 engine/include/aura.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 engine/include/aura/*.hpp $(DESTDIR)$(PREFIX)/include/aura/
+	install -d $(DESTDIR)$(PREFIX)/include/aura/integrations
+	install -m 644 integrations/prometheus/C/aura_prometheus.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/opentelemetry/C/aura_otel.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/opentelemetry/C/aura_otel_push.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	install -m 644 integrations/syslog/C/aura_syslog.h $(DESTDIR)$(PREFIX)/include/aura/integrations/
+	ldconfig $(DESTDIR)$(PREFIX)/lib 2>/dev/null || true
+
+# Uninstall
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.so.$(VERSION)
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_SONAME)
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_LINKNAME)
+	rm -f $(DESTDIR)$(PREFIX)/lib/libaura.a
+	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/libaura.pc
+	rm -f $(DESTDIR)$(PREFIX)/include/aura.h
+	rm -rf $(DESTDIR)$(PREFIX)/include/aura
+
+.PHONY: install uninstall
+
+# =============================================================================
+# Clean
+# =============================================================================
+
+clean: rust-clean
+	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
+	rm -f $(LIB_SHARED) engine/lib/$(LIB_SONAME) engine/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
+	rm -rf engine/lib
+	-$(MAKE) -C tests clean 2>/dev/null || true
+	-$(MAKE) -C examples/C clean 2>/dev/null || true
+	-$(MAKE) -C examples/cpp clean 2>/dev/null || true
+	-$(MAKE) -C tools/BFFIO clean 2>/dev/null || true
+	-$(MAKE) -C tools/auracp clean 2>/dev/null || true
+	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
+	rm -f integrations/prometheus/C/prometheus_example
+	rm -f integrations/opentelemetry/C/otel_example
+	rm -f integrations/syslog/C/syslog_example
+
+.PHONY: clean
+
 # =============================================================================
 # Dependency management
 # =============================================================================
@@ -454,6 +480,8 @@ deps:
 # Check dependencies without installing
 deps-check:
 	bash build-tools/deps/check.sh
+
+.PHONY: deps deps-check
 
 # =============================================================================
 # Linting and static analysis
@@ -500,6 +528,8 @@ lint-clang-tidy: compile_commands.json
 	@echo "Running clang-tidy..."
 	@clang-tidy $(SRC) -- $(CFLAGS)
 
+.PHONY: lint lint-cppcheck lint-strict lint-clang-tidy
+
 # =============================================================================
 # Compile database for IDE/tooling support
 # =============================================================================
@@ -528,30 +558,23 @@ compdb-manual:
 # Alias for compile database
 compdb: compile_commands.json
 
+.PHONY: compdb compdb-manual
+
+# =============================================================================
+# Coverage
+# =============================================================================
+
 coverage:
 	build-tools/coverage/run_llvm_cov.sh coverage
 
 coverage-check:
 	MIN_LINE_COVERAGE=$(MIN_LINE_COVERAGE) build-tools/coverage/run_llvm_cov.sh coverage
 
+.PHONY: coverage coverage-check
+
 # =============================================================================
 # Help
 # =============================================================================
-
-test:
-	$(MAKE) -j4 all
-	$(MAKE) -j1 test-all
-
-test-memory:
-	$(MAKE) -j4 all
-	$(MAKE) -j1 test-tsan
-	$(MAKE) -j1 test-asan
-
-test-strict:
-	$(MAKE) -j4 all integrations
-	$(MAKE) -j1 test-all
-	$(MAKE) -j1 test-tsan
-	$(MAKE) -j1 test-asan
 
 help:
 	@echo "AuraIO - Self-tuning async I/O library for Linux"
@@ -633,13 +656,4 @@ help:
 	@echo "  PREFIX=$(PREFIX)    Installation prefix"
 	@echo "  DESTDIR=$(DESTDIR)   Staging directory for packaging"
 
-.PHONY: all engine test test-memory test-strict test-local test-all examples c-examples cpp-examples install uninstall clean debug deps deps-check help \
-        cpp-test \
-        rust rust-test rust-examples rust-clean \
-	        tsan asan test-valgrind test-tsan test-asan test-sanitizers \
-	        bench bench-quick bench-full bench-no-fio bench-deps bench-deep bench-deep-quick perf-regression bench-adaptive \
-	        lint lint-cppcheck lint-strict lint-clang-tidy compdb compdb-manual \
-	        coverage coverage-check \
-	        integrations \
-	        BFFIO BFFIO-test BFFIO-baseline \
-	        auracp auracp-cpp
+.PHONY: help
