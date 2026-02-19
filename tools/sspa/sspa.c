@@ -44,6 +44,7 @@
 #define PIPELINE_DEPTH 32
 #define MAX_WORKERS 64
 #define TMP_FILENAME ".sspa.tmp"
+#define WAIT_TIMEOUT_MS 100 /* aura_wait timeout between progress checks */
 
 static _Atomic int g_interrupted = 0;
 
@@ -390,7 +391,7 @@ static int worker_run(worker_ctx_t *wctx, double total_duration_sec) {
     /* Event loop: wait for completions, callbacks resubmit automatically.
      * Also retry any FREE slots that failed with EAGAIN on submission. */
     while (!wctx->stopping && wctx->error == 0 && !g_interrupted) {
-        int n = aura_wait(engine, 100);
+        int n = aura_wait(engine, WAIT_TIMEOUT_MS);
         if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) break;
 
         /* Retry slots that couldn't submit (EAGAIN) */
@@ -943,8 +944,12 @@ int main(int argc, char **argv) {
 
     snprintf(g_tmpfile, sizeof(g_tmpfile), "%s/%s", test_dir, TMP_FILENAME);
     atexit(cleanup_tmpfile);
+    /* SA_RESETHAND: second signal uses default handler (immediate kill).
+     * Block SIGINT+SIGTERM during handler to prevent re-entry. */
     struct sigaction sa = { .sa_handler = sigint_handler, .sa_flags = SA_RESETHAND };
     sigemptyset(&sa.sa_mask);
+    sigaddset(&sa.sa_mask, SIGINT);
+    sigaddset(&sa.sa_mask, SIGTERM);
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
@@ -989,6 +994,12 @@ int main(int argc, char **argv) {
         const workload_t *w = &workloads[t];
         int threads = w->threads ? w->threads : num_cpus;
         if (threads < 1) threads = 1;
+
+        /* Lakehouse needs scan+compact+lookup threads; skip on < 3 cores */
+        if (w->pattern == PATTERN_LAKEHOUSE && num_cpus < 3) {
+            printf("  %-12s %-20s   (skipped: needs >= 3 CPU cores)\n", w->name, w->description);
+            continue;
+        }
 
         if (isatty(STDERR_FILENO)) {
             fprintf(stderr, "\r  Running %-12s...", w->name);
