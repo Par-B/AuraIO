@@ -166,7 +166,7 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     }
     memset(ctx->requests, 0, (size_t)queue_depth * sizeof(aura_request_t));
 
-    ctx->free_request_stack = malloc(queue_depth * sizeof(int));
+    ctx->free_request_stack = malloc((size_t)queue_depth * sizeof(int));
     if (!ctx->free_request_stack) {
         goto cleanup_requests;
     }

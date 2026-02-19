@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_engine.h
  * @brief AIMD congestion control for I/O tuning
@@ -130,8 +129,12 @@ static inline double atomic_load_double(const _Atomic uint64_t *a, memory_order 
 #define ADAPTIVE_MIN_SAMPLE_WINDOW_MS 100
 
 /** Maximum sample window in milliseconds. Don't wait longer than 1 second
- *  even at very low IOPS; make a decision with available data. */
+ *  even at very low IOPS; make a decision with available data.
+ *  Not referenced directly; the tick proceeds when MIN is satisfied and
+ *  MAX >= MIN guarantees the window is bounded. */
 #define ADAPTIVE_MAX_SAMPLE_WINDOW_MS 1000
+_Static_assert(ADAPTIVE_MAX_SAMPLE_WINDOW_MS >= ADAPTIVE_MIN_SAMPLE_WINDOW_MS,
+               "MAX sample window must be >= MIN sample window");
 
 /** Minimum batch threshold. Never batch fewer than 2 SQEs per submit to
  *  maintain syscall efficiency. */

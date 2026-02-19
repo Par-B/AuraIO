@@ -935,7 +935,6 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Guard against size=0: size_to_class(0) returns class 0, which would
      * place the buffer in the wrong bucket. Free directly instead. */
     if (size == 0) {
-        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         free(buf);
         return;
     }
@@ -1129,7 +1128,8 @@ int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
 
     size_t mask = map->capacity - 1;
     size_t idx = buf_map_hash(key, mask);
-    while (map->entries[idx].key != 0) {
+    for (size_t probe = 0; probe < map->capacity; probe++) {
+        if (map->entries[idx].key == 0) break;
         if (map->entries[idx].key == key) {
             /* Duplicate key: update in place instead of inserting again */
             map->entries[idx].class_idx = (uint8_t)class_idx;
@@ -1153,8 +1153,9 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
     size_t mask = map->capacity - 1;
     size_t idx = buf_map_hash(key, mask);
 
-    /* Linear probe to find the key */
-    while (map->entries[idx].key != 0) {
+    /* Linear probe to find the key (bounded by capacity to prevent
+     * infinite loops if the table is unexpectedly full) */
+    for (size_t probe = 0; probe < map->capacity && map->entries[idx].key != 0; probe++) {
         if (map->entries[idx].key == key) {
             int class_idx = map->entries[idx].class_idx;
             /* Delete with backward-shift to maintain probe chains */

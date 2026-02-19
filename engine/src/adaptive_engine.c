@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_engine.c
  * @brief AIMD congestion control implementation
@@ -379,6 +378,7 @@ void adaptive_record_completion(adaptive_controller_t *ctrl, int64_t latency_ns,
 }
 
 void adaptive_record_submit(adaptive_controller_t *ctrl, int sqe_count) {
+    if (sqe_count <= 0) return;
     atomic_fetch_add_explicit(&ctrl->submit_calls, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&ctrl->sqes_submitted, sqe_count, memory_order_relaxed);
 }
@@ -727,7 +727,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
 
 #ifndef NDEBUG
-    atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
 #endif
     return params_changed;
 }
