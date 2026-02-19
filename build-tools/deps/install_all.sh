@@ -78,6 +78,7 @@ BASE_PACKAGES=(
     make
     pkg-config
     liburing-dev
+    libssl-dev
     python3
     python3-pip
     curl
@@ -214,6 +215,7 @@ command -v gcc >/dev/null 2>&1 && echo "gcc: $(gcc --version | head -n1)"
 command -v g++ >/dev/null 2>&1 && echo "g++: $(g++ --version | head -n1)"
 command -v pkg-config >/dev/null 2>&1 && echo "pkg-config: $(pkg-config --version)"
 pkg-config --exists liburing 2>/dev/null && echo "liburing: $(pkg-config --modversion liburing)"
+pkg-config --exists libcrypto 2>/dev/null && echo "libcrypto: $(pkg-config --modversion libcrypto)"
 command -v clang >/dev/null 2>&1 && echo "clang: $(clang --version | head -n1)"
 if [ -n "$CLANG_TIDY_CMD" ]; then
     echo "clang-tidy: $("$CLANG_TIDY_CMD" --version | head -n1)"

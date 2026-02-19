@@ -89,6 +89,13 @@ else
     FAIL=1
 fi
 
+if pkg-config --exists libcrypto 2>/dev/null; then
+    echo "  [OK] libcrypto ($(pkg-config --modversion libcrypto))"
+else
+    echo "  [FAIL] libcrypto (libssl-dev)"
+    FAIL=1
+fi
+
 echo ""
 echo "--- Rust toolchain ---"
 check_cmd rustc "rustc" || FAIL=1
