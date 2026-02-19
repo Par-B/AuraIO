@@ -102,11 +102,11 @@ typedef struct {
 // Global state
 // ============================================================================
 
-static volatile sig_atomic_t g_interrupted = 0;
+static atomic_int g_interrupted = 0;
 
 static void sigint_handler(int sig) {
     (void)sig;
-    g_interrupted = 1;
+    atomic_store(&g_interrupted, 1);
 }
 
 // ============================================================================
@@ -444,7 +444,7 @@ static void *worker_fn(void *arg) {
         return NULL;
     }
 
-    while (!g_interrupted) {
+    while (!atomic_load(&g_interrupted)) {
         tree_node_t *node = wq_pop(wctx->wq);
         if (!node) break;
 
@@ -454,7 +454,11 @@ static void *worker_fn(void *arg) {
         for (int i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir) {
                 atomic_fetch_add(&wctx->wq->pending, 1);
-                if (!wq_push(wctx->wq, node->children[i])) atomic_fetch_sub(&wctx->wq->pending, 1);
+                if (!wq_push(wctx->wq, node->children[i])) {
+                    atomic_fetch_sub(&wctx->wq->pending, 1);
+                    fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
+                            node->children[i]->full_path);
+                }
             }
         }
 
@@ -511,7 +515,11 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     for (int i = 0; i < root->num_children; i++) {
         if (root->children[i]->is_dir) {
             atomic_fetch_add(&wq.pending, 1);
-            if (!wq_push(&wq, root->children[i])) atomic_fetch_sub(&wq.pending, 1);
+            if (!wq_push(&wq, root->children[i])) {
+                atomic_fetch_sub(&wq.pending, 1);
+                fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
+                        root->children[i]->full_path);
+            }
         }
     }
 
@@ -654,10 +662,13 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
         char mode_str[12];
         format_mode(mode_str, node->st.stx_mode);
 
-        struct passwd *pw = getpwuid(node->st.stx_uid);
-        struct group *gr = getgrgid(node->st.stx_gid);
-        const char *uname = pw ? pw->pw_name : "?";
-        const char *gname = gr ? gr->gr_name : "?";
+        struct passwd pw_buf, *pw_result;
+        struct group gr_buf, *gr_result;
+        char pw_str[256], gr_str[256];
+        getpwuid_r(node->st.stx_uid, &pw_buf, pw_str, sizeof(pw_str), &pw_result);
+        getgrgid_r(node->st.stx_gid, &gr_buf, gr_str, sizeof(gr_str), &gr_result);
+        const char *uname = pw_result ? pw_result->pw_name : "?";
+        const char *gname = gr_result ? gr_result->gr_name : "?";
 
         if (node->is_dir) {
             char sz[32];
@@ -859,7 +870,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (g_interrupted) {
+    if (atomic_load(&g_interrupted)) {
         node_free(root);
         fprintf(stderr, "\natree: interrupted\n");
         return 130;
