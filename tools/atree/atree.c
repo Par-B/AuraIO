@@ -236,15 +236,16 @@ static tree_node_t *node_create(const char *name, const char *full_path) {
     return n;
 }
 
-static void node_add_child(tree_node_t *parent, tree_node_t *child) {
+static bool node_add_child(tree_node_t *parent, tree_node_t *child) {
     if (parent->num_children >= parent->cap_children) {
         int newcap = parent->cap_children ? parent->cap_children * 2 : 16;
         tree_node_t **tmp = realloc(parent->children, (size_t)newcap * sizeof(*tmp));
-        if (!tmp) return;
+        if (!tmp) return false;
         parent->children = tmp;
         parent->cap_children = newcap;
     }
     parent->children[parent->num_children++] = child;
+    return true;
 }
 
 static void node_free(tree_node_t *n) {
@@ -306,7 +307,10 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         /* Quick type hint from dirent to avoid statx for dirs_only filtering later */
         if (ent->d_type == DT_DIR) child->is_dir = true;
 
-        node_add_child(dir_node, child);
+        if (!node_add_child(dir_node, child)) {
+            node_free(child);
+            continue;
+        }
     }
     closedir(d);
 
@@ -880,9 +884,9 @@ int main(int argc, char **argv) {
     char total_sz[32];
     format_size(total_sz, sizeof(total_sz), root->total_size, config.raw_bytes);
 
-    printf("\n%d file%s, %d director%s, %s total  (scanned in %.3fs)\n", root->total_files,
-           root->total_files == 1 ? "" : "s", root->total_dirs + 1,
-           root->total_dirs == 0 ? "y" : "ies", total_sz, elapsed);
+    printf("\n%d file%s, %d director%s, %s total  (scanned in %.3fs)\n", file_count,
+           file_count == 1 ? "" : "s", dir_count + 1, dir_count == 0 ? "y" : "ies", total_sz,
+           elapsed);
 
     node_free(root);
     return 0;
