@@ -110,6 +110,7 @@ static uint64_t rng_next(void) {
 static off_t rng_offset(off_t file_size, size_t io_size) {
     if ((off_t)io_size >= file_size) return 0;
     uint64_t num_blocks = (uint64_t)(file_size / (off_t)io_size);
+    /* Modulo bias is negligible for benchmark purposes (num_blocks << 2^64) */
     return (off_t)(rng_next() % num_blocks) * (off_t)io_size;
 }
 
@@ -698,7 +699,7 @@ static ssize_t parse_size(const char *str) {
 // Test file management
 // ============================================================================
 
-static char g_tmpfile[4096];
+static char g_tmpfile[PATH_MAX];
 
 static void cleanup_tmpfile(void) {
     if (g_tmpfile[0]) {
