@@ -245,6 +245,15 @@ static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
         return;
     }
 
+    /* Skip completions submitted during warmup — their latency includes
+     * warmup time and would skew results.  Resubmit to keep pipeline full. */
+    if (slot->submit_time.tv_sec < wctx->warmup_end.tv_sec ||
+        (slot->submit_time.tv_sec == wctx->warmup_end.tv_sec &&
+         slot->submit_time.tv_nsec < wctx->warmup_end.tv_nsec)) {
+        if (!wctx->stopping && wctx->error == 0) submit_one(wctx, slot);
+        return;
+    }
+
     /* Track actual measurement window */
     if (!wctx->measure_started) {
         wctx->measure_start = now;
