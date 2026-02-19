@@ -81,6 +81,58 @@ typedef struct tree_node {
 } tree_node_t;
 
 // ============================================================================
+// Visited set for symlink cycle detection (dev/ino pairs)
+// ============================================================================
+
+typedef struct {
+    dev_t dev;
+    ino_t ino;
+} devino_t;
+
+typedef struct {
+    devino_t *entries;
+    size_t count;
+    size_t cap;
+    pthread_mutex_t lock;
+} visited_set_t;
+
+static void visited_init(visited_set_t *vs) {
+    vs->entries = NULL;
+    vs->count = 0;
+    vs->cap = 0;
+    pthread_mutex_init(&vs->lock, NULL);
+}
+
+static void visited_destroy(visited_set_t *vs) {
+    free(vs->entries);
+    pthread_mutex_destroy(&vs->lock);
+}
+
+/* Returns true if newly inserted, false if already present. */
+static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
+    pthread_mutex_lock(&vs->lock);
+    for (size_t i = 0; i < vs->count; i++) {
+        if (vs->entries[i].dev == dev && vs->entries[i].ino == ino) {
+            pthread_mutex_unlock(&vs->lock);
+            return false;
+        }
+    }
+    if (vs->count >= vs->cap) {
+        size_t newcap = vs->cap ? vs->cap * 2 : 64;
+        devino_t *tmp = realloc(vs->entries, newcap * sizeof(*tmp));
+        if (!tmp) {
+            pthread_mutex_unlock(&vs->lock);
+            return false; /* treat as already visited on OOM */
+        }
+        vs->entries = tmp;
+        vs->cap = newcap;
+    }
+    vs->entries[vs->count++] = (devino_t){ .dev = dev, .ino = ino };
+    pthread_mutex_unlock(&vs->lock);
+    return true;
+}
+
+// ============================================================================
 // Work queue for parallel directory scanning
 // ============================================================================
 
@@ -96,6 +148,7 @@ typedef struct {
     pthread_mutex_t lock;
     pthread_cond_t cond;
     bool done;
+    visited_set_t *visited;
 } work_queue_t;
 
 // ============================================================================
@@ -314,9 +367,19 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
 // ============================================================================
 
 static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const config_t *config,
-                          int depth) {
+                          int depth, visited_set_t *visited) {
     /* Skip scanning beyond max_depth — no children to enumerate */
     if (config->max_depth >= 0 && depth >= config->max_depth) return 0;
+
+    /* Cycle detection: skip directories we've already visited (symlink loops) */
+    if (visited) {
+        struct stat sb;
+        if (stat(dir_node->full_path, &sb) == 0) {
+            if (!visited_insert(visited, sb.st_dev, sb.st_ino)) {
+                return 0; /* already visited */
+            }
+        }
+    }
 
     DIR *d = opendir(dir_node->full_path);
     if (!d) {
@@ -480,7 +543,7 @@ static void *worker_fn(void *arg) {
         tree_node_t *node = wq_pop(wctx->wq);
         if (!node) break;
 
-        (void)scan_directory(node, engine, wctx->config, node->depth);
+        (void)scan_directory(node, engine, wctx->config, node->depth, wctx->wq->visited);
 
         /* Enqueue child directories for scanning */
         for (int i = 0; i < node->num_children; i++) {
@@ -509,6 +572,17 @@ static void *worker_fn(void *arg) {
 // ============================================================================
 
 static int scan_tree(tree_node_t *root, const config_t *config) {
+    visited_set_t visited;
+    visited_init(&visited);
+
+    /* Register root directory to prevent cycles back to it */
+    {
+        struct stat sb;
+        if (stat(root->full_path, &sb) == 0) {
+            visited_insert(&visited, sb.st_dev, sb.st_ino);
+        }
+    }
+
     /* Scan root directory first (single-threaded) */
     aura_options_t opts;
     aura_options_init(&opts);
@@ -519,10 +593,11 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
         fprintf(stderr, "atree: failed to create engine: %s\n", strerror(errno));
+        visited_destroy(&visited);
         return -1;
     }
 
-    scan_directory(root, engine, config, 0);
+    scan_directory(root, engine, config, 0, &visited);
     aura_destroy(engine);
 
     /* Count child directories to decide on parallelism */
@@ -531,7 +606,10 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         if (root->children[i]->is_dir) child_dirs++;
     }
 
-    if (child_dirs == 0) return 0;
+    if (child_dirs == 0) {
+        visited_destroy(&visited);
+        return 0;
+    }
 
     /* Determine worker count */
     long ncpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -542,6 +620,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
 
     work_queue_t wq;
     wq_init(&wq);
+    wq.visited = &visited;
 
     /* Seed work queue with child directories */
     for (int i = 0; i < root->num_children; i++) {
@@ -558,6 +637,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     /* If no dirs were successfully enqueued, nothing to do */
     if (atomic_load(&wq.pending) == 0) {
         wq_destroy(&wq);
+        visited_destroy(&visited);
         return 0;
     }
 
@@ -582,6 +662,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     }
 
     wq_destroy(&wq);
+    visited_destroy(&visited);
     return 0;
 }
 
