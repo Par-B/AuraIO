@@ -325,6 +325,12 @@ typedef struct {
     uint32_t _reserved[2];                    /**< Reserved for future use; must be zero */
 } aura_histogram_t;
 
+#ifdef __cplusplus
+static_assert(sizeof(aura_histogram_t) == 824, "aura_histogram_t ABI size changed");
+#else
+_Static_assert(sizeof(aura_histogram_t) == 824, "aura_histogram_t ABI size changed");
+#endif
+
 /**
  * Buffer pool statistics
  *
@@ -336,6 +342,12 @@ typedef struct {
     int shard_count;              /**< Number of pool shards */
     uint32_t _reserved[4];        /**< Reserved for future use; must be zero */
 } aura_buffer_stats_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(aura_buffer_stats_t) == 40, "aura_buffer_stats_t ABI size changed");
+#else
+_Static_assert(sizeof(aura_buffer_stats_t) == 40, "aura_buffer_stats_t ABI size changed");
+#endif
 
 /**
  * Ring selection mode
@@ -388,6 +400,12 @@ typedef struct {
 
     uint32_t _reserved[7]; /**< Reserved for future use; must be zero */
 } aura_options_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
+#else
+_Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
+#endif
 
 /* ============================================================================
  * AURA Flag Constants
