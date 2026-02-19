@@ -324,8 +324,9 @@ static void node_free(tree_node_t *n) {
                     cap *= 2;
                     tree_node_t **tmp = realloc(stack, cap * sizeof(*tmp));
                     if (!tmp) {
-                        free(stack);
-                        return;
+                        /* Can't grow stack; skip remaining children (they leak)
+                           but keep freeing everything already on the stack. */
+                        break;
                     }
                     stack = tmp;
                 }
@@ -995,7 +996,11 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             cap *= 2;
             print_frame_t *tmp = realloc(stack, cap * sizeof(*tmp));
             if (!tmp) {
+                /* Can't grow stack; free leaked prefixes and bail */
                 free(child_prefix);
+                for (size_t k = 0; k < sp; k++) {
+                    free(stack[k].prefix);
+                }
                 free(stack);
                 return;
             }
