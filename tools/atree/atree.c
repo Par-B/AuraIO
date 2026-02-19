@@ -401,6 +401,7 @@ static void node_free(tree_node_t *n) {
                     if (!tmp) {
                         /* Can't grow stack; skip remaining children (they leak)
                            but keep freeing everything already on the stack. */
+                        cur->num_children = 0;
                         break;
                     }
                     stack = tmp;
@@ -538,6 +539,9 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
     while (atomic_load(&batch->remaining) > 0) {
         if (atomic_load(&g_interrupted)) {
             atomic_store(&batch->abandoned, true);
+            /* Re-check: if all completions finished before we set abandoned,
+               no callback will free the batch — we must do it ourselves. */
+            if (atomic_load(&batch->remaining) == 0) free(batch);
             return -1;
         }
         aura_wait(engine, 100);
@@ -901,13 +905,56 @@ static void sort_tree(tree_node_t *root, bool by_size) {
 // Phase 4: Print tree
 // ============================================================================
 
+/* Simple uid/gid -> name cache to avoid repeated NSS lookups */
+#define ID_CACHE_SIZE 64
+
+typedef struct {
+    uint32_t id;
+    char name[32];
+    bool valid;
+} id_cache_entry_t;
+
+typedef struct {
+    id_cache_entry_t entries[ID_CACHE_SIZE];
+} id_cache_t;
+
+static const char *id_cache_lookup_uid(id_cache_t *cache, uint32_t uid) {
+    uint32_t slot = uid % ID_CACHE_SIZE;
+    id_cache_entry_t *e = &cache->entries[slot];
+    if (e->valid && e->id == uid) return e->name;
+
+    struct passwd pw_buf, *pw_result;
+    char buf[1024];
+    getpwuid_r(uid, &pw_buf, buf, sizeof(buf), &pw_result);
+    e->id = uid;
+    e->valid = true;
+    if (pw_result) snprintf(e->name, sizeof(e->name), "%s", pw_result->pw_name);
+    else snprintf(e->name, sizeof(e->name), "%u", uid);
+    return e->name;
+}
+
+static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
+    uint32_t slot = gid % ID_CACHE_SIZE;
+    id_cache_entry_t *e = &cache->entries[slot];
+    if (e->valid && e->id == gid) return e->name;
+
+    struct group gr_buf, *gr_result;
+    char buf[1024];
+    getgrgid_r(gid, &gr_buf, buf, sizeof(buf), &gr_result);
+    e->id = gid;
+    e->valid = true;
+    if (gr_result) snprintf(e->name, sizeof(e->name), "%s", gr_result->gr_name);
+    else snprintf(e->name, sizeof(e->name), "%u", gid);
+    return e->name;
+}
+
 /* Column widths for alignment */
 #define NAME_COL 36
 #define LONG_COL 40
 
 static void emit_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
-                      const char *prefix, bool is_last, int depth, int *file_count,
-                      int *dir_count) {
+                      const char *prefix, bool is_last, int depth, int *file_count, int *dir_count,
+                      id_cache_t *uid_cache, id_cache_t *gid_cache) {
     if (config->dirs_only && !node->is_dir) return;
 
     /* Build the tree connector + name part using dynamic buffer */
@@ -947,13 +994,8 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         char mode_str[12];
         format_mode(mode_str, node->st.stx_mode);
 
-        struct passwd pw_buf, *pw_result;
-        struct group gr_buf, *gr_result;
-        char pw_str[1024], gr_str[1024];
-        getpwuid_r(node->st.stx_uid, &pw_buf, pw_str, sizeof(pw_str), &pw_result);
-        getgrgid_r(node->st.stx_gid, &gr_buf, gr_str, sizeof(gr_str), &gr_result);
-        const char *uname = pw_result ? pw_result->pw_name : "?";
-        const char *gname = gr_result ? gr_result->gr_name : "?";
+        const char *uname = id_cache_lookup_uid(uid_cache, node->st.stx_uid);
+        const char *gname = id_cache_lookup_gid(gid_cache, node->st.stx_gid);
 
         if (node->is_dir) {
             char sz[32];
@@ -1019,8 +1061,8 @@ typedef struct {
 } print_frame_t;
 
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
-                       const char *prefix, bool is_last, int depth, int *file_count,
-                       int *dir_count) {
+                       const char *prefix, bool is_last, int depth, int *file_count, int *dir_count,
+                       id_cache_t *uid_cache, id_cache_t *gid_cache) {
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
@@ -1045,7 +1087,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         /* First visit: print the node itself */
         if (frame->child_idx == -1) {
             emit_node(node, config, cs, frame->prefix, frame->is_last, frame->depth, file_count,
-                      dir_count);
+                      dir_count, uid_cache, gid_cache);
             frame->child_idx = 0;
         }
 
@@ -1239,13 +1281,11 @@ int main(int argc, char **argv) {
 
     if (scan_tree(root, &config) != 0) {
         node_free(root);
+        if (atomic_load(&g_interrupted)) {
+            fprintf(stderr, "\natree: interrupted\n");
+            return 130;
+        }
         return 1;
-    }
-
-    if (atomic_load(&g_interrupted)) {
-        node_free(root);
-        fprintf(stderr, "\natree: interrupted\n");
-        return 130;
     }
 
     /* Aggregate */
@@ -1265,7 +1305,8 @@ int main(int argc, char **argv) {
     color_init(&cs, config.use_color);
 
     int file_count = 0, dir_count = 0;
-    print_node(root, &config, &cs, "", true, 0, &file_count, &dir_count);
+    id_cache_t uid_cache = { 0 }, gid_cache = { 0 };
+    print_node(root, &config, &cs, "", true, 0, &file_count, &dir_count, &uid_cache, &gid_cache);
 
     char total_sz[32];
     format_size(total_sz, sizeof(total_sz), root->total_size, config.raw_bytes);
