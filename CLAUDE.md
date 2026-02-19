@@ -56,7 +56,7 @@ cd bindings/rust && cargo test           # Run Rust tests
 ## Development Workflow
 
 - **CHANGELOG.md**: Update before committing major changes (new features, breaking changes, significant refactors). Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
-- **Version bumping**: Update `Makefile` (VERSION_*) and `engine/include/aura.h` (AURA_VERSION_*) together with CHANGELOG.md.
+- **Version bumping**: Update `Makefile` (VERSION_*), `engine/include/aura.h` (AURA_VERSION_*), `bindings/rust/aura/Cargo.toml`, and `bindings/rust/aura-sys/Cargo.toml` together with CHANGELOG.md.
 
 ## Non-Obvious Patterns
 
