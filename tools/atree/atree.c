@@ -115,11 +115,11 @@ static void sigint_handler(int sig) {
 
 typedef struct {
     bool enabled;
-    char dir[16];
-    char exec[16];
-    char link[16];
-    char pipe[16];
-    char sock[16];
+    char dir[32];
+    char exec[32];
+    char link[32];
+    char pipe[32];
+    char sock[32];
     char reset[8];
 } color_scheme_t;
 
@@ -480,7 +480,7 @@ static void *worker_fn(void *arg) {
         tree_node_t *node = wq_pop(wctx->wq);
         if (!node) break;
 
-        scan_directory(node, engine, wctx->config, node->depth);
+        (void)scan_directory(node, engine, wctx->config, node->depth);
 
         /* Enqueue child directories for scanning */
         for (int i = 0; i < node->num_children; i++) {
@@ -1038,8 +1038,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Build tree */
-    tree_node_t *root = node_create(config.root_path, config.root_path);
+    /* Build tree — resolve display name to canonical path */
+    char resolved[PATH_MAX];
+    const char *display_name = config.root_path;
+    if (realpath(config.root_path, resolved)) display_name = resolved;
+
+    tree_node_t *root = node_create(display_name, config.root_path);
     if (!root) return 1;
     root->st = root_st;
     root->is_dir = true;
