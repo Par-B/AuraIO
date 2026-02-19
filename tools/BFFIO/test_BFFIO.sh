@@ -268,8 +268,8 @@ if command -v jq &>/dev/null; then
         output=$("$BFFIO" --name=t --rw=randread --bs=4k --size="$SIZE" \
             --directory="$TEST_DIR" --direct=1 --runtime="$RUNTIME" --time_based \
             --target-p99=2ms --output-format=json 2>/dev/null)
-        echo "$output" | jq -e '.jobs[0].AuraIO.target_p99_ms == 2' >/dev/null 2>&1 && \
-        echo "$output" | jq -e '.jobs[0].AuraIO.max_concurrency > 0' >/dev/null 2>&1
+        echo "$output" | jq -e '.jobs[0].Aura.target_p99_ms == 2' >/dev/null 2>&1 && \
+        echo "$output" | jq -e '.jobs[0].Aura.max_concurrency > 0' >/dev/null 2>&1
     }
     test_case "target_p99_json_fields" pass target_p99_json_test
 else
@@ -285,7 +285,7 @@ echo "=== AuraIO Branding ==="
 branding_test() {
     "$BFFIO" --name=t --rw=randread --bs=4k --size="$SIZE_SMALL" \
         --directory="$TEST_DIR" --runtime="$RUNTIME" --time_based 2>&1 \
-        | grep -q 'AuraIO'
+        | grep -q 'Aura'
 }
 test_case "output_contains_aura" pass branding_test
 
