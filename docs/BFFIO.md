@@ -260,3 +260,7 @@ main.c
 | `output.c` | ~620 | FIO-compatible text + JSON formatters |
 | `test_BFFIO.sh` | ~260 | Functional test suite |
 | `run_baseline.sh` | ~250 | FIO comparison with delta report |
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

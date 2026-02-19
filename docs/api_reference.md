@@ -1999,3 +1999,7 @@ Rules that apply to completion callbacks across all API surfaces:
 9. **C++ callbacks must not throw.** Exceptions from callbacks trigger `std::terminate()` because they cannot propagate through the C callback trampoline.
 
 10. **Rust callbacks are `FnOnce`.** Each callback is invoked exactly once. Captured values are dropped after invocation.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

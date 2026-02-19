@@ -299,3 +299,7 @@ The latency histogram uses a **double-buffer swap** strategy. The AIMD controlle
 - You always get the most recent complete measurement window
 - The copy is ~800 bytes (200 buckets x 4 bytes) and takes ~200-500 ns under lock
 - The swap itself is a single pointer exchange and does not affect I/O
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

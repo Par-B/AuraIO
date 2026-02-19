@@ -392,3 +392,7 @@ The test reports IOPS overhead as a percentage: `(raw_IOPS - aura_IOPS) / raw_IO
 - **15-20%**: Relaxed. Appropriate when adaptive tuning provides significant value (e.g., mixed workloads, variable-latency storage) and the overhead is an acceptable trade for auto-tuning.
 
 See [API Reference](api_reference.md) for full function signatures and [Architecture](architecture.md) for internal design details.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

@@ -483,4 +483,4 @@ For bugs and features: [open an issue](https://github.com/your-org/auraio/issues
 
 ## License
 
-[Your license here]
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

@@ -103,3 +103,7 @@ read/write ratios, fsync intervals, and group reporting. The `--ioengine`
 flag is accepted for compatibility but always uses AuraIO internally.
 See [USAGE.md](USAGE.md) for the full compatibility matrix and option
 reference.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../../LICENSE) for details.

@@ -257,3 +257,7 @@ FIO io_uring options that BFFIO does not implement:
 | Miscellaneous | `thinktime`, `ioscheduler`, `thread`, `loops`, `stonewall` | Not implemented |
 
 BFFIO covers the core FIO io_uring workflow that the vast majority of benchmarks use: specify a pattern, block size, depth, file, and duration. Advanced FIO options like rate limiting, verification, and output logging are not needed because BFFIO's AIMD controller replaces manual depth/rate tuning, and its built-in adaptive sampling provides accurate latency histograms without separate log files.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../../LICENSE) for details.

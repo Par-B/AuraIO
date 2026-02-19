@@ -517,3 +517,7 @@ try {
 - **`examples/rust/`** -- Rust examples (async_copy, file_copy, registered_buffers, etc.)
 - **`tools/BFFIO/`** -- FIO-compatible benchmark tool built on AuraIO
 - **`tools/auracp/`** -- Production `cp` replacement with async pipelining
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

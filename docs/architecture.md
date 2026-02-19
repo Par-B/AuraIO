@@ -431,3 +431,7 @@ You don't need to convert your entire codebase at once:
 4. **Ongoing**: New code uses AuraIO by default; old code migrates opportunistically
 
 The library is designed so that synchronous and asynchronous code can coexist—you can call `aura_wait()` immediately after submission for synchronous-style semantics while still benefiting from io_uring's kernel efficiency.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.

@@ -113,3 +113,7 @@ File descriptor registration follows the same pattern as buffer registration, wi
 3. Treat callback result as source of truth for operation success/failure.
 4. For shutdown: `aura_drain(engine, -1)` ensures all pending I/O completes.
 5. For registered buffers: use deferred unregister from callbacks, synchronous from main thread.
+
+---
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.
