@@ -957,7 +957,7 @@ int main(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    int64_t size_mib = test_size / (1024 * 1024);
+    int64_t size_mib = test_size / (1024LL * 1024);
     char size_str[32];
     fmt_comma(size_str, sizeof(size_str), size_mib);
     if (max_p99_latency_ms > 0)
