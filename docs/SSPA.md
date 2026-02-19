@@ -22,7 +22,7 @@ It creates a temporary test file, runs each workload for a fixed duration, and c
 
 | Option | Description |
 |--------|-------------|
-| `-l MS` | Max P99 latency target in milliseconds. When set, AuraIO's AIMD adaptive tuning backs off concurrency when P99 exceeds the target and ramps up when it's under — keeping latency in check while maximizing throughput. Default: unset (no latency constraint). |
+| `-l MS` | Max P99 latency target in milliseconds. When set, AuraIO's AIMD adaptive tuning backs off concurrency when P99 exceeds the target and ramps up when it's under — keeping latency in check while maximizing throughput. The first 3 seconds of each test are excluded from reported statistics to allow AIMD to converge (I/O still runs during warmup to drive the feedback loop). Default: unset (no latency constraint, no warmup exclusion). |
 | `-h`, `-?` | Show usage help and exit. |
 
 ## ARGUMENTS
@@ -40,7 +40,7 @@ An explicit size overrides the 1 GiB cap but must still be at least 256 MiB.
 
 ### Test duration
 
-Each workload runs for 10 seconds. Total runtime is roughly 80 seconds (8 × 10s) plus the time to create the test file.
+Each workload runs for 10 seconds. When `-l` is set, the first 3 seconds are a warmup period (I/O runs but results are not recorded), so reported statistics reflect 7 seconds of steady-state measurement. Total runtime is roughly 80 seconds (8 × 10s) plus the time to create the test file.
 
 ## WORKLOADS
 
