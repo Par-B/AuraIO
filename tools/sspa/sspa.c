@@ -140,7 +140,7 @@ static void lat_record(lat_hist_t *h, double us) {
 
 static double lat_percentile(const lat_hist_t *h, double pct) {
     if (h->count == 0) return 0.0;
-    uint64_t target = (uint64_t)((double)(h->count - 1) * pct / 100.0) + 1;
+    uint64_t target = (h->count - 1) * (uint64_t)(pct * 10) / 1000 + 1;
     if (target > h->count) target = h->count;
     uint64_t cumul = 0;
     for (int i = 0; i < LAT_BUCKETS; i++) {
