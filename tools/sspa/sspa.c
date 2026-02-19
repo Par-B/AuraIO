@@ -364,12 +364,11 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    /* Set warmup end: 3 seconds after start when latency target is set,
-     * otherwise no warmup (record from the beginning). */
+    /* Always warm up for 3 seconds so AIMD converges and cold-start
+     * outliers are excluded — keeps measurement windows identical
+     * whether or not a latency target is set. */
     wctx->warmup_end = start;
-    if (wctx->max_p99_latency_ms > 0) {
-        wctx->warmup_end.tv_sec += 3;
-    }
+    wctx->warmup_end.tv_sec += 3;
 
     /* Event loop: wait for completions, callbacks resubmit automatically.
      * Also retry any FREE slots that failed with EAGAIN on submission. */
