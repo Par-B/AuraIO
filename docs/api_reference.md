@@ -430,7 +430,9 @@ The caller must ensure all worker threads have stopped submitting I/O and comple
 
 #### Core I/O Operations
 
-All I/O submission functions return a request handle on success, or `NULL` on failure with errno set to one of: `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOENT`, `EOVERFLOW`, `ENOMEM`.
+All I/O submission functions are **non-blocking** and return a request handle on success, or `NULL` on failure with errno set to one of: `EINVAL`, `EAGAIN`, `ESHUTDOWN`, `ENOENT`, `EOVERFLOW`, `ENOMEM`.
+
+When the ring is at capacity, the engine automatically attempts to flush pending SQEs to the kernel and poll for completions before returning `EAGAIN`. If the ring is still full after this internal recovery attempt, the caller should drain completions (via `aura_poll` or `aura_wait`) and retry.
 
 Buffers must remain valid until the callback fires. The callback may be `NULL` for fire-and-forget operations.
 
