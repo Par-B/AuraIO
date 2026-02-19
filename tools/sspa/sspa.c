@@ -72,14 +72,14 @@ typedef struct {
 } workload_t;
 
 static const workload_t workloads[] = {
-    { "Backup", "sequential write", PATTERN_SEQ_WRITE, 1024 * 1024, 0, 1 },
-    { "Recovery", "sequential read", PATTERN_SEQ_READ, 1024 * 1024, 100, 1 },
+    { "Backup", "sequential write", PATTERN_SEQ_WRITE, 512 * 1024, 0, 1 },
+    { "Recovery", "sequential read", PATTERN_SEQ_READ, 512 * 1024, 100, 1 },
     { "Database", "random rw mix", PATTERN_RAND_RW, 4096, 70, 0 },
     { "Cache", "random read", PATTERN_RAND_READ, 4096, 100, 0 },
     { "Logging", "multi-stream write", PATTERN_MULTI_SEQ_WRITE, 4096, 0, 4 },
     { "KV-Store", "append+rand read", PATTERN_KV_STORE, 65536, 80, 0 },
-    { "Training", "seq read+shuffle", PATTERN_TRAINING, 1024 * 1024, 100, 2 },
-    { "Lakehouse", "scan+compact+lookup", PATTERN_LAKEHOUSE, 1024 * 1024, 60, 0 },
+    { "Training", "seq read+shuffle", PATTERN_TRAINING, 512 * 1024, 100, 2 },
+    { "Lakehouse", "scan+compact+lookup", PATTERN_LAKEHOUSE, 512 * 1024, 60, 0 },
 };
 
 #define NUM_WORKLOADS (int)(sizeof(workloads) / sizeof(workloads[0]))
