@@ -336,7 +336,7 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
 // Worker lifecycle (used by both single-thread and multi-thread paths)
 // ============================================================================
 
-static int worker_run(worker_ctx_t *wctx, double duration_sec) {
+static int worker_run(worker_ctx_t *wctx, double total_duration_sec) {
     /* Re-seed PRNG on the actual worker thread so the _Thread_local state
      * is valid.  assign_thread_role() seeds the main thread for computing
      * starting offsets; this ensures the worker thread gets its own state. */
@@ -402,7 +402,7 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
         clock_gettime(CLOCK_MONOTONIC, &now);
         double elapsed =
             (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
-        if (elapsed >= duration_sec) break;
+        if (elapsed >= total_duration_sec) break;
     }
 
     /* Stop resubmitting and drain in-flight ops */
@@ -531,17 +531,17 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
 
 typedef struct {
     worker_ctx_t wctx;
-    double duration_sec;
+    double total_duration_sec;
 } mt_worker_t;
 
 static void *mt_worker_fn(void *arg) {
     mt_worker_t *mw = (mt_worker_t *)arg;
-    worker_run(&mw->wctx, mw->duration_sec);
+    worker_run(&mw->wctx, mw->total_duration_sec);
     return NULL;
 }
 
 static int run_test(int fd, off_t file_size, const workload_t *w, int num_threads,
-                    double duration_sec, double max_p99_latency_ms, test_result_t *result) {
+                    double total_duration_sec, double max_p99_latency_ms, test_result_t *result) {
     memset(result, 0, sizeof(*result));
 
     /* IO size must be 512-aligned for O_DIRECT */
@@ -558,7 +558,7 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
         wctx.max_p99_latency_ms = max_p99_latency_ms;
         assign_thread_role(&wctx, 0, 1, w);
 
-        worker_run(&wctx, duration_sec);
+        worker_run(&wctx, total_duration_sec);
 
         if (wctx.measure_started) {
             result->elapsed_sec =
@@ -594,7 +594,7 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
         workers[i].wctx.fd = fd;
         workers[i].wctx.file_size = file_size;
         workers[i].wctx.max_p99_latency_ms = max_p99_latency_ms;
-        workers[i].duration_sec = duration_sec;
+        workers[i].total_duration_sec = total_duration_sec;
         assign_thread_role(&workers[i].wctx, i, num_threads, w);
     }
 
@@ -935,7 +935,9 @@ int main(int argc, char **argv) {
     }
     test_size = (test_size / (off_t)max_io_size) * (off_t)max_io_size;
 
-    double duration_sec = 10.0;
+    double warmup_sec = 3.0;
+    double measure_sec = 7.0;
+    double total_duration_sec = warmup_sec + measure_sec;
 
     int num_cpus = get_num_cpus();
 
@@ -949,8 +951,6 @@ int main(int argc, char **argv) {
     int64_t size_mib = test_size / (1024 * 1024);
     char size_str[32];
     fmt_comma(size_str, sizeof(size_str), size_mib);
-    double warmup_sec = 3.0;
-    double measure_sec = duration_sec - warmup_sec;
     if (max_p99_latency_ms > 0)
         fprintf(stderr,
                 "\nsspa: %s  (%s MiB test file, %.0fs warmup + %.0fs measure per test,"
@@ -998,7 +998,8 @@ int main(int argc, char **argv) {
         (void)posix_fadvise(fd, 0, test_size, POSIX_FADV_DONTNEED);
 
         test_result_t result;
-        int err = run_test(fd, test_size, w, threads, duration_sec, max_p99_latency_ms, &result);
+        int err =
+            run_test(fd, test_size, w, threads, total_duration_sec, max_p99_latency_ms, &result);
 
         if (isatty(STDERR_FILENO)) fprintf(stderr, "\r                                    \r");
 
