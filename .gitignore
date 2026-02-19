@@ -63,6 +63,10 @@ tools/BFFIO/baseline_results/
 
 # auracp file copy tool
 tools/auracp/*.o
+tools/auracp/auracp_debug
+
+# aura-hash checksum tool
+tools/aura-hash/*.o
 
 tools/bin/
 
