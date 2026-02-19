@@ -646,16 +646,11 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
     if (depth == 0) {
         visible_len = (int)strlen(node->name) + 1; /* +1 for '/' */
     } else {
-        /* prefix visible: depth * 4, connector: 4, name, optional '/' */
-        visible_len = (int)strlen(prefix);
-        /* Count visible chars in prefix (each is 4 chars displayed as ~1-3 visible) */
-        /* Simpler: just compute from depth */
         visible_len = depth * 4 + (int)strlen(node->name) + (node->is_dir ? 1 : 0);
     }
 
     /* Right-aligned stats */
     char stats[256];
-    int stats_pos = 0;
 
     if (config->long_format) {
         char mode_str[12];
@@ -672,19 +667,18 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
             int fc = node->total_files;
             int dc = node->total_dirs;
             if (dc > 0) {
-                stats_pos = snprintf(stats, sizeof(stats),
-                                     "%s  %-8s %-8s  [%d file%s, %d dir%s, %s]", mode_str, uname,
-                                     gname, fc, fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%d file%s, %d dir%s, %s]", mode_str,
+                         uname, gname, fc, fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
             } else {
-                stats_pos = snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%d file%s, %s]",
-                                     mode_str, uname, gname, fc, fc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%d file%s, %s]", mode_str, uname,
+                         gname, fc, fc == 1 ? "" : "s", sz);
             }
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), (off_t)node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
-            stats_pos = snprintf(stats, sizeof(stats), "%s  %-8s %-8s  %7s  %s", mode_str, uname,
-                                 gname, sz, date);
+            snprintf(stats, sizeof(stats), "%s  %-8s %-8s  %7s  %s", mode_str, uname, gname, sz,
+                     date);
         }
     } else {
         if (node->is_dir) {
@@ -693,17 +687,16 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
             int fc = node->total_files;
             int dc = node->total_dirs;
             if (dc > 0) {
-                stats_pos = snprintf(stats, sizeof(stats), "[%d file%s, %d dir%s, %s]", fc,
-                                     fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "[%d file%s, %d dir%s, %s]", fc, fc == 1 ? "" : "s",
+                         dc, dc == 1 ? "" : "s", sz);
             } else {
-                stats_pos =
-                    snprintf(stats, sizeof(stats), "[%d file%s, %s]", fc, fc == 1 ? "" : "s", sz);
+                snprintf(stats, sizeof(stats), "[%d file%s, %s]", fc, fc == 1 ? "" : "s", sz);
             }
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), (off_t)node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
-            stats_pos = snprintf(stats, sizeof(stats), "%7s  %s", sz, date);
+            snprintf(stats, sizeof(stats), "%7s  %s", sz, date);
         }
     }
 
@@ -715,7 +708,7 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
     /* Print line with padding */
     printf("%s", line);
     for (int i = 0; i < pad; i++) putchar(' ');
-    printf("%.*s\n", stats_pos, stats);
+    printf("%s\n", stats);
 
     /* Count */
     if (node->is_dir && depth > 0) (*dir_count)++;
@@ -729,35 +722,23 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
         if (config->dirs_only && !node->children[i]->is_dir) continue;
 
         char child_prefix[1024];
-        if (depth == 0) {
-            if (is_last || depth == 0) {
-                /* For root, children have no indentation prefix from connectors */
-                bool child_is_last = true;
-                /* Find actual last visible child */
-                for (int j = i + 1; j < node->num_children; j++) {
-                    if (!config->dirs_only || node->children[j]->is_dir) {
-                        child_is_last = false;
-                        break;
-                    }
-                }
-                snprintf(child_prefix, sizeof(child_prefix), "%s", "");
-                print_node(node->children[i], config, cs, child_prefix, child_is_last, depth + 1,
-                           file_count, dir_count);
+        bool child_is_last = true;
+        for (int j = i + 1; j < node->num_children; j++) {
+            if (!config->dirs_only || node->children[j]->is_dir) {
+                child_is_last = false;
+                break;
             }
+        }
+
+        if (depth == 0) {
+            child_prefix[0] = '\0';
         } else {
             const char *ext = is_last ? "    " : "\xe2\x94\x82   ";
             snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix, ext);
-
-            bool child_is_last = true;
-            for (int j = i + 1; j < node->num_children; j++) {
-                if (!config->dirs_only || node->children[j]->is_dir) {
-                    child_is_last = false;
-                    break;
-                }
-            }
-            print_node(node->children[i], config, cs, child_prefix, child_is_last, depth + 1,
-                       file_count, dir_count);
         }
+
+        print_node(node->children[i], config, cs, child_prefix, child_is_last, depth + 1,
+                   file_count, dir_count);
     }
 }
 
