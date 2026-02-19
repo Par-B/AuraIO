@@ -18,18 +18,17 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdatomic.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
-#include <math.h>
 #include <pthread.h>
 #include <limits.h>
-#include <sched.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+
+#include <inttypes.h>
 
 #include <aura.h>
 
@@ -43,6 +42,8 @@
 #define PIPELINE_DEPTH 32
 #define MAX_WORKERS 64
 #define TMP_FILENAME ".sspa.tmp"
+
+static volatile sig_atomic_t g_interrupted = 0;
 
 #define LAT_BUCKETS 4096
 #define LAT_BUCKET_US 10 /* 10us per bucket = 0-40.96ms range */
@@ -88,7 +89,7 @@ static const workload_t workloads[] = {
 // Per-thread xorshift64 PRNG
 // ============================================================================
 
-static __thread uint64_t t_rng_state;
+static _Thread_local uint64_t t_rng_state;
 
 static void rng_seed(int thread_id) {
     struct timespec ts;
@@ -191,8 +192,11 @@ typedef struct worker_ctx {
     aura_engine_t *engine;
     io_slot_t *slots;
     bool stopping;
+    double max_p99_latency_ms;
 
-    /* Results */
+    /* Results (thread-local, no synchronization needed — each worker has its
+     * own engine with single_thread=true, so callbacks run on the same thread
+     * that calls aura_wait). */
     int64_t bytes_read;
     int64_t bytes_written;
     int64_t ops_read;
@@ -220,6 +224,10 @@ static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
         if (wctx->error == 0) wctx->error = (int)(-result);
         return;
     }
+
+    /* Short reads/writes are counted at actual bytes transferred. With O_DIRECT
+     * and block-aligned offsets these are rare; not worth resubmitting the
+     * remainder for a benchmark. */
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -267,7 +275,8 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
 
     aura_request_t *r;
     if (do_write) {
-        memset(slot->buf, 0xAB, io_size);
+        /* Stamp offset into first 8 bytes to defeat dedup */
+        memcpy(slot->buf, &offset, sizeof(offset));
         r = aura_write(wctx->engine, wctx->fd, aura_buf(slot->buf), io_size, offset, on_complete,
                        slot);
     } else {
@@ -294,11 +303,14 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
     opts.queue_depth = PIPELINE_DEPTH * 4;
     opts.single_thread = true;
     opts.ring_count = 1;
+    if (wctx->max_p99_latency_ms > 0) opts.max_p99_latency_ms = wctx->max_p99_latency_ms;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) return errno;
     wctx->engine = engine;
 
+    /* Stack-allocated slots — safe because aura_drain() below completes all
+     * in-flight ops before we return. */
     io_slot_t slots[PIPELINE_DEPTH];
     memset(slots, 0, sizeof(slots));
     wctx->slots = slots;
@@ -309,6 +321,9 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
             wctx->error = ENOMEM;
             goto cleanup;
         }
+        /* Fill with PRNG data to defeat compression on data-reducing arrays */
+        uint64_t *p = (uint64_t *)slots[i].buf;
+        for (size_t j = 0; j < wctx->io_size / sizeof(uint64_t); j++) p[j] = rng_next();
         slots[i].wctx = wctx;
         slots[i].state = SLOT_FREE;
     }
@@ -321,7 +336,7 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
 
     /* Event loop: wait for completions, callbacks resubmit automatically.
      * Also retry any FREE slots that failed with EAGAIN on submission. */
-    while (!wctx->stopping && wctx->error == 0) {
+    while (!wctx->stopping && wctx->error == 0 && !g_interrupted) {
         int n = aura_wait(engine, 100);
         if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) break;
 
@@ -370,8 +385,6 @@ typedef struct {
     lat_hist_t hist;
     double elapsed_sec;
 } test_result_t;
-
-static volatile sig_atomic_t g_interrupted = 0;
 
 /* Assign roles to threads based on workload pattern */
 static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_threads,
@@ -440,7 +453,7 @@ static void *mt_worker_fn(void *arg) {
 }
 
 static int run_test(int fd, off_t file_size, const workload_t *w, int num_threads,
-                    double duration_sec, test_result_t *result) {
+                    double duration_sec, double max_p99_latency_ms, test_result_t *result) {
     memset(result, 0, sizeof(*result));
 
     struct timespec start;
@@ -451,6 +464,7 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
         memset(&wctx, 0, sizeof(wctx));
         wctx.fd = fd;
         wctx.file_size = file_size;
+        wctx.max_p99_latency_ms = max_p99_latency_ms;
         assign_thread_role(&wctx, 0, 1, w);
 
         worker_run(&wctx, duration_sec);
@@ -467,7 +481,8 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
         return wctx.error;
     }
 
-    /* Multi-threaded */
+    /* Multi-threaded: all workers share the same fd. This is safe because
+     * io_uring preadv/pwritev operations are independent per-offset. */
     mt_worker_t *workers = calloc((size_t)num_threads, sizeof(mt_worker_t));
     if (!workers) return ENOMEM;
 
@@ -480,6 +495,7 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
     for (int i = 0; i < num_threads; i++) {
         workers[i].wctx.fd = fd;
         workers[i].wctx.file_size = file_size;
+        workers[i].wctx.max_p99_latency_ms = max_p99_latency_ms;
         workers[i].duration_sec = duration_sec;
         assign_thread_role(&workers[i].wctx, i, num_threads, w);
     }
@@ -525,33 +541,39 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
 
 static void fmt_comma(char *buf, size_t bufsz, int64_t val) {
     char tmp[32];
-    int len = snprintf(tmp, sizeof(tmp), "%ld", (long)val);
+    int len = snprintf(tmp, sizeof(tmp), "%" PRId64, val);
     if (len <= 0) {
         buf[0] = '0';
         buf[1] = '\0';
         return;
     }
 
-    int commas = (len - 1) / 3;
+    /* Skip past minus sign for comma insertion */
+    int prefix = (tmp[0] == '-') ? 1 : 0;
+    int digits_len = len - prefix;
+
+    int commas = (digits_len - 1) / 3;
     int total = len + commas;
     if ((size_t)total >= bufsz) {
-        snprintf(buf, bufsz, "%ld", (long)val);
+        snprintf(buf, bufsz, "%" PRId64, val);
         return;
     }
 
     buf[total] = '\0';
     int src = len - 1, dst = total - 1, digits = 0;
-    while (src >= 0) {
+    while (src >= prefix) {
         buf[dst--] = tmp[src--];
         digits++;
-        if (digits % 3 == 0 && src >= 0) buf[dst--] = ',';
+        if (digits % 3 == 0 && src >= prefix) buf[dst--] = ',';
     }
+    if (prefix) buf[0] = '-';
 }
 
 static void fmt_lat(char *buf, size_t bufsz, double us) {
     snprintf(buf, bufsz, "%.2f ms", us / 1000.0);
 }
 
+/* Bandwidth in base-1000 MB/s (fio convention); IO sizes in binary KiB/MiB */
 static void fmt_bw(char *buf, size_t bufsz, double bps) {
     int64_t mbps = (int64_t)(bps / (1000.0 * 1000.0));
     fmt_comma(buf, bufsz, mbps);
@@ -608,10 +630,9 @@ static void cleanup_tmpfile(void) {
     }
 }
 
-static void sigint_cleanup(int sig) {
-    cleanup_tmpfile();
+static void sigint_handler(int sig) {
+    g_interrupted = 1;
     signal(sig, SIG_DFL);
-    raise(sig);
 }
 
 static int create_test_file(const char *path, off_t size) {
@@ -624,12 +645,22 @@ static int create_test_file(const char *path, off_t size) {
         close(fd);
         return -1;
     }
-    memset(buf, 0xCD, chunk);
+    /* Fill with PRNG data so data-reducing arrays can't compress/dedup it away */
+    uint64_t rng = 0xDEADBEEFCAFE1234ULL;
+    uint64_t *p = (uint64_t *)buf;
+    for (size_t i = 0; i < chunk / sizeof(uint64_t); i++) {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        p[i] = rng;
+    }
 
     off_t written = 0;
     while (written < size) {
         size_t to_write = chunk;
         if (written + (off_t)to_write > size) to_write = (size_t)(size - written);
+        /* Stamp offset to make each chunk unique (defeats dedup) */
+        memcpy(buf, &written, sizeof(written));
         ssize_t n = write(fd, buf, to_write);
         if (n <= 0) {
             free(buf);
@@ -658,7 +689,7 @@ static int create_test_file(const char *path, off_t size) {
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-            "Usage: %s [path] [size]\n"
+            "Usage: %s [options] [path] [size]\n"
             "\n"
             "Simple storage performance analyzer powered by AuraIO.\n"
             "\n"
@@ -666,32 +697,55 @@ static void print_usage(const char *argv0) {
             "  path   Test directory (default: current directory)\n"
             "  size   Test file size, e.g. 512M, 1G (default: auto)\n"
             "\n"
+            "Options:\n"
+            "  -l MS  Max P99 latency target in milliseconds (enables AIMD tuning)\n"
+            "  -h     Show this help\n"
+            "\n"
             "Auto-sizing: 10%% of free space, clamped to 256M-1G.\n"
             "Minimum 256 MiB free space required.\n",
             argv0);
 }
 
 int main(int argc, char **argv) {
-    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-        print_usage(argv[0]);
-        return 0;
-    }
-
     const char *test_dir = ".";
     off_t test_size = 0;
     bool user_size = false;
+    double max_p99_latency_ms = 0;
 
-    if (argc > 1) test_dir = argv[1];
-    if (argc > 2) {
-        ssize_t sz = parse_size(argv[2]);
+    int opt;
+    opterr = 0;
+    while ((opt = getopt(argc, argv, "h?l:")) != -1) {
+        switch (opt) {
+        case 'l': {
+            char *endp;
+            max_p99_latency_ms = strtod(optarg, &endp);
+            if (endp == optarg || max_p99_latency_ms <= 0) {
+                fprintf(stderr, "sspa: invalid latency: %s\n", optarg);
+                return 1;
+            }
+            break;
+        }
+        case 'h':
+        case '?':
+            print_usage(argv[0]);
+            return 0;
+        default:
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (optind < argc) test_dir = argv[optind++];
+    if (optind < argc) {
+        ssize_t sz = parse_size(argv[optind++]);
         if (sz < 0) {
-            fprintf(stderr, "sspa: invalid size: %s\n", argv[2]);
+            fprintf(stderr, "sspa: invalid size: %s\n", argv[optind - 1]);
             return 1;
         }
         test_size = (off_t)sz;
         user_size = true;
     }
-    if (argc > 3) {
+    if (optind < argc) {
         print_usage(argv[0]);
         return 1;
     }
@@ -726,25 +780,24 @@ int main(int argc, char **argv) {
         }
     }
 
-    double size_gb = (double)test_size / (1024.0 * 1024.0 * 1024.0);
     double duration_sec = 10.0;
-    if (size_gb > 1.0) {
-        duration_sec = 10.0 * size_gb;
-        if (duration_sec > 30.0) duration_sec = 30.0;
-    }
 
     int num_cpus = get_num_cpus();
 
     snprintf(g_tmpfile, sizeof(g_tmpfile), "%s/%s", test_dir, TMP_FILENAME);
     atexit(cleanup_tmpfile);
-    signal(SIGINT, sigint_cleanup);
-    signal(SIGTERM, sigint_cleanup);
+    signal(SIGINT, sigint_handler);
+    signal(SIGTERM, sigint_handler);
 
     int64_t size_mib = test_size / (1024 * 1024);
     char size_str[32];
     fmt_comma(size_str, sizeof(size_str), size_mib);
-    fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test)\n\n", test_dir, size_str,
-            duration_sec);
+    if (max_p99_latency_ms > 0)
+        fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test, P99 target: %.1f ms)\n\n",
+                test_dir, size_str, duration_sec, max_p99_latency_ms);
+    else
+        fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test)\n\n", test_dir, size_str,
+                duration_sec);
 
     if (create_test_file(g_tmpfile, test_size) != 0) {
         fprintf(stderr, "sspa: failed to create test file: %s\n", strerror(errno));
@@ -758,7 +811,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    posix_fadvise(fd, 0, test_size, POSIX_FADV_DONTNEED);
+    (void)posix_fadvise(fd, 0, test_size, POSIX_FADV_DONTNEED);
 
     printf("  %-12s %-20s %7s  %6s %4s  %10s %10s  %9s %9s\n", "Test", "Pattern", "IO Size",
            "R/W %", "Thr", "Bandwidth", "IOPS", "Avg Lat", "P99 Lat");
@@ -778,10 +831,10 @@ int main(int argc, char **argv) {
             fflush(stderr);
         }
 
-        posix_fadvise(fd, 0, test_size, POSIX_FADV_DONTNEED);
+        (void)posix_fadvise(fd, 0, test_size, POSIX_FADV_DONTNEED);
 
         test_result_t result;
-        int err = run_test(fd, test_size, w, threads, duration_sec, &result);
+        int err = run_test(fd, test_size, w, threads, duration_sec, max_p99_latency_ms, &result);
 
         if (isatty(STDERR_FILENO)) fprintf(stderr, "\r                                    \r");
 

@@ -9,7 +9,7 @@ sspa — quick storage health check using real-world I/O patterns
 ## SYNOPSIS
 
 ```
-sspa [path] [size]
+sspa [options] [path] [size]
 ```
 
 ## DESCRIPTION
@@ -17,6 +17,13 @@ sspa [path] [size]
 **sspa** is a zero-config storage performance analyzer. Point it at a directory and it runs 8 workloads that simulate real application I/O patterns, then reports bandwidth, IOPS, and latency for each.
 
 It creates a temporary test file, runs each workload for a fixed duration, and cleans up when done. The test file is also removed on SIGINT.
+
+## OPTIONS
+
+| Option | Description |
+|--------|-------------|
+| `-l MS` | Max P99 latency target in milliseconds. When set, AuraIO's AIMD adaptive tuning backs off concurrency when P99 exceeds the target and ramps up when it's under — keeping latency in check while maximizing throughput. Default: unset (no latency constraint). |
+| `-h`, `-?` | Show usage help and exit. |
 
 ## ARGUMENTS
 
@@ -33,7 +40,7 @@ An explicit size overrides the 1 GiB cap but must still be at least 256 MiB.
 
 ### Test duration
 
-Each workload runs for 10 seconds when the test file is 1 GiB or smaller. Above 1 GiB, duration scales linearly: `10 × size_in_GB` seconds, capped at 30 seconds. Total runtime is roughly 8 × duration plus the time to create the test file.
+Each workload runs for 10 seconds. Total runtime is roughly 80 seconds (8 × 10s) plus the time to create the test file.
 
 ## WORKLOADS
 
@@ -115,6 +122,12 @@ Test with an explicit 2 GiB file (overrides the 1 GiB auto cap):
 
 ```bash
 sspa /mnt/nvme0 2G
+```
+
+Set a 5 ms P99 latency target (AuraIO AIMD tuning will throttle concurrency to stay under):
+
+```bash
+sspa -l 5 /mnt/nvme0
 ```
 
 Run inside the OrbStack Linux container (macOS development):
@@ -204,7 +217,7 @@ This keeps the pipeline full without polling for free slots. If `submit_one()` g
 
 ### Per-thread PRNG
 
-Random offsets use a `__thread`-local xorshift64 PRNG seeded from `thread_id ^ clock_gettime(MONOTONIC)`. This eliminates cache-line contention that a shared RNG would cause, which matters at 100K+ IOPS where a shared atomic RNG becomes a bottleneck.
+Random offsets use a `_Thread_local` xorshift64 PRNG seeded from `thread_id ^ clock_gettime(MONOTONIC)`. This eliminates cache-line contention that a shared RNG would cause, which matters at 100K+ IOPS where a shared atomic RNG becomes a bottleneck.
 
 ### Latency measurement
 
@@ -213,6 +226,15 @@ Each slot records `clock_gettime(CLOCK_MONOTONIC)` at submission. The completion
 ### Thread roles
 
 The `assign_thread_role()` function configures each worker based on the workload pattern and the thread's index within the pool. Workers are fully independent — each gets its own AuraIO engine and buffer slots. The only shared state is the file descriptor (reads are safe to share across threads) and `g_interrupted` (sig_atomic_t, set by SIGINT handler).
+
+### Data pattern
+
+The test file and write buffers use incompressible, non-deduplicable data to ensure accurate results on data-reducing storage arrays (compression, dedup offload):
+
+- **Test file creation**: Each 1 MiB chunk is filled with xorshift64 PRNG output, then stamped with the file offset in the first 8 bytes. This makes every chunk unique (defeats dedup) and pseudo-random (defeats compression).
+- **Runtime write buffers**: Each pipeline slot is PRNG-filled at init. Before each write submission, the current file offset is stamped into the first 8 bytes, ensuring every written block is unique even across resubmissions to the same offset.
+
+This mirrors the approach used by fio's `refill_buffers` option.
 
 ### Test file lifecycle
 
