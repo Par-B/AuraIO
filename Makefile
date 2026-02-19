@@ -420,10 +420,14 @@ aura-hash: engine
 sspa: engine
 	$(MAKE) -C tools/sspa
 
-# Build all tools
-tools: BFFIO auracp auracp-cpp aura-hash sspa
+# Build atree directory tree tool
+atree: engine
+	$(MAKE) -C tools/atree
 
-.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash sspa tools
+# Build all tools
+tools: BFFIO auracp auracp-cpp aura-hash sspa atree
+
+.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash sspa atree tools
 
 # =============================================================================
 # Installation
@@ -476,6 +480,7 @@ clean: rust-clean
 	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
 	-$(MAKE) -C tools/aura-hash clean 2>/dev/null || true
 	-$(MAKE) -C tools/sspa clean 2>/dev/null || true
+	-$(MAKE) -C tools/atree clean 2>/dev/null || true
 	rm -f integrations/prometheus/C/prometheus_example
 	rm -f integrations/opentelemetry/C/otel_example
 	rm -f integrations/syslog/C/syslog_example
@@ -654,7 +659,7 @@ help:
 	@echo "  make coverage-check MIN_LINE_COVERAGE=N enforce minimum line coverage percentage"
 	@echo ""
 	@echo "Tools:"
-	@echo "  make tools          Build all tools (BFFIO, auracp, aura-hash, sspa)"
+	@echo "  make tools          Build all tools (BFFIO, auracp, aura-hash, sspa, atree)"
 	@echo ""
 	@echo "BFFIO (Better Faster FIO):"
 	@echo "  make BFFIO          Build BFFIO benchmark tool"

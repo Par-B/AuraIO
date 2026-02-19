@@ -44,6 +44,7 @@ cd bindings/rust && cargo test           # Run Rust tests
 - `tools/auracp/` / `tools/auracp_cpp/` - File copy utilities (C and C++ versions)
 - `tools/aura-hash/` - Parallel file checksum tool (sha256/sha1/md5)
 - `tools/sspa/` - Simple Storage Performance Analyzer (8 workload patterns)
+- `tools/atree/` - Directory tree with per-file stats (tree replacement using batched statx)
 - `examples/` - C, C++, and Rust examples
 - `tests/` - Unit tests, stress tests, benchmarks, and analysis scripts
 
