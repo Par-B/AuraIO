@@ -5,6 +5,8 @@ edition = "2021"
 description = "Raw FFI bindings for AuraIO async I/O library"
 license = "Apache-2.0"
 keywords = ["io_uring", "async", "ffi"]
+repository = "https://github.com/Par-B/AuraIO"
+readme = "README.md"
 categories = ["external-ffi-bindings", "asynchronous"]
 
 [build-dependencies]
