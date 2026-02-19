@@ -379,9 +379,9 @@ static void wq_destroy(work_queue_t *wq) {
     pthread_cond_destroy(&wq->cond);
 }
 
-static void wq_push(work_queue_t *wq, tree_node_t *node) {
+static bool wq_push(work_queue_t *wq, tree_node_t *node) {
     work_item_t *item = malloc(sizeof(*item));
-    if (!item) return;
+    if (!item) return false;
     item->node = node;
     item->next = NULL;
 
@@ -391,6 +391,7 @@ static void wq_push(work_queue_t *wq, tree_node_t *node) {
     wq->tail = item;
     pthread_cond_signal(&wq->cond);
     pthread_mutex_unlock(&wq->lock);
+    return true;
 }
 
 static tree_node_t *wq_pop(work_queue_t *wq) {
@@ -455,7 +456,7 @@ static void *worker_fn(void *arg) {
         for (int i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir) {
                 atomic_fetch_add(&wctx->wq->pending, 1);
-                wq_push(wctx->wq, node->children[i]);
+                if (!wq_push(wctx->wq, node->children[i])) atomic_fetch_sub(&wctx->wq->pending, 1);
             }
         }
 
@@ -512,8 +513,14 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     for (int i = 0; i < root->num_children; i++) {
         if (root->children[i]->is_dir) {
             atomic_fetch_add(&wq.pending, 1);
-            wq_push(&wq, root->children[i]);
+            if (!wq_push(&wq, root->children[i])) atomic_fetch_sub(&wq.pending, 1);
         }
+    }
+
+    /* If no dirs were successfully enqueued, nothing to do */
+    if (atomic_load(&wq.pending) == 0) {
+        wq_destroy(&wq);
+        return 0;
     }
 
     /* Spawn workers */
