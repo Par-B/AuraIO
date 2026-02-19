@@ -282,9 +282,11 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
              *
              * We must hold active_users while accessing shards to prevent
              * a concurrent pool_destroy from freeing them under us. */
+            pthread_mutex_lock(&cache->cleanup_mutex);
             buffer_pool_t *old_pool = atomic_load_explicit(&cache->pool, memory_order_acquire);
             if (!old_pool) {
                 /* Pool was destroyed between our checks — free the cache. */
+                pthread_mutex_unlock(&cache->cleanup_mutex);
                 pthread_mutex_destroy(&cache->cleanup_mutex);
                 free(cache);
                 tls_cache = NULL;
@@ -294,7 +296,6 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
                 return NULL;
             }
             atomic_fetch_add_explicit(&old_pool->active_users, 1, memory_order_acq_rel);
-            pthread_mutex_lock(&cache->cleanup_mutex);
             if (atomic_load_explicit(&old_pool->destroyed, memory_order_acquire)) {
                 cleanup_cache_buffers_locked(old_pool, cache, CACHE_CLEANUP_FREE);
             } else {

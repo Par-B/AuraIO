@@ -2199,7 +2199,7 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
-int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
+int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;
         return (-1);
@@ -2218,7 +2218,8 @@ int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size
     double max_p99 = 0.0;
 
     for (int i = 0; i < engine->ring_count; i++) {
-        ring_ctx_t *ring = &engine->rings[i];
+        /* Cast away const: locking a mutex is logically const */
+        ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[i];
 
         /* Lock ring while reading stats to prevent data races with
          * completion handlers and tick thread */
@@ -2288,7 +2289,7 @@ int aura_get_ring_count(const aura_engine_t *engine) {
     return engine->ring_count;
 }
 
-int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
+int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
                         size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;
@@ -2303,7 +2304,8 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
     aura_ring_stats_t tmp;
     memset(&tmp, 0, sizeof(tmp));
 
-    ring_ctx_t *ring = &engine->rings[ring_idx];
+    /* Cast away const: locking a mutex is logically const */
+    ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[ring_idx];
     ring_lock(ring);
 
     tmp.ops_completed = ring->ops_completed;
@@ -2328,7 +2330,7 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
     return 0;
 }
 
-int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
+int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
                        size_t hist_size) {
     if (!engine || !hist || hist_size == 0) {
         errno = EINVAL;
@@ -2343,7 +2345,8 @@ int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hi
     aura_histogram_t tmp;
     memset(&tmp, 0, sizeof(tmp));
 
-    ring_ctx_t *ring = &engine->rings[ring_idx];
+    /* Cast away const: locking a mutex is logically const */
+    ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[ring_idx];
     ring_lock(ring);
 
     /* Read from the active histogram.  Individual bucket loads are atomic but

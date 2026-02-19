@@ -1310,7 +1310,7 @@ AURA_API int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type
  * @return 0 on success, -1 on error (errno set to EINVAL if engine, stats,
  *         or stats_size is invalid)
  */
-AURA_API int aura_get_stats(aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
+AURA_API int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size);
 
 /**
  * Get the number of io_uring rings in the engine
@@ -1335,8 +1335,8 @@ AURA_API int aura_get_ring_count(const aura_engine_t *engine);
  * @param stats_size sizeof(aura_ring_stats_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/stats or invalid ring_idx)
  */
-AURA_API int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *stats,
-                                 size_t stats_size);
+AURA_API int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx,
+                                 aura_ring_stats_t *stats, size_t stats_size);
 
 /**
  * Get a latency histogram snapshot for a specific ring
@@ -1357,7 +1357,7 @@ AURA_API int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_
  * @param hist_size sizeof(aura_histogram_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
  */
-AURA_API int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
+AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
                                 size_t hist_size);
 
 /**
