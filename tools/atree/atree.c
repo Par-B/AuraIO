@@ -72,6 +72,7 @@ typedef struct tree_node {
     struct tree_node **children;
     int num_children;
     int cap_children;
+    int depth;
     /* Aggregates (dirs only) */
     off_t total_size;
     int total_files;
@@ -278,7 +279,11 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
 // Directory scanning with batched statx
 // ============================================================================
 
-static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const config_t *config) {
+static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const config_t *config,
+                          int depth) {
+    /* Skip scanning beyond max_depth — no children to enumerate */
+    if (config->max_depth >= 0 && depth >= config->max_depth) return 0;
+
     DIR *d = opendir(dir_node->full_path);
     if (!d) {
         fprintf(stderr, "atree: cannot open '%s': %s\n", dir_node->full_path, strerror(errno));
@@ -296,6 +301,7 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 
         tree_node_t *child = node_create(ent->d_name, path);
         if (!child) continue;
+        child->depth = depth + 1;
 
         /* Quick type hint from dirent to avoid statx for dirs_only filtering later */
         if (ent->d_type == DT_DIR) child->is_dir = true;
@@ -443,7 +449,7 @@ static void *worker_fn(void *arg) {
         tree_node_t *node = wq_pop(wctx->wq);
         if (!node) break;
 
-        scan_directory(node, engine, wctx->config);
+        scan_directory(node, engine, wctx->config, node->depth);
 
         /* Enqueue child directories for scanning */
         for (int i = 0; i < node->num_children; i++) {
@@ -481,7 +487,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    scan_directory(root, engine, config);
+    scan_directory(root, engine, config, 0);
     aura_destroy(engine);
 
     /* Count child directories to decide on parallelism */
