@@ -119,9 +119,9 @@ static off_t rng_offset(off_t file_size, size_t io_size) {
 // ============================================================================
 
 typedef struct {
-    uint32_t buckets[LAT_BUCKETS];
-    uint32_t overflow;
-    uint32_t count;
+    uint64_t buckets[LAT_BUCKETS];
+    uint64_t overflow;
+    uint64_t count;
 } lat_hist_t;
 
 static void lat_record(lat_hist_t *h, double us) {
@@ -137,8 +137,9 @@ static void lat_record(lat_hist_t *h, double us) {
 
 static double lat_percentile(const lat_hist_t *h, double pct) {
     if (h->count == 0) return 0.0;
-    uint32_t target = (uint32_t)((double)(h->count - 1) * pct / 100.0) + 1;
-    uint32_t cumul = 0;
+    uint64_t target = (uint64_t)((double)(h->count - 1) * pct / 100.0) + 1;
+    if (target > h->count) target = h->count;
+    uint64_t cumul = 0;
     for (int i = 0; i < LAT_BUCKETS; i++) {
         cumul += h->buckets[i];
         if (cumul >= target) return (double)(i + 1) * LAT_BUCKET_US;
@@ -742,6 +743,9 @@ static int create_test_file(const char *path, off_t size) {
     while (written < size) {
         size_t to_write = chunk;
         if (written + (off_t)to_write > size) to_write = (size_t)(size - written);
+        /* O_DIRECT requires block-aligned writes; round down the final chunk */
+        to_write = (to_write / 512) * 512;
+        if (to_write == 0) break;
         /* Stamp offset to make each chunk unique (defeats dedup) */
         memcpy(buf, &written, sizeof(written));
         ssize_t n = write(fd, buf, to_write);
