@@ -841,6 +841,15 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Align test file size down to the largest IO size across all workloads.
+     * This guarantees every sequential offset wraps cleanly — no partial
+     * reads past EOF, no hot-path alignment checks needed. */
+    size_t max_io_size = 0;
+    for (int i = 0; i < NUM_WORKLOADS; i++) {
+        if (workloads[i].io_size > max_io_size) max_io_size = workloads[i].io_size;
+    }
+    test_size = (test_size / (off_t)max_io_size) * (off_t)max_io_size;
+
     double duration_sec = 10.0;
 
     int num_cpus = get_num_cpus();
