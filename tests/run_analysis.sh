@@ -446,7 +446,7 @@ if fio_data and apples:
     if rows:
         emit_comparison_table(report,
             "APPLES-TO-APPLES COMPARISON",
-            "Both: single io_uring ring, matched iodepth, 8x128MB files, O_DIRECT",
+            "Both: single io_uring ring, matched iodepth, 8x1GB files, O_DIRECT",
             "FIO", "AuraIO (1 ring)",
             rows, latency)
 

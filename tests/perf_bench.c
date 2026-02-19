@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file perf_bench.c
  * @brief Performance benchmarks for AuraIO library
@@ -129,7 +128,7 @@ static uint64_t stats_p99_latency_us(bench_stats_t *s) {
 
 #define DEFAULT_TEST_DIR "/tmp/aura_perf"
 #define NUM_FILES 8
-#define FILE_SIZE (128 * 1024 * 1024) // 128MB per file
+#define FILE_SIZE (1024 * 1024 * 1024ULL) // 1GB per file — match FIO's --size=1024M
 
 static const char *test_dir = DEFAULT_TEST_DIR;
 static int test_fds[NUM_FILES];
@@ -178,12 +177,15 @@ static int setup_test_files(void) {
     for (int i = 0; i < NUM_FILES; i++) {
         test_fds[i] = open(test_paths[i], O_RDONLY | O_DIRECT);
         if (test_fds[i] < 0) {
-            // Fallback without O_DIRECT
             test_fds[i] = open(test_paths[i], O_RDONLY);
+            if (i == 0)
+                fprintf(stderr, "  [warn] O_DIRECT not supported, using buffered I/O "
+                                "(results not comparable to FIO --direct=1)\n");
         }
     }
 
-    printf("Created %d test files of %d MB each\n", NUM_FILES, FILE_SIZE / (1024 * 1024));
+    printf("Created %d test files of %llu MB each\n", NUM_FILES,
+           (unsigned long long)(FILE_SIZE / (1024 * 1024)));
     return 0;
 }
 
@@ -244,7 +246,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
     aura_options_t opts;
     aura_options_init(&opts);
-    opts.queue_depth = 1024;
+    opts.queue_depth = apples_mode ? (unsigned)max_inflight : 1024;
     opts.ring_count = apples_mode ? 1 : 0;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
@@ -765,12 +767,14 @@ static void bench_mixed_workload(int duration_sec) {
         write_fds[i] = open(test_paths[i], O_RDWR | O_DIRECT);
         if (write_fds[i] < 0) {
             write_fds[i] = open(test_paths[i], O_RDWR);
+            if (i == 0)
+                fprintf(stderr, "  [warn] O_DIRECT not supported for writes, using buffered I/O\n");
         }
     }
 
     aura_options_t opts;
     aura_options_init(&opts);
-    opts.queue_depth = 512;
+    opts.queue_depth = apples_mode ? 128 : 512;
     opts.ring_count = apples_mode ? 1 : 0;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
