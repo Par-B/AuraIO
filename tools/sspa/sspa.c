@@ -29,6 +29,7 @@
 #include <sys/statvfs.h>
 
 #include <inttypes.h>
+#include <stdatomic.h>
 
 #include <aura.h>
 
@@ -43,7 +44,7 @@
 #define MAX_WORKERS 64
 #define TMP_FILENAME ".sspa.tmp"
 
-static volatile sig_atomic_t g_interrupted = 0;
+static _Atomic int g_interrupted = 0;
 
 #define LAT_BUCKETS 4096
 #define LAT_BUCKET_US 10 /* 10us per bucket = 0-40.96ms range */
@@ -144,7 +145,8 @@ static double lat_percentile(const lat_hist_t *h, double pct) {
         cumul += h->buckets[i];
         if (cumul >= target) return (double)(i + 1) * LAT_BUCKET_US;
     }
-    return (double)LAT_BUCKETS * LAT_BUCKET_US;
+    /* Target falls in the overflow bucket — return ceiling as lower bound */
+    return (double)(LAT_BUCKETS + 1) * LAT_BUCKET_US;
 }
 
 static double lat_avg(const lat_hist_t *h) {
@@ -191,11 +193,12 @@ typedef struct worker_ctx {
     bool force_write;
     bool sequential;
     off_t seq_offset;
+    off_t seq_region_start;
 
     /* Pipeline state */
     aura_engine_t *engine;
     io_slot_t *slots;
-    bool stopping;
+    _Atomic bool stopping;
     double max_p99_latency_ms;
     struct timespec warmup_end; /* completions before this are excluded from stats */
 
@@ -298,7 +301,8 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
     if (wctx->sequential) {
         offset = wctx->seq_offset;
         wctx->seq_offset += (off_t)io_size;
-        if (wctx->seq_offset + (off_t)io_size > wctx->file_size) wctx->seq_offset = 0;
+        if (wctx->seq_offset + (off_t)io_size > wctx->file_size)
+            wctx->seq_offset = wctx->seq_region_start;
     } else {
         offset = rng_offset(wctx->file_size, io_size);
     }
@@ -330,7 +334,10 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
 // ============================================================================
 
 static int worker_run(worker_ctx_t *wctx, double duration_sec) {
-    /* PRNG already seeded by assign_thread_role() */
+    /* Re-seed PRNG on the actual worker thread so the _Thread_local state
+     * is valid.  assign_thread_role() seeds the main thread for computing
+     * starting offsets; this ensures the worker thread gets its own state. */
+    rng_seed(wctx->worker_id);
 
     aura_options_t opts;
     aura_options_init(&opts);
@@ -435,8 +442,9 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
     wctx->worker_id = thread_id;
     wctx->io_size = w->io_size;
 
-    /* Seed PRNG so rng_offset() works for starting offsets.
-     * worker_run() will NOT re-seed — this is the single seed site. */
+    /* Seed PRNG on the main thread so rng_offset() works for starting
+     * offsets below.  worker_run() re-seeds on the actual worker thread
+     * so the _Thread_local state is visible there. */
     rng_seed(thread_id);
 
     switch (w->pattern) {
@@ -444,11 +452,13 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         wctx->force_write = true;
         wctx->sequential = true;
         wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
+        wctx->seq_region_start = 0;
         break;
     case PATTERN_SEQ_READ:
         wctx->force_read = true;
         wctx->sequential = true;
         wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
+        wctx->seq_region_start = 0;
         break;
     case PATTERN_RAND_RW:
         break;
@@ -460,6 +470,7 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         wctx->sequential = true;
         off_t region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
         wctx->seq_offset = region * thread_id;
+        wctx->seq_region_start = wctx->seq_offset;
         break;
     }
     case PATTERN_KV_STORE:
@@ -467,6 +478,7 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
             wctx->force_write = true;
             wctx->sequential = true;
             wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
+            wctx->seq_region_start = 0;
         } else {
             wctx->force_read = true;
         }
@@ -476,6 +488,7 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         if (thread_id == 0) {
             wctx->sequential = true;
             wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
+            wctx->seq_region_start = 0;
         }
         break;
     case PATTERN_LAKEHOUSE: {
@@ -485,10 +498,12 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
             wctx->force_read = true;
             wctx->sequential = true;
             wctx->seq_offset = lh_region * thread_id;
+            wctx->seq_region_start = wctx->seq_offset;
         } else if (thread_id < (total_threads * 7 + 9) / 10) {
             wctx->force_write = true;
             wctx->sequential = true;
             wctx->seq_offset = lh_region * thread_id;
+            wctx->seq_region_start = wctx->seq_offset;
         } else {
             wctx->force_read = true;
             wctx->io_size = 4096;
@@ -668,9 +683,9 @@ static void fmt_bw(char *buf, size_t bufsz, double bps) {
 }
 
 static void fmt_io_size(char *buf, size_t bufsz, size_t sz) {
-    if (sz >= 1024 * 1024) snprintf(buf, bufsz, "%zuM", sz / (1024 * 1024));
-    else if (sz >= 1024) snprintf(buf, bufsz, "%zuK", sz / 1024);
-    else snprintf(buf, bufsz, "%zu", sz);
+    if (sz >= 1024 * 1024) snprintf(buf, bufsz, "%zu MiB", sz / (1024 * 1024));
+    else if (sz >= 1024) snprintf(buf, bufsz, "%zu KiB", sz / 1024);
+    else snprintf(buf, bufsz, "%zu B", sz);
 }
 
 // ============================================================================
@@ -979,7 +994,7 @@ int main(int argc, char **argv) {
         fmt_io_size(io_str, sizeof(io_str), w->io_size);
         snprintf(rw_str, sizeof(rw_str), "%d/%d", w->read_pct, 100 - w->read_pct);
 
-        printf("  %-12s %-20s %5s    %5s  %3d  %7s MB/s %10s  %9s %9s\n", w->name, w->description,
+        printf("  %-12s %-20s %7s  %5s  %3d  %7s MB/s %10s  %9s %9s\n", w->name, w->description,
                io_str, rw_str, threads, bw_str, iops_str, avg_str, p99_str);
     }
 
