@@ -107,6 +107,7 @@ Each `[section]` runs as a separate job with a fresh AuraIO engine for clean AIM
 | `file_service_type` | `roundrobin` | File selection: `roundrobin`, `sequential`, `random` |
 | `ring-select` | `adaptive` | Ring selection: `adaptive`, `cpu_local`, `round_robin` |
 | `output-format` | `normal` | `normal` (FIO text) or `json` (FIO 3.36 JSON) |
+| `output` | — | Write output to FILE instead of stdout |
 
 ## Latency-Constrained Throughput (`--target-p99`)
 
@@ -208,7 +209,7 @@ make BFFIO-test
 cd tools/BFFIO && ./test_BFFIO.sh [--quick]
 ```
 
-Runs 18 test cases covering: basic I/O patterns (randread, randwrite, seqread, seqwrite, mixed), JSON output validation, job file parsing, multi-job files, multi-thread with group_reporting, ramp time, size-based mode (no runtime), error handling, target-p99 latency mode (ms/us suffixes, concurrency output, JSON fields), and AuraIO branding.
+Runs 17 test cases covering: basic I/O patterns (randread, randwrite, seqread, seqwrite, mixed), JSON output validation, job file parsing, multi-job files, multi-thread with group_reporting, ramp time, size-based mode (no runtime), error handling, target-p99 latency mode (ms/us suffixes, concurrency output, JSON fields), and AuraIO branding.
 
 ### FIO Baseline Comparison
 

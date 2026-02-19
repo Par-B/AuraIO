@@ -28,19 +28,20 @@ Submission success does not guarantee I/O success; final outcome is delivered at
 
 ## Request Handle Lifetime
 
-`aura_request_t*` is valid only from submission until callback start.
+`aura_request_t*` is valid from submission through the end of the callback body. The slot is recycled after the callback returns.
 
 ```
-submit() ──────> [handle valid] ──────> callback starts ──────> [INVALID]
-                 │                      │
-                 ├─ cancel()            ├─ handle must not be
-                 ├─ request_pending()   │  accessed after this
-                 └─ request_fd()        └─ slot may be reused
+submit() ──> [handle valid] ──> callback starts ──> [callback body] ──> callback returns ──> [INVALID]
+             │                  │                    │                   │
+             ├─ cancel()        ├─ request_fd()      ├─ request_fd()     └─ slot may be reused
+             ├─ request_pending()├─ request_user_data()├─ request_user_data()
+             └─ request_fd()    └─ request_pending() └─ cancel() (no-op, already complete)
 ```
 
 1. Valid for `aura_cancel()` / `aura_request_pending()` while pending.
-2. Invalid once callback begins — the request slot may be reused immediately.
-3. Must not be stored beyond the callback.
+2. Introspection functions (`aura_request_fd()`, `aura_request_user_data()`, etc.) are safe to call inside the callback.
+3. Invalid after the callback returns — the request slot may be reused immediately.
+4. Must not be stored or accessed beyond the callback return.
 
 ## Polling and Waiting
 
@@ -90,6 +91,10 @@ aura_request_unregister(engine, AURA_REG_BUFFERS);
 aura_unregister(engine, AURA_REG_BUFFERS);
 // Blocks until all in-flight fixed-buffer ops complete and unregister finishes.
 // If called from a callback, degrades to deferred mode automatically.
+// Timeout: if in-flight operations do not complete within 10 seconds,
+// returns -1 with errno=ETIMEDOUT. The buffers remain registered in that case;
+// callers should treat ETIMEDOUT as a failure and decide whether to retry or
+// proceed to engine teardown.
 ```
 
 ### State Transitions

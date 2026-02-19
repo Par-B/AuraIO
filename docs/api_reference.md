@@ -190,8 +190,10 @@ Create with inline helpers -- do not construct manually:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `AURA_STATX_SYMLINK_NOFOLLOW` | `0x100` | Don't follow symlinks (deprecated alias for `AURA_AT_SYMLINK_NOFOLLOW`) |
-| `AURA_STATX_EMPTY_PATH` | `0x1000` | Operate on fd itself (pathname="") (deprecated alias for `AURA_AT_EMPTY_PATH`) |
+| `AURA_AT_SYMLINK_NOFOLLOW` | `0x100` | Don't follow symlinks |
+| `AURA_AT_EMPTY_PATH` | `0x1000` | Operate on fd itself (pathname="") |
+| `AURA_STATX_SYMLINK_NOFOLLOW` | `0x100` | Deprecated alias for `AURA_AT_SYMLINK_NOFOLLOW` |
+| `AURA_STATX_EMPTY_PATH` | `0x1000` | Deprecated alias for `AURA_AT_EMPTY_PATH` |
 
 #### Statx Field Mask (for `aura_statx` mask parameter)
 
@@ -255,6 +257,8 @@ typedef enum {
     AURA_OP_SYNC_FILE_RANGE = 14,
 } aura_op_type_t;
 ```
+
+> **Note:** Values 15 and 16 are reserved for future operations. Switch statements over `aura_op_type_t` should always include a `default` case to handle forward-compatible additions without undefined behavior.
 
 For read/write ops, the callback result is bytes transferred. For `AURA_OP_OPENAT`, the result is the new file descriptor. For other ops, the result is 0 on success.
 
@@ -599,8 +603,8 @@ Submit an async statx. Retrieves file metadata into the caller-provided statx bu
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
 | `dirfd` | `int` | Directory fd (`AT_FDCWD` for current directory) |
-| `pathname` | `const char *` | Path (relative to `dirfd`; `""` with `AURA_STATX_EMPTY_PATH` for fd-based stat) |
-| `flags` | `int` | Lookup flags (`AURA_STATX_EMPTY_PATH`, `AURA_STATX_SYMLINK_NOFOLLOW`) |
+| `pathname` | `const char *` | Path (relative to `dirfd`; `""` with `AURA_AT_EMPTY_PATH` for fd-based stat) |
+| `flags` | `int` | Lookup flags (`AURA_AT_EMPTY_PATH`, `AURA_AT_SYMLINK_NOFOLLOW`) |
 | `mask` | `unsigned int` | Requested fields (`AURA_STATX_SIZE`, `AURA_STATX_MTIME`, `AURA_STATX_ALL`, etc.) |
 | `statxbuf` | `struct statx *` | Output buffer -- kernel writes directly here |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
@@ -642,7 +646,9 @@ aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd,
                                 void *user_data);
 ```
 
-Submit an async ftruncate. Truncates a file to the specified length. Requires kernel 6.9+; on older kernels, the callback receives `-ENOSYS`.
+Submit an async ftruncate. Truncates a file to the specified length. Requires kernel 6.9+ and liburing >= 2.7.
+
+**liburing version check:** If the installed liburing lacks `ftruncate` support (< 2.7), `aura_ftruncate` returns `NULL` with `errno = ENOSYS` immediately -- no SQE is submitted and no callback fires. This is distinct from kernel rejection: when the kernel lacks support (kernel < 6.9 with a sufficiently new liburing), the SQE is submitted and the callback receives `result = -ENOSYS`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -700,6 +706,14 @@ Cancel a pending I/O operation (best-effort). If cancelled, the callback receive
 **Returns:** 0 if cancellation submitted, -1 on error. A return of 0 does not guarantee the operation will actually be cancelled.
 
 **Errors:** `EINVAL`, `EALREADY`, `EBUSY`, `ESHUTDOWN`, `ENOMEM`
+
+| errno | Meaning |
+|-------|---------|
+| `EINVAL` | `engine` or `req` is `NULL`, or `req` does not belong to this engine |
+| `EALREADY` | Request has already completed |
+| `EBUSY` | Submission queue is full; cancel SQE could not be submitted |
+| `ESHUTDOWN` | Engine is shutting down |
+| `ENOMEM` | Memory allocation failed |
 
 ---
 
@@ -790,7 +804,7 @@ Block until at least one operation completes or timeout expires.
 | `engine` | `aura_engine_t *` | Engine handle |
 | `timeout_ms` | `int` | Max wait: -1 = forever, 0 = non-blocking |
 
-**Returns:** Number of completions processed, or -1 on error.
+**Returns:** Number of completions processed, or -1 on error (errno set). Returns -1 with `errno = ETIMEDOUT` when the timeout expires with pending operations remaining.
 
 ---
 
@@ -887,7 +901,7 @@ Fixed-buffer submissions fail with `EBUSY` while a deferred unregister is draini
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
 | `iovs` | `const struct iovec *` | Array of buffer descriptors |
-| `count` | `int` | Number of buffers |
+| `count` | `unsigned int` | Number of buffers |
 
 **Returns:** 0 on success, -1 on error (errno set).
 
@@ -907,7 +921,7 @@ Pre-register file descriptors with the kernel to eliminate lookup overhead.
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
 | `fds` | `const int *` | Array of file descriptors |
-| `count` | `int` | Number of file descriptors |
+| `count` | `unsigned int` | Number of file descriptors |
 
 **Returns:** 0 on success, -1 on error (errno set).
 
@@ -956,7 +970,9 @@ Unregister previously registered buffers or files (synchronous). For non-callbac
 int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type);
 ```
 
-Request deferred unregister (callback-safe, non-blocking). Marks registered resources as draining and returns immediately. For buffers: new fixed-buffer submissions fail with `EBUSY` while draining. Final unregister completes lazily once in-flight operations reach zero.
+Request deferred unregister (callback-safe). Marks registered resources as draining. For buffers: new fixed-buffer submissions fail with `EBUSY` while draining. Final unregister completes lazily once in-flight operations reach zero.
+
+When no in-flight operations are present at call time, the kernel unregistration may happen synchronously and the function may block briefly. The non-blocking guarantee applies only when in-flight operations are present and draining is deferred to their completion.
 
 **Safe to call from completion callbacks.**
 
@@ -1328,7 +1344,7 @@ Coroutine awaitables throw `Error` on negative results when resumed.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `cancel(Request& req) noexcept` | `bool` | `true` if cancellation submitted |
+| `cancel(Request& req) noexcept` | `bool` | `true` if cancellation submitted, `false` on error (e.g., queue full, engine shutting down). Never throws; unlike other `Engine` methods, errors are signalled via the return value. |
 
 #### Event Processing
 
@@ -1950,7 +1966,7 @@ Error codes used across the C, C++, and Rust APIs:
 | `ENOMEM` | errno set, returns `NULL`/-1 | throws `Error` | `Error::Submission` / `Error::BufferAlloc` | Memory allocation failed |
 | `EBUSY` | errno set, returns `NULL` | throws `Error` (`.is_busy()`) | `Error::Io` | Fixed-buffer submission while deferred unregister is draining |
 | `ECANCELED` | callback `result = -ECANCELED` | `Error` (`.is_cancelled()`) | `Error::Cancelled` | Operation was cancelled via `cancel()` |
-| `ETIMEDOUT` | errno set, returns -1 | throws `Error` | `Error::Io` | `drain()` timeout exceeded |
+| `ETIMEDOUT` | errno set, returns -1 | throws `Error` | `Error::Io` | `drain()` or `wait()` timeout exceeded |
 | `EALREADY` | errno set, returns -1 | (cancel returns `false`) | `Error::Io` | Cancel called on already-completed request |
 
 ---

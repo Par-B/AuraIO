@@ -99,7 +99,7 @@ Every AuraIO program follows the same flow:
 static int done = 0;
 
 void on_read(aura_request_t *req, ssize_t result, void *user_data) {
-    (void)req; (void)user_data;
+    (void)req;
     if (result > 0)
         printf("Read %zd bytes: %.*s\n", result, (int)result, (char *)user_data);
     else
@@ -259,7 +259,7 @@ int main() {
 
         // 4. Wait for completion
         while (!done)
-            engine.wait(100);
+            engine.wait(-1);
 
         close(fd);
         // buf and engine cleaned up automatically
@@ -309,10 +309,8 @@ aura::Task<void> copy_chunk(aura::Engine& engine, int src, int dst,
 // Drive the coroutine
 auto task = copy_chunk(engine, src_fd, dst_fd, 65536, 0);
 task.resume();  // Start the coroutine (submits first I/O)
-while (!task.done()) {
+while (!task.done())
     engine.wait(100);
-    task.resume();
-}
 ```
 
 ### Metadata Operations
@@ -320,7 +318,7 @@ while (!task.done()) {
 ```cpp
 // Async file open
 engine.openat(AT_FDCWD, "/tmp/test.txt",
-              O_WRONLY | O_CREAT | O_TRUNC, 0644,
+              AURA_O_WRONLY | AURA_O_CREAT | AURA_O_TRUNC, 0644,
               [&](aura::Request&, ssize_t result) {
     if (result >= 0) {
         int new_fd = static_cast<int>(result);
@@ -427,6 +425,49 @@ while (running) {
     if (fds.revents & POLLIN)
         aura_poll(engine);
 }
+```
+
+### Dedicated Event Loop Thread (`aura_run` / `engine.run`)
+
+For server-style applications, run the engine on a dedicated thread using `aura_run()` (which blocks until `aura_stop()` is called):
+
+```c
+// C: dedicated event loop thread
+#include <pthread.h>
+
+static aura_engine_t *g_engine;
+
+void *io_thread(void *arg) {
+    (void)arg;
+    aura_run(g_engine);   // blocks; fires callbacks on this thread
+    return NULL;
+}
+
+int main(void) {
+    g_engine = aura_create();
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, io_thread, NULL);
+
+    // Submit I/O from any thread; callbacks fire on io_thread
+    aura_read(g_engine, fd, aura_buf(buf), len, 0, on_done, NULL);
+
+    // Shutdown
+    aura_stop(g_engine);   // signals aura_run() to return
+    pthread_join(tid, NULL);
+    aura_destroy(g_engine);
+}
+```
+
+```cpp
+// C++: equivalent using std::thread
+aura::Engine engine;
+std::thread io_thread([&]{ engine.run(); });  // blocks until stop()
+
+engine.read(fd, buf, len, 0, callback);       // submit from any thread
+
+engine.stop();         // wake the event loop thread
+io_thread.join();
 ```
 
 ### Graceful Shutdown

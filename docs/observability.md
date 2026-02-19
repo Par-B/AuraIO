@@ -69,7 +69,7 @@ Fields in `aura_ring_stats_t`:
 | `p99_latency_ms` | `double` | Current P99 latency estimate (ms) |
 | `throughput_bps` | `double` | Current throughput (bytes/sec) |
 | `aimd_phase` | `int` | Controller phase (0-5, see table below) |
-| `queue_depth` | `int` | Kernel queue depth for this ring |
+| `queue_depth` | `int` | Maximum queue depth for this ring |
 
 AIMD phases (via `aura_phase_name()`):
 
@@ -101,7 +101,7 @@ printf("  >%d us (overflow): %u ops\n", hist.max_tracked_us, hist.overflow);
 printf("  total: %u ops\n", hist.total_count);
 
 // Compute a specific percentile from the histogram
-double p99 = aura_histogram_percentile(&hist, 0.99);
+double p99 = aura_histogram_percentile(&hist, 99.0);
 printf("  P99: %.2f ms\n", p99);
 ```
 
@@ -111,7 +111,7 @@ printf("  P99: %.2f ms\n", p99);
 double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
 ```
 
-Returns the estimated latency in **milliseconds** for the given percentile (0.0-1.0). Returns -1.0 if the histogram is empty or the percentile is out of range.
+Returns the estimated latency in **milliseconds** for the given percentile (0-100). Returns -1.0 if the histogram is empty or the percentile is out of range.
 
 The histogram is an **approximate snapshot of the active window** — AuraIO double-buffers histograms internally and swaps them periodically. Because the snapshot is read from a concurrently-written histogram, individual bucket values are atomic but `total_count` may differ slightly from the sum of all buckets + overflow. For monitoring purposes this is negligible.
 
@@ -173,7 +173,7 @@ std::cout << bs.total_buffers() << " buffers in " << bs.shard_count() << " shard
 
 ## Prometheus Integration
 
-AuraIO ships a standalone Prometheus exposition text formatter in `integrations/prometheus/C/`. It has **no external dependencies** beyond libaura itself.
+AuraIO ships a standalone Prometheus exposition text formatter in `integrations/prometheus/C/`. It has **no external dependencies** beyond libc.
 
 Before `1.0`, the exporter schema is explicitly versioned and marked experimental.
 
@@ -201,7 +201,8 @@ The formatter writes Prometheus exposition text into a user-provided buffer:
 char buf[256 * 1024];
 int len = aura_metrics_prometheus(engine, buf, sizeof(buf));
 if (len < 0) {
-    // Buffer too small — |len| is an estimate of needed size
+    // Check errno: ENOBUFS means buffer too small (abs(len) is a minimum size estimate);
+    // ENOMEM means a hard allocation failure occurred.
 }
 // Write buf[0..len] as HTTP response body with
 // Content-Type: text/plain; version=0.0.4; charset=utf-8
@@ -236,6 +237,8 @@ Integrate this into whichever HTTP server you already run — there is no built-
 | `aura_buffer_pool_allocated_bytes` | gauge | — | Buffer pool allocated bytes |
 | `aura_buffer_pool_buffers` | gauge | — | Total buffers in pool |
 | `aura_buffer_pool_shards` | gauge | — | Number of pool shards |
+
+> **Note:** `peak_in_flight` from `aura_ring_stats_t` is intentionally not exported by the Prometheus formatter. It is available via `aura_get_ring_stats()` for application-level introspection but is omitted from the exporter schema to keep cardinality bounded.
 
 ### Demo Server
 
@@ -287,7 +290,15 @@ void aura_syslog_install(const aura_syslog_options_t *options);
 void aura_syslog_remove(void);
 ```
 
-Forwards AuraIO library log messages to `syslog(3)`. AuraIO log levels map directly to syslog priorities (e.g., `AURA_LOG_ERR` to `LOG_ERR`, `AURA_LOG_INFO` to `LOG_INFO`).
+Forwards AuraIO library log messages to `syslog(3)`. AuraIO log levels map directly to syslog priorities:
+
+| AuraIO level | syslog priority |
+|--------------|----------------|
+| `AURA_LOG_ERR` | `LOG_ERR` |
+| `AURA_LOG_WARN` | `LOG_WARNING` |
+| `AURA_LOG_NOTICE` | `LOG_NOTICE` |
+| `AURA_LOG_INFO` | `LOG_INFO` |
+| `AURA_LOG_DEBUG` | `LOG_DEBUG` |
 
 Pass `NULL` to `aura_syslog_install()` for sensible defaults (`ident="aura"`, `facility=LOG_USER`, `LOG_PID | LOG_NDELAY`). To customize, populate an `aura_syslog_options_t`:
 
@@ -297,6 +308,7 @@ typedef struct {
     int facility;        // syslog facility (default: LOG_USER, -1 for default)
     int log_options;     // openlog() flags (default: LOG_PID | LOG_NDELAY, -1 for default)
 } aura_syslog_options_t;
+// Note: `ident` must remain valid until `aura_syslog_remove()` — POSIX `openlog()` retains the pointer.
 ```
 
 ```c

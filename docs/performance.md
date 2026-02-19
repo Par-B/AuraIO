@@ -32,7 +32,7 @@ All buffers are automatically aligned to 4096 bytes (or custom alignment) to ens
 ### Ring Selection Modes
 AuraIO provides three ring selection modes to balance cache locality against throughput scaling:
 
-- **ADAPTIVE** (default, `AURA_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load is within 2x the global average, load is broadly distributed and spilling won't help, so it stays local. If local load exceeds 2x the global average, the local ring is an outlier and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `aura_stats_t.adaptive_spills`.
+- **ADAPTIVE** (default, `AURA_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load is at most 2x the global average, load is broadly distributed and spilling won't help, so it stays local. If local load exceeds 2x the global average, the local ring is an outlier and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `aura_stats_t.adaptive_spills`.
 
 - **CPU_LOCAL** (`AURA_SELECT_CPU_LOCAL`): Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring's capacity.
 
@@ -65,7 +65,13 @@ Performance is not just about raw speed but about **consistent latency**. AuraIO
     - Uses **AIMD** (Additive Increase Multiplicative Decrease) logic.
     - Tuned for I/O patterns consistent with both local NVMe and network latencies. Self-adapts to the hardware it runs on — works equally well with high-performance NVMe and 7200 RPM magnetic platter storage.
     - Self-adjusting variable-width sample windows based on IOPS rate to avoid low-IOPS workloads skewing the sample results.
-    - **P99 Guard Logic**: It continuously samples the 99th percentile latency. By default, the guard threshold is auto-derived at 10x the measured baseline P99 (with a 10ms hard ceiling before baseline is established). If latency exceeds this threshold, it immediately slashes concurrency. This prevents "Bufferbloat" at the device level, keeping the I/O piping full but not overflowing.
+    - **P99 Guard Logic**: It continuously samples the 99th percentile latency. By default, the guard threshold is auto-derived at 10x the measured baseline P99 (with a 10ms initial threshold before baseline is established). If latency exceeds this threshold, it immediately slashes concurrency. This prevents "Bufferbloat" at the device level, keeping the I/O piping full but not overflowing.
+
+### State Machine and Convergence
+
+The outer loop progresses through phases: PROBING → SETTLING → STEADY → CONVERGED. CONVERGED is **not terminal**. Spike detection can trigger BACKOFF → SETTLING → STEADY at any time. From STEADY, if the ring entered via BACKOFF (tracked via `entered_via_backoff`), the controller automatically re-enters PROBING after `ADAPTIVE_REPROBE_INTERVAL` (100 ticks ≈ 1 second), allowing re-adaptation when workload characteristics change.
+
+**Time-to-convergence**: STEADY state requires `ADAPTIVE_STEADY_THRESHOLD` = 500 ticks (× 10ms tick interval = ~5 seconds) of stable operation before transitioning to CONVERGED. Total ramp time from a cold start is approximately **7–15 seconds** depending on workload variability — faster on stable, consistent workloads; slower on highly variable or latency-sensitive ones.
 
 ## 5. Performance Tips for Users
 
@@ -104,7 +110,7 @@ To fully leverage this architecture:
         aura_wait(engine, 100);
     ```
 
-6.  **Set `initial_in_flight` to Match Your Workload**: The AIMD controller defaults to starting at `queue_depth / 4` and ramping up over ~1 second. This is the right default for latency-sensitive production workloads, but it means the first second of I/O runs at reduced concurrency. If your workload has a short ramp time, needs to reach peak throughput immediately, or is a benchmark without latency constraints, set `initial_in_flight` to your target depth at engine creation.
+6.  **Set `initial_in_flight` to Match Your Workload**: The AIMD controller defaults to starting at `max(queue_depth / 4, 4)` and ramping up over ~1 second. This is the right default for latency-sensitive production workloads, but it means the first second of I/O runs at reduced concurrency. If your workload has a short ramp time, needs to reach peak throughput immediately, or is a benchmark without latency constraints, set `initial_in_flight` to your target depth at engine creation.
 
     ```c
     aura_options_t opts;
@@ -123,7 +129,7 @@ To fully leverage this architecture:
     opts.initial_in_flight = 4;
     ```
 
-    **Rule of thumb**: if you know your target concurrency, set `initial_in_flight` to that value. If you don't, leave it at 0 (auto) and give the AIMD controller enough ramp time (~2-5 seconds) to converge.
+    **Rule of thumb**: if you know your target concurrency, set `initial_in_flight` to that value. If you don't, leave it at 0 (auto) and give the AIMD controller enough ramp time to converge — STEADY state requires ~5 seconds (500 ticks × 10ms) before transitioning to CONVERGED, making total cold-start ramp time approximately 7–15 seconds depending on workload variability.
 
 ## 6. High-Performance Deployment (64+ Cores, NVMe Arrays, High-Speed Networks)
 
@@ -353,7 +359,7 @@ Different depths exercise different bottlenecks. At low depth (32), the overhead
 3. The AIMD converged depth is reported to show whether the controller found a similar optimum to the sweep
 
 **Latency sampling (1 in 8 ops):**
-Both paths use identical `clock_gettime(CLOCK_MONOTONIC)` sampling at 1-in-8 rate, matching AuraIO's internal `RING_LATENCY_SAMPLE_MASK`. Sampling every op would add ~20ns overhead that biases the measurement; 1-in-8 is enough for stable P99 estimation.
+Both paths use identical `clock_gettime(CLOCK_MONOTONIC)` sampling at 1-in-8 rate, matching AuraIO's internal `RING_LATENCY_SAMPLE_RATE` (= 8) — every 8th operation is sampled. Sampling every op would add ~20ns overhead that biases the measurement; 1-in-8 is enough for stable P99 estimation.
 
 **Temp file with unlink:**
 The default test file is created via `mkstemp` + `fallocate(1GB)` + `unlink`. The unlink ensures automatic cleanup even on crash. Data is written with random bytes to prevent the filesystem from returning zeros for unwritten regions. `O_DIRECT` is enabled via `fcntl(F_SETFL)` to bypass the page cache — the AIMD controller needs to see true device latency, and cached reads would make both paths appear identically fast.

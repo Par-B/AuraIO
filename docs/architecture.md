@@ -24,13 +24,14 @@ A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 ### 3. Adaptive Controller (`adaptive_controller_t`)
 A robust control system embedded within each ring that tunes in-flight limits and batching behavior in real-time.
 - **Goal**: Maximize throughput while maintaining latency within a P99 envelope. By default, the controller auto-derives the threshold at 10x the measured baseline P99 (with a 10ms hard ceiling before baseline is established). Users can set an explicit ceiling via `max_p99_latency_ms`.
+- **Adaptive sample window**: Each controller tick is not a fixed 10ms — the sample window adapts from MIN_SAMPLE_WINDOW_MS=100ms (at high IOPS) up to MAX_SAMPLE_WINDOW_MS=1000ms (at low IOPS) based on observed throughput. This affects all phases: at low IOPS, ticks stretch up to 1 second, so phase transitions take proportionally longer.
 - **Algorithm**: **AIMD (Additive Increase Multiplicative Decrease)** — a six-phase state machine:
-    1. *Baseline*: Collects initial latency samples (~100ms warmup) to establish the P99 floor.
-    2. *Probing*: Linearly increases in-flight limit (`+1` per 10ms tick) while throughput improves.
-    3. *Steady*: Holds configuration when throughput plateaus (efficiency ratio drops below threshold) to avoid unnecessary oscillation.
+    1. *Baseline*: Collects initial latency samples to establish the P99 floor. At high IOPS this completes in ~100ms (one tick), but at low IOPS the adaptive sample window can extend each tick up to 1 second (MAX_SAMPLE_WINDOW_MS=1000ms), making baseline establishment take up to 10 seconds.
+    2. *Probing*: Linearly increases in-flight limit (`+1` per tick) while throughput improves. When a plateau is detected (plateau_count >= 3), transitions to SETTLING.
+    3. *Steady*: Holds configuration after arriving via SETTLING (either from PROBING plateau or post-backoff stabilization) to avoid unnecessary oscillation. If entered via backoff (`entered_via_backoff` flag), re-enters PROBING after ADAPTIVE_REPROBE_INTERVAL=100 ticks (~1–100 seconds depending on sample window) to verify the optimum is still valid.
     4. *Backoff*: Multiplicatively reduces limit (`× 0.80`) if P99 latency exceeds the guard threshold (10× baseline or 10ms hard ceiling).
-    5. *Settling*: Post-backoff stabilization (~100ms) to let the pipeline drain before re-evaluating.
-    6. *Converged*: Optimal depth found — stable for 5+ seconds with no further adjustments.
+    5. *Settling*: Post-backoff (or post-probing) stabilization (~100ms at high IOPS) to let the pipeline drain before re-evaluating. Transitions to STEADY.
+    6. *Converged*: Stable for 5+ seconds with no further adjustments. Not terminal — spike detection can trigger BACKOFF → SETTLING → STEADY → re-PROBING if conditions change.
 - **Inner loop**: A batch threshold optimizer tunes the number of SQEs accumulated before calling `io_uring_submit()`, amortizing syscall cost without adding latency.
 - **Spill tracking**: In ADAPTIVE ring selection mode, `aura_stats_t.adaptive_spills` counts submissions that overflowed to a non-local ring.
 
