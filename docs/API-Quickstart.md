@@ -521,6 +521,10 @@ aura_set_log_handler(my_logger, NULL);
 
 ### Error Handling Patterns
 
+Submission calls (`aura_read`, `aura_write`, etc.) are **non-blocking**. When the ring is at capacity, Aura tries to flush pending SQEs and poll for completions before giving up. If the ring is still full after that, the call returns `NULL` with `errno = EAGAIN` rather than blocking. This means your application is always in control of when to wait.
+
+The idiomatic pattern is: submit, check for `EAGAIN`, poll completions to free slots, then retry.
+
 ```c
 // C: Check every return value
 aura_request_t *req = aura_read(engine, fd, aura_buf(buf), len, off, cb, ud);
