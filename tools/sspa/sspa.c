@@ -136,7 +136,7 @@ static void lat_record(lat_hist_t *h, double us) {
 
 static double lat_percentile(const lat_hist_t *h, double pct) {
     if (h->count == 0) return 0.0;
-    uint32_t target = (uint32_t)((double)h->count * pct / 100.0);
+    uint32_t target = (uint32_t)((double)(h->count - 1) * pct / 100.0) + 1;
     uint32_t cumul = 0;
     for (int i = 0; i < LAT_BUCKETS; i++) {
         cumul += h->buckets[i];
