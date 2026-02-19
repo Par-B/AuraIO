@@ -488,6 +488,7 @@ void CopyContext::finish_task(FileTask &task) {
         try {
             int src_fd = task.src_fd;
             int dst_fd = task.dst_fd;
+            active_ops++;
             (void)engine.fdatasync(dst_fd,
                                    [this, &task, src_fd, dst_fd](aura::Request &, ssize_t result) {
                                        if (result < 0) {
@@ -497,11 +498,13 @@ void CopyContext::finish_task(FileTask &task) {
                                        }
                                        close(src_fd);
                                        close(dst_fd);
+                                       active_ops--;
                                    });
             task.src_fd = -1;
             task.dst_fd = -1;
             task.done = true;
         } catch (...) {
+            active_ops--;
             // Fallback: sync and close synchronously
             fdatasync(task.dst_fd);
             close(task.src_fd);
@@ -670,10 +673,13 @@ int CopyContext::copy_pipeline() {
 
     // Main event loop
     while (!all_tasks_done() && error == 0 && !g_interrupted) {
-        int n = engine.wait(100);
-        if (n < 0 && errno != EINTR && errno != ETIME) {
-            if (error == 0) error = -errno;
-            break;
+        try {
+            engine.wait(100);
+        } catch (const aura::Error &e) {
+            if (e.code() != EINTR && e.code() != ETIME && e.code() != ETIMEDOUT) {
+                if (error == 0) error = -e.code();
+                break;
+            }
         }
 
         // Fill pipeline with new reads for free slots
@@ -689,7 +695,11 @@ int CopyContext::copy_pipeline() {
 
     // Drain remaining ops if exiting due to error/interrupt
     while (active_ops > 0) {
-        engine.wait(100);
+        try {
+            engine.wait(100);
+        } catch (const aura::Error &) {
+            // Ignore timeout/errors during drain
+        }
     }
 
     return error;

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file auracp.c
  * @brief auracp - async pipelined file copy powered by AuraIO
@@ -98,7 +97,7 @@ typedef struct {
 // Pipeline buffer slots
 // ============================================================================
 
-typedef enum { BUF_FREE = 0, BUF_READING, BUF_WRITING } buf_state_t;
+typedef enum { BUF_FREE = 0, BUF_READING, BUF_WRITING, BUF_FSYNCING } buf_state_t;
 
 struct copy_ctx;
 
@@ -569,6 +568,8 @@ static void on_fsync_complete(aura_request_t *req, ssize_t result, void *user_da
     task->dst_fd = -1;
     task->done = true;
     slot->task = NULL;
+    slot->state = BUF_FREE;
+    ctx->active_ops--;
 }
 
 static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot) {
@@ -585,13 +586,17 @@ static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot) {
 
     /* Fsync if requested, then close */
     if (!ctx->config->no_fsync && task->dst_fd >= 0) {
-        /* Temporarily associate slot with task so the fsync callback can
-           access both ctx (via slot->ctx) and task (via slot->task). */
+        /* Mark slot as busy so the main loop doesn't reuse it while
+           the async fsync is in flight. */
         slot->task = task;
+        slot->state = BUF_FSYNCING;
+        ctx->active_ops++;
         aura_request_t *freq =
             aura_fsync(ctx->engine, task->dst_fd, AURA_FSYNC_DATASYNC, on_fsync_complete, slot);
         if (!freq) {
             slot->task = NULL;
+            slot->state = BUF_FREE;
+            ctx->active_ops--;
             /* Fallback: sync and close synchronously */
             fdatasync(task->dst_fd);
             close(task->src_fd);
@@ -760,7 +765,7 @@ static int copy_pipeline(copy_ctx_t *ctx) {
     /* Main event loop */
     while (!all_tasks_done(ctx->queue) && ctx->error == 0 && !g_interrupted) {
         int n = aura_wait(ctx->engine, 100);
-        if (n < 0 && errno != EINTR && errno != ETIME) {
+        if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) {
             if (ctx->error == 0) ctx->error = -errno;
             break;
         }
