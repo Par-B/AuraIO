@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # aura-hash — Parallel File Checksum Tool
 
 ## NAME
