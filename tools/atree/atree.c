@@ -344,18 +344,10 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         }
     }
 
-    /* Drain completions — must wait for all to complete before freeing */
-    while (atomic_load(remaining) > 0 && !g_interrupted) {
-        int n = aura_wait(engine, 100);
-        if (n < 0 && errno != EINTR && errno != ETIME && errno != ETIMEDOUT) {
-            /* Hard error: keep draining until all callbacks fire */
-            while (atomic_load(remaining) > 0) {
-                if (aura_wait(engine, 100) < 0 && errno != EINTR && errno != ETIME &&
-                    errno != ETIMEDOUT)
-                    break;
-            }
-            break;
-        }
+    /* Drain completions — must wait for ALL callbacks to fire before freeing
+       remaining, even on interruption or error, to avoid use-after-free. */
+    while (atomic_load(remaining) > 0) {
+        aura_wait(engine, 100);
     }
 
     free(remaining);
