@@ -2,6 +2,7 @@
 
 **Aura** = **A**daptive **U**ring **R**untime **A**rchitecture
 
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Linux](https://img.shields.io/badge/platform-Linux%205.10%2B-blue)
 ![C11](https://img.shields.io/badge/language-C11-orange)
 ![C++20](https://img.shields.io/badge/language-C%2B%2B20-orange)
