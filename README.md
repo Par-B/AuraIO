@@ -431,40 +431,17 @@ Synchronous and async code coexist — call `aura_wait()` immediately after subm
 4. **Batch submissions** — Submit multiple ops before waiting
 5. **Use vectored I/O** — Combine buffers with `readv`/`writev`
 
-## BFFIO — FIO-Compatible Benchmark
+## Tools
 
-AuraIO ships with **BFFIO** (Better Faster FIO), a drop-in FIO-compatible benchmark that uses AuraIO as its I/O engine. It accepts the same CLI flags and `.fio` job files as FIO, but replaces the static io_uring engine with AuraIO's AIMD adaptive tuning — automatically finding the optimal queue depth for your hardware.
+Build all tools with `make tools`, or individually:
 
-**Basic usage:**
-```bash
-make BFFIO
-./tools/BFFIO/BFFIO --name=test --rw=randread --bs=4k --size=1G \
-    --directory=/tmp/bffio --direct=1 --runtime=10 --time_based
-```
-
-**Multi-file workloads:**
-```bash
-# 4 files, round-robin distribution
-./tools/BFFIO/BFFIO --rw=randread --bs=4k --size=1G --nrfiles=4 \
-    --directory=/tmp/bffio --direct=1 --runtime=10 --time_based
-
-# Sequential file exhaustion pattern
-./tools/BFFIO/BFFIO --rw=read --bs=128k --nrfiles=4 --size=512M \
-    --file_service_type=sequential --directory=/tmp/bffio --direct=1 \
-    --runtime=10 --time_based
-```
-
-See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and [docs/bffio.md](docs/bffio.md) for design overview and baseline comparisons.
-
-## auracp — Async File Copy
-
-A high-performance file copy tool built on AuraIO, available in both C and C++:
-
-```bash
-make auracp       # Build C version
-make auracp-cpp   # Build C++ version
-./tools/auracp/auracp src dst
-```
+| Tool | Build | Description | Docs |
+|------|-------|-------------|------|
+| **BFFIO** | `make BFFIO` | FIO-compatible benchmark with AIMD auto-tuning. Drop-in replacement that accepts the same CLI flags and `.fio` job files. | [docs/bffio.md](docs/bffio.md), [CLI reference](tools/BFFIO/USAGE.md) |
+| **sspa** | `make sspa` | Simple Storage Performance Analyzer. Zero-config storage health check — runs 8 real-world I/O patterns and reports bandwidth, IOPS, and latency. | [docs/sspa.md](docs/sspa.md) |
+| **auracp** | `make auracp` | High-performance async file copy (C version). | — |
+| **auracp-cpp** | `make auracp-cpp` | High-performance async file copy (C++ version). | — |
+| **aura-hash** | `make aura-hash` | Parallel file checksum tool (SHA-256, SHA-1, MD5). | [docs/aura-hash.md](docs/aura-hash.md) |
 
 ## Integrations
 
@@ -488,6 +465,8 @@ Build all with `make integrations`. See the [Observability Guide](docs/observabi
 - [Performance Guide](docs/performance.md) — Tuning constants, benchmark methodology
 - [BFFIO Overview](docs/bffio.md) — FIO-compatible benchmark design and baseline comparisons
 - [BFFIO Usage Guide](tools/BFFIO/USAGE.md) — Complete CLI reference, options, examples
+- [SSPA Guide](docs/sspa.md) — Storage analyzer workloads and output reference
+- [aura-hash Guide](docs/aura-hash.md) — Parallel checksum tool usage
 - [Examples](examples/) — Working code samples
 
 ## Stability and Versioning
