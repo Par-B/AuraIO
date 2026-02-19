@@ -251,11 +251,43 @@ static bool node_add_child(tree_node_t *parent, tree_node_t *child) {
 
 static void node_free(tree_node_t *n) {
     if (!n) return;
-    for (int i = 0; i < n->num_children; i++) node_free(n->children[i]);
-    free(n->children);
-    free(n->name);
-    free(n->full_path);
-    free(n);
+
+    /* Iterative post-order traversal using an explicit stack to avoid
+       stack overflow on deeply nested directory trees. */
+    size_t cap = 256;
+    tree_node_t **stack = malloc(cap * sizeof(*stack));
+    if (!stack) { /* fallback: just leak */
+        return;
+    }
+    size_t sp = 0;
+    stack[sp++] = n;
+
+    while (sp > 0) {
+        tree_node_t *cur = stack[sp - 1];
+        if (cur->num_children > 0) {
+            /* Push children, then clear so we don't re-push */
+            for (int i = 0; i < cur->num_children; i++) {
+                if (sp >= cap) {
+                    cap *= 2;
+                    tree_node_t **tmp = realloc(stack, cap * sizeof(*tmp));
+                    if (!tmp) {
+                        free(stack);
+                        return;
+                    }
+                    stack = tmp;
+                }
+                stack[sp++] = cur->children[i];
+            }
+            cur->num_children = 0;
+        } else {
+            sp--;
+            free(cur->children);
+            free(cur->name);
+            free(cur->full_path);
+            free(cur);
+        }
+    }
+    free(stack);
 }
 
 // ============================================================================
@@ -557,27 +589,73 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
 // Phase 3: Aggregate (bottom-up)
 // ============================================================================
 
-static void aggregate(tree_node_t *node) {
-    if (!node->is_dir) {
-        node->total_size = (off_t)node->st.stx_size;
-        return;
-    }
+typedef struct {
+    tree_node_t *node;
+    int child_idx; /* next child to process; -1 = not yet initialized */
+} agg_frame_t;
 
-    node->total_size = 0;
-    node->total_files = 0;
-    node->total_dirs = 0;
+static void aggregate(tree_node_t *root) {
+    size_t cap = 256;
+    agg_frame_t *stack = malloc(cap * sizeof(*stack));
+    if (!stack) return;
+    size_t sp = 0;
+    stack[sp++] = (agg_frame_t){ .node = root, .child_idx = -1 };
 
-    for (int i = 0; i < node->num_children; i++) {
-        tree_node_t *c = node->children[i];
-        aggregate(c);
-        if (c->is_dir) {
-            node->total_dirs += 1 + c->total_dirs;
-            node->total_files += c->total_files;
-        } else {
-            node->total_files++;
+    while (sp > 0) {
+        agg_frame_t *frame = &stack[sp - 1];
+        tree_node_t *node = frame->node;
+
+        if (!node->is_dir) {
+            node->total_size = (off_t)node->st.stx_size;
+            sp--;
+            continue;
         }
-        node->total_size += c->total_size;
+
+        if (frame->child_idx == -1) {
+            /* Initialize aggregates */
+            node->total_size = 0;
+            node->total_files = 0;
+            node->total_dirs = 0;
+            frame->child_idx = 0;
+        }
+
+        if (frame->child_idx < node->num_children) {
+            tree_node_t *c = node->children[frame->child_idx];
+            frame->child_idx++;
+
+            /* If child already processed (leaf or previously visited), accumulate */
+            if (!c->is_dir) {
+                c->total_size = (off_t)c->st.stx_size;
+                node->total_files++;
+                node->total_size += c->total_size;
+            } else {
+                /* Push child for processing */
+                if (sp >= cap) {
+                    cap *= 2;
+                    agg_frame_t *tmp = realloc(stack, cap * sizeof(*tmp));
+                    if (!tmp) {
+                        free(stack);
+                        return;
+                    }
+                    stack = tmp;
+                    frame = &stack[sp - 1]; /* realloc may move */
+                }
+                stack[sp++] = (agg_frame_t){ .node = c, .child_idx = -1 };
+            }
+        } else {
+            /* All children processed — accumulate dir children */
+            for (int i = 0; i < node->num_children; i++) {
+                tree_node_t *c = node->children[i];
+                if (c->is_dir) {
+                    node->total_dirs += 1 + c->total_dirs;
+                    node->total_files += c->total_files;
+                    node->total_size += c->total_size;
+                }
+            }
+            sp--;
+        }
     }
+    free(stack);
 }
 
 // ============================================================================
@@ -604,15 +682,36 @@ static int cmp_size(const void *a, const void *b) {
     return strcasecmp(na->name, nb->name);
 }
 
-static void sort_tree(tree_node_t *node, bool by_size) {
-    if (!node->is_dir || node->num_children == 0) return;
+static void sort_tree(tree_node_t *root, bool by_size) {
+    size_t cap = 256;
+    tree_node_t **stack = malloc(cap * sizeof(*stack));
+    if (!stack) return;
+    size_t sp = 0;
+    stack[sp++] = root;
 
-    qsort(node->children, (size_t)node->num_children, sizeof(tree_node_t *),
-          by_size ? cmp_size : cmp_alpha);
+    while (sp > 0) {
+        tree_node_t *node = stack[--sp];
+        if (!node->is_dir || node->num_children == 0) continue;
 
-    for (int i = 0; i < node->num_children; i++) {
-        sort_tree(node->children[i], by_size);
+        qsort(node->children, (size_t)node->num_children, sizeof(tree_node_t *),
+              by_size ? cmp_size : cmp_alpha);
+
+        for (int i = 0; i < node->num_children; i++) {
+            if (node->children[i]->is_dir && node->children[i]->num_children > 0) {
+                if (sp >= cap) {
+                    cap *= 2;
+                    tree_node_t **tmp = realloc(stack, cap * sizeof(*tmp));
+                    if (!tmp) {
+                        free(stack);
+                        return;
+                    }
+                    stack = tmp;
+                }
+                stack[sp++] = node->children[i];
+            }
+        }
     }
+    free(stack);
 }
 
 // ============================================================================
@@ -623,36 +722,39 @@ static void sort_tree(tree_node_t *node, bool by_size) {
 #define NAME_COL 36
 #define LONG_COL 40
 
-static void print_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
-                       const char *prefix, bool is_last, int depth, int *file_count,
-                       int *dir_count) {
-    if (config->max_depth >= 0 && depth > config->max_depth) return;
+static void emit_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
+                      const char *prefix, bool is_last, int depth, int *file_count,
+                      int *dir_count) {
     if (config->dirs_only && !node->is_dir) return;
 
-    /* Build the tree connector + name part */
-    char line[1024];
+    /* Build the tree connector + name part using dynamic buffer */
+    size_t prefix_len = prefix ? strlen(prefix) : 0;
+    size_t name_len = strlen(node->name);
+    /* Worst case: prefix + connector(10) + color(16) + name + "/" + reset(8) + NUL */
+    size_t line_sz = prefix_len + name_len + 64;
+    char *line = malloc(line_sz);
+    if (!line) return;
 
     if (depth == 0) {
-        /* Root node */
         const char *clr = color_for_node(cs, node);
         const char *rst = cs->enabled ? cs->reset : "";
-        snprintf(line, sizeof(line), "%s%s/%s", clr, node->name, rst);
+        snprintf(line, line_sz, "%s%s/%s", clr, node->name, rst);
     } else {
         const char *connector = is_last ? "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 "
                                         : "\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 ";
         const char *clr = color_for_node(cs, node);
         const char *rst = cs->enabled ? cs->reset : "";
         if (node->is_dir)
-            snprintf(line, sizeof(line), "%s%s%s%s/%s", prefix, connector, clr, node->name, rst);
-        else snprintf(line, sizeof(line), "%s%s%s%s%s", prefix, connector, clr, node->name, rst);
+            snprintf(line, line_sz, "%s%s%s%s/%s", prefix, connector, clr, node->name, rst);
+        else snprintf(line, line_sz, "%s%s%s%s%s", prefix, connector, clr, node->name, rst);
     }
 
     /* Calculate visible length (without ANSI escapes) for padding */
     int visible_len = 0;
     if (depth == 0) {
-        visible_len = (int)strlen(node->name) + 1; /* +1 for '/' */
+        visible_len = (int)name_len + 1;
     } else {
-        visible_len = depth * 4 + (int)strlen(node->name) + (node->is_dir ? 1 : 0);
+        visible_len = depth * 4 + (int)name_len + (node->is_dir ? 1 : 0);
     }
 
     /* Right-aligned stats */
@@ -709,46 +811,123 @@ static void print_node(const tree_node_t *node, const config_t *config, const co
         }
     }
 
-    /* Pad between name and stats */
     int target_col = config->long_format ? LONG_COL : NAME_COL;
     int pad = target_col - visible_len;
     if (pad < 2) pad = 2;
 
-    /* Print line with padding */
     printf("%s", line);
     for (int i = 0; i < pad; i++) putchar(' ');
     printf("%s\n", stats);
+    free(line);
 
-    /* Count */
     if (node->is_dir && depth > 0) (*dir_count)++;
     else if (!node->is_dir) (*file_count)++;
+}
 
-    /* Recurse into children */
-    if (!node->is_dir) return;
-    if (config->max_depth >= 0 && depth >= config->max_depth) return;
+/* Iterative pre-order tree printer to avoid stack overflow on deep trees. */
+typedef struct {
+    const tree_node_t *node;
+    char *prefix; /* heap-allocated prefix for children */
+    bool is_last;
+    int depth;
+    int child_idx; /* next visible child to process; -1 = node not yet printed */
+} print_frame_t;
 
-    for (int i = 0; i < node->num_children; i++) {
-        if (config->dirs_only && !node->children[i]->is_dir) continue;
+static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
+                       const char *prefix, bool is_last, int depth, int *file_count,
+                       int *dir_count) {
+    size_t cap = 256;
+    print_frame_t *stack = malloc(cap * sizeof(*stack));
+    if (!stack) return;
+    size_t sp = 0;
 
-        char child_prefix[1024];
+    stack[sp++] = (print_frame_t){ .node = root,
+                                   .prefix = strdup(prefix ? prefix : ""),
+                                   .is_last = is_last,
+                                   .depth = depth,
+                                   .child_idx = -1 };
+
+    while (sp > 0) {
+        print_frame_t *frame = &stack[sp - 1];
+        const tree_node_t *node = frame->node;
+
+        if (config->max_depth >= 0 && frame->depth > config->max_depth) {
+            free(frame->prefix);
+            sp--;
+            continue;
+        }
+
+        /* First visit: print the node itself */
+        if (frame->child_idx == -1) {
+            emit_node(node, config, cs, frame->prefix, frame->is_last, frame->depth, file_count,
+                      dir_count);
+            frame->child_idx = 0;
+        }
+
+        /* If not a dir or at max_depth, we're done */
+        if (!node->is_dir || (config->max_depth >= 0 && frame->depth >= config->max_depth)) {
+            free(frame->prefix);
+            sp--;
+            continue;
+        }
+
+        /* Find next visible child */
+        int ci = frame->child_idx;
+        while (ci < node->num_children) {
+            if (!config->dirs_only || node->children[ci]->is_dir) break;
+            ci++;
+        }
+
+        if (ci >= node->num_children) {
+            /* No more children */
+            free(frame->prefix);
+            sp--;
+            continue;
+        }
+
+        frame->child_idx = ci + 1;
+
+        /* Determine if this child is the last visible one */
         bool child_is_last = true;
-        for (int j = i + 1; j < node->num_children; j++) {
+        for (int j = ci + 1; j < node->num_children; j++) {
             if (!config->dirs_only || node->children[j]->is_dir) {
                 child_is_last = false;
                 break;
             }
         }
 
-        if (depth == 0) {
-            child_prefix[0] = '\0';
+        /* Build child prefix */
+        char *child_prefix;
+        if (frame->depth == 0) {
+            child_prefix = strdup("");
         } else {
-            const char *ext = is_last ? "    " : "\xe2\x94\x82   ";
-            snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix, ext);
+            const char *ext = frame->is_last ? "    " : "\xe2\x94\x82   ";
+            size_t plen = strlen(frame->prefix) + strlen(ext) + 1;
+            child_prefix = malloc(plen);
+            if (child_prefix) snprintf(child_prefix, plen, "%s%s", frame->prefix, ext);
         }
 
-        print_node(node->children[i], config, cs, child_prefix, child_is_last, depth + 1,
-                   file_count, dir_count);
+        if (!child_prefix) continue;
+
+        /* Push child frame */
+        if (sp >= cap) {
+            cap *= 2;
+            print_frame_t *tmp = realloc(stack, cap * sizeof(*tmp));
+            if (!tmp) {
+                free(child_prefix);
+                free(stack);
+                return;
+            }
+            stack = tmp;
+            frame = &stack[sp - 1];
+        }
+        stack[sp++] = (print_frame_t){ .node = node->children[ci],
+                                       .prefix = child_prefix,
+                                       .is_last = child_is_last,
+                                       .depth = frame->depth + 1,
+                                       .child_idx = -1 };
     }
+    free(stack);
 }
 
 // ============================================================================
