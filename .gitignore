@@ -68,8 +68,8 @@ tools/auracp/auracp_debug
 # aura-hash checksum tool
 tools/aura-hash/*.o
 
-# aura-check storage analyzer
-tools/aura-check/*.o
+# sspa storage analyzer
+tools/sspa/*.o
 
 tools/bin/
 

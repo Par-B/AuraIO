@@ -2,14 +2,14 @@
 // Copyright 2026 AuraIO Contributors
 
 /**
- * @file aura-check.c
- * @brief aura-check - simple storage performance analyzer powered by AuraIO
+ * @file sspa.c
+ * @brief sspa - Simple Storage Performance Analyzer powered by AuraIO
  *
  * Point it at a path and get a quick "how's your storage doing?" report.
  * Runs 8 workloads simulating real application I/O patterns and reports
  * bandwidth, IOPS, and latency for each.
  *
- * Usage: aura-check [path] [size]
+ * Usage: sspa [path] [size]
  */
 
 #define _GNU_SOURCE
@@ -42,7 +42,7 @@
 #define AUTO_FRACTION 10 /* 10% of free space */
 #define PIPELINE_DEPTH 32
 #define MAX_WORKERS 64
-#define TMP_FILENAME ".aura-check.tmp"
+#define TMP_FILENAME ".sspa.tmp"
 
 #define LAT_BUCKETS 4096
 #define LAT_BUCKET_US 10 /* 10us per bucket = 0-40.96ms range */
@@ -685,7 +685,7 @@ int main(int argc, char **argv) {
     if (argc > 2) {
         ssize_t sz = parse_size(argv[2]);
         if (sz < 0) {
-            fprintf(stderr, "aura-check: invalid size: %s\n", argv[2]);
+            fprintf(stderr, "sspa: invalid size: %s\n", argv[2]);
             return 1;
         }
         test_size = (off_t)sz;
@@ -698,14 +698,14 @@ int main(int argc, char **argv) {
 
     struct stat st;
     if (stat(test_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "aura-check: '%s' is not a valid directory\n", test_dir);
+        fprintf(stderr, "sspa: '%s' is not a valid directory\n", test_dir);
         return 1;
     }
 
     if (!user_size) {
         struct statvfs vfs;
         if (statvfs(test_dir, &vfs) != 0) {
-            fprintf(stderr, "aura-check: cannot stat filesystem: %s\n", strerror(errno));
+            fprintf(stderr, "sspa: cannot stat filesystem: %s\n", strerror(errno));
             return 1;
         }
         uint64_t free_bytes = (uint64_t)vfs.f_bavail * vfs.f_frsize;
@@ -713,7 +713,7 @@ int main(int argc, char **argv) {
 
         if (auto_size < MIN_TEST_SIZE) {
             fprintf(stderr,
-                    "aura-check: insufficient free space (need at least 2.56 GiB for auto-sizing)\n"
+                    "sspa: insufficient free space (need at least 2.56 GiB for auto-sizing)\n"
                     "  256 MiB minimum required. Use explicit size to override.\n");
             return 1;
         }
@@ -721,7 +721,7 @@ int main(int argc, char **argv) {
         test_size = (off_t)auto_size;
     } else {
         if ((uint64_t)test_size < MIN_TEST_SIZE) {
-            fprintf(stderr, "aura-check: test size must be at least 256 MiB\n");
+            fprintf(stderr, "sspa: test size must be at least 256 MiB\n");
             return 1;
         }
     }
@@ -743,18 +743,18 @@ int main(int argc, char **argv) {
     int64_t size_mib = test_size / (1024 * 1024);
     char size_str[32];
     fmt_comma(size_str, sizeof(size_str), size_mib);
-    fprintf(stderr, "\naura-check: %s  (%s MiB test file, %.0fs per test)\n\n", test_dir, size_str,
+    fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test)\n\n", test_dir, size_str,
             duration_sec);
 
     if (create_test_file(g_tmpfile, test_size) != 0) {
-        fprintf(stderr, "aura-check: failed to create test file: %s\n", strerror(errno));
+        fprintf(stderr, "sspa: failed to create test file: %s\n", strerror(errno));
         return 1;
     }
 
     int fd = open(g_tmpfile, O_RDWR | O_DIRECT);
     if (fd < 0) fd = open(g_tmpfile, O_RDWR);
     if (fd < 0) {
-        fprintf(stderr, "aura-check: cannot open test file: %s\n", strerror(errno));
+        fprintf(stderr, "sspa: cannot open test file: %s\n", strerror(errno));
         return 1;
     }
 

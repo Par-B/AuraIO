@@ -1,20 +1,20 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# aura-check — Simple Storage Performance Analyzer
+# sspa — Simple Storage Performance Analyzer (SSPA)
 
 ## NAME
 
-aura-check — quick storage health check using real-world I/O patterns
+sspa — quick storage health check using real-world I/O patterns
 
 ## SYNOPSIS
 
 ```
-aura-check [path] [size]
+sspa [path] [size]
 ```
 
 ## DESCRIPTION
 
-**aura-check** is a zero-config storage performance analyzer. Point it at a directory and it runs 8 workloads that simulate real application I/O patterns, then reports bandwidth, IOPS, and latency for each.
+**sspa** is a zero-config storage performance analyzer. Point it at a directory and it runs 8 workloads that simulate real application I/O patterns, then reports bandwidth, IOPS, and latency for each.
 
 It creates a temporary test file, runs each workload for a fixed duration, and cleans up when done. The test file is also removed on SIGINT.
 
@@ -27,7 +27,7 @@ It creates a temporary test file, runs each workload for a fixed duration, and c
 
 ### Auto-sizing
 
-When no size is given, aura-check uses 10% of the filesystem's free space, clamped to 256 MiB – 1 GiB. If 10% of free space is less than 256 MiB (i.e. less than 2.56 GiB free), aura-check exits with an error.
+When no size is given, sspa uses 10% of the filesystem's free space, clamped to 256 MiB – 1 GiB. If 10% of free space is less than 256 MiB (i.e. less than 2.56 GiB free), sspa exits with an error.
 
 An explicit size overrides the 1 GiB cap but must still be at least 256 MiB.
 
@@ -37,7 +37,7 @@ Each workload runs for 10 seconds when the test file is 1 GiB or smaller. Above 
 
 ## WORKLOADS
 
-aura-check runs 8 tests, each modeling a different storage access pattern. "Thr" shows how many threads are used — `N` means one per CPU core.
+sspa runs 8 tests, each modeling a different storage access pattern. "Thr" shows how many threads are used — `N` means one per CPU core.
 
 | Test | Pattern | IO Size | R/W | Threads | What it models |
 |------|---------|---------|-----|---------|----------------|
@@ -63,7 +63,7 @@ For multi-threaded workloads, each thread gets a specific role:
 ## OUTPUT
 
 ```
-aura-check: /mnt/data  (1,024 MiB test file, 10s per test)
+sspa: /mnt/data  (1,024 MiB test file, 10s per test)
 
   Test         Pattern              IO Size   R/W %  Thr   Bandwidth       IOPS    Avg Lat   P99 Lat
   ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -102,32 +102,32 @@ All numeric columns use comma thousand separators. Latency is measured per-opera
 Test current directory with auto-sized file:
 
 ```bash
-aura-check
+sspa
 ```
 
 Test a specific mount point:
 
 ```bash
-aura-check /mnt/nvme0
+sspa /mnt/nvme0
 ```
 
 Test with an explicit 2 GiB file (overrides the 1 GiB auto cap):
 
 ```bash
-aura-check /mnt/nvme0 2G
+sspa /mnt/nvme0 2G
 ```
 
 Run inside the OrbStack Linux container (macOS development):
 
 ```bash
-orb -m linux bash -c "aura-check /var/tmp 512M"
+orb -m linux bash -c "sspa /var/tmp 512M"
 ```
 
 ## TIPS
 
 - **Use a real filesystem**, not tmpfs. Testing on `/tmp` if it's tmpfs will benchmark RAM, not storage.
 - **Larger files** give more representative results for random workloads. At 256 MiB, the entire file may fit in the page cache after the first test.
-- **O_DIRECT** is used when supported. If the filesystem doesn't support it (e.g. tmpfs, some network filesystems), aura-check falls back to buffered I/O silently.
+- **O_DIRECT** is used when supported. If the filesystem doesn't support it (e.g. tmpfs, some network filesystems), sspa falls back to buffered I/O silently.
 - **Page cache** is dropped between tests via `posix_fadvise(DONTNEED)`. This is advisory — for true cold-cache reads, use `echo 3 > /proc/sys/vm/drop_caches` (requires root) before running.
 - **Cross-validate** against fio for specific workloads if numbers seem off:
   ```bash
@@ -149,16 +149,16 @@ orb -m linux bash -c "aura-check /var/tmp 512M"
 
 ```bash
 # From AuraIO root
-make aura-check
+make sspa
 
 # Or from the tool directory
-cd tools/aura-check
+cd tools/sspa
 make
 ```
 
 **Dependencies**: liburing, pthreads
 
-The binary is placed at `tools/bin/aura-check`.
+The binary is placed at `tools/bin/sspa`.
 
 ---
 
@@ -216,4 +216,4 @@ The `assign_thread_role()` function configures each worker based on the workload
 
 ### Test file lifecycle
 
-The test file (`.aura-check.tmp`) is created by sequential writes (not fallocate) to ensure blocks are actually allocated on disk. It is registered with `atexit()` and a SIGINT handler for cleanup. The file is opened once with `O_RDWR | O_DIRECT` and the same fd is shared across all tests and threads.
+The test file (`.sspa.tmp`) is created by sequential writes (not fallocate) to ensure blocks are actually allocated on disk. It is registered with `atexit()` and a SIGINT handler for cleanup. The file is opened once with `O_RDWR | O_DIRECT` and the same fd is shared across all tests and threads.

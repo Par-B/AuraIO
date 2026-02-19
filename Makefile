@@ -416,11 +416,11 @@ auracp-cpp: engine
 aura-hash: engine
 	$(MAKE) -C tools/aura-hash
 
-# Build aura-check storage analyzer
-aura-check: engine
-	$(MAKE) -C tools/aura-check
+# Build sspa storage analyzer
+sspa: engine
+	$(MAKE) -C tools/sspa
 
-.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash aura-check
+.PHONY: BFFIO BFFIO-test BFFIO-baseline auracp auracp-cpp aura-hash sspa
 
 # =============================================================================
 # Installation
@@ -472,7 +472,7 @@ clean: rust-clean
 	-$(MAKE) -C tools/auracp clean 2>/dev/null || true
 	-$(MAKE) -C tools/auracp_cpp clean 2>/dev/null || true
 	-$(MAKE) -C tools/aura-hash clean 2>/dev/null || true
-	-$(MAKE) -C tools/aura-check clean 2>/dev/null || true
+	-$(MAKE) -C tools/sspa clean 2>/dev/null || true
 	rm -f integrations/prometheus/C/prometheus_example
 	rm -f integrations/opentelemetry/C/otel_example
 	rm -f integrations/syslog/C/syslog_example
@@ -662,8 +662,8 @@ help:
 	@echo "aura-hash (parallel checksum):"
 	@echo "  make aura-hash      Build aura-hash parallel checksum tool"
 	@echo ""
-	@echo "aura-check (storage analyzer):"
-	@echo "  make aura-check     Build aura-check storage performance analyzer"
+	@echo "sspa (storage analyzer):"
+	@echo "  make sspa           Build sspa storage performance analyzer"
 	@echo ""
 	@echo "Integrations:"
 	@echo "  make integrations   Build integrations (Prometheus + OpenTelemetry + Syslog)"
