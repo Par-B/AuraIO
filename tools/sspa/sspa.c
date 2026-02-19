@@ -988,9 +988,12 @@ int main(int argc, char **argv) {
 
     printf("  %-12s %-20s %7s  %6s %4s  %10s %10s  %9s %9s\n", "Test", "Pattern", "IO Size",
            "R/W %", "Thr", "Bandwidth", "IOPS", "Avg Lat", "P99 Lat");
-    printf("  ");
-    for (int i = 0; i < 98; i++) printf("%s", "\xe2\x94\x80");
-    printf("\n");
+    {
+        char rule[98 * 3 + 1]; /* 98 × 3-byte UTF-8 '─' */
+        for (int i = 0; i < 98; i++) memcpy(rule + i * 3, "\xe2\x94\x80", 3);
+        rule[98 * 3] = '\0';
+        printf("  %s\n", rule);
+    }
 
     int64_t total_ops = 0, total_reads = 0, total_writes = 0;
 
