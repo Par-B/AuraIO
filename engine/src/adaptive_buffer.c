@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_buffer.c
  * @brief Aligned buffer pool implementation with size-class buckets
@@ -284,6 +283,16 @@ static thread_cache_t *get_thread_cache(buffer_pool_t *pool) {
              * We must hold active_users while accessing shards to prevent
              * a concurrent pool_destroy from freeing them under us. */
             buffer_pool_t *old_pool = atomic_load_explicit(&cache->pool, memory_order_acquire);
+            if (!old_pool) {
+                /* Pool was destroyed between our checks — free the cache. */
+                pthread_mutex_destroy(&cache->cleanup_mutex);
+                free(cache);
+                tls_cache = NULL;
+                if (tls_key_valid) {
+                    pthread_setspecific(tls_key, NULL);
+                }
+                return NULL;
+            }
             atomic_fetch_add_explicit(&old_pool->active_users, 1, memory_order_acq_rel);
             pthread_mutex_lock(&cache->cleanup_mutex);
             if (atomic_load_explicit(&old_pool->destroyed, memory_order_acquire)) {
@@ -925,6 +934,7 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     /* Guard against size=0: size_to_class(0) returns class 0, which would
      * place the buffer in the wrong bucket. Free directly instead. */
     if (size == 0) {
+        atomic_fetch_sub_explicit(&pool->total_buffers, 1, memory_order_relaxed);
         free(buf);
         return;
     }

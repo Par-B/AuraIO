@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file aura.c
  * @brief Main async I/O API implementation
@@ -1704,9 +1703,6 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
                 return (-1);
             }
             if (completed > 0) {
-                if (maybe_finalize_deferred_unregistration(engine) != 0) {
-                    return (-1);
-                }
                 return completed;
             }
             /* Woke from poll but no completions — fall through to timeout. */
@@ -1793,7 +1789,7 @@ void aura_run(aura_engine_t *engine) {
             }
         }
 
-        if (!has_pending && completed == 0) {
+        if (!has_pending && completed <= 0) {
             break;
         }
         if (++drain_iterations >= 100) {
@@ -2327,7 +2323,7 @@ int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_stats_t *
     return 0;
 }
 
-int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
+int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
                        size_t hist_size) {
     if (!engine || !hist || hist_size == 0) {
         errno = EINVAL;

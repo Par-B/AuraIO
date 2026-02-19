@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file aura.h
  * @brief Self-tuning async I/O library built on io_uring
@@ -1358,7 +1357,7 @@ AURA_API int aura_get_ring_stats(aura_engine_t *engine, int ring_idx, aura_ring_
  * @param hist_size sizeof(aura_histogram_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine/hist or invalid ring_idx)
  */
-AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
+AURA_API int aura_get_histogram(aura_engine_t *engine, int ring_idx, aura_histogram_t *hist,
                                 size_t hist_size);
 
 /**

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file engine.hpp
  * @brief Main Engine class for AuraIO C++ bindings
@@ -766,7 +765,7 @@ class Engine {
      * @return Histogram snapshot
      * @throws std::out_of_range if ring_idx is invalid
      */
-    [[nodiscard]] Histogram get_histogram(int ring_idx) const {
+    [[nodiscard]] Histogram get_histogram(int ring_idx) {
         Histogram h;
         if (aura_get_histogram(handle_, ring_idx, &h.hist_, sizeof(h.hist_)) != 0)
             throw std::out_of_range("ring_idx out of range");
