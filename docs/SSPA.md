@@ -47,8 +47,8 @@ sspa runs 8 tests, each modeling a different storage access pattern. "Thr" shows
 | **Cache** | Random read | 4K | 100/0 | N | Read-heavy cache or CDN workload. All threads issuing random 4K reads — tests IOPS ceiling for reads. |
 | **Logging** | Multi-stream sequential write | 4K | 0/100 | 4 | Application log writers or WAL flushes. Four independent sequential write streams with small I/O — tests how the device handles multiple concurrent sequential writers. |
 | **KV-Store** | Append write + random read | 64K | 80/20 | N | Log-structured key-value store (LSM-tree). One thread appends 64K blocks sequentially (compaction/flush), remaining threads do random 64K reads (get operations). |
-| **Training** | Sequential read + random seeks | 512K | 100/0 | 2 | ML data loader. Thread 0 reads sequentially (streaming training data), thread 1 reads random offsets (prefetcher/shuffler). Tests mixed sequential+random read performance. |
-| **Lakehouse** | Scan + compact + lookup | 512K | 60/40 | N | Analytics lakehouse (Parquet/Delta Lake). ~40% of threads do sequential scans, ~30% do sequential compaction writes, ~30% do random 4K metadata lookups. Tests mixed large-sequential and small-random I/O. |
+| **Training** | Sequential read + random seeks | 256K | 100/0 | 2 | ML data loader. Thread 0 reads sequentially (streaming training data), thread 1 reads random offsets (prefetcher/shuffler). Tests mixed sequential+random read performance. |
+| **Lakehouse** | Scan + compact + lookup | 1M | 60/40 | N | Analytics lakehouse (Parquet/Delta Lake). ~40% of threads do sequential scans, ~30% do sequential compaction writes, ~30% do random 4K metadata lookups. Tests mixed large-sequential and small-random I/O. |
 
 ### Thread roles
 
@@ -58,7 +58,7 @@ For multi-threaded workloads, each thread gets a specific role:
 - **Logging**: All 4 threads write sequentially, each to its own region of the file.
 - **KV-Store**: Thread 0 is the sequential append writer; all other threads are random readers.
 - **Training**: Thread 0 reads sequentially; thread 1 reads randomly.
-- **Lakehouse**: Threads are divided roughly 40/30/30 between sequential scan, sequential compaction write, and random metadata lookup. The metadata lookup threads use 4K I/O regardless of the workload's nominal 512K I/O size.
+- **Lakehouse**: Threads are divided roughly 40/30/30 between sequential scan, sequential compaction write, and random metadata lookup. The metadata lookup threads use 4K I/O regardless of the workload's nominal 1M I/O size.
 
 ## OUTPUT
 
@@ -73,8 +73,8 @@ sspa: /mnt/data  (1,024 MiB test file, 10s per test)
   Cache        random read             4K    100/0    8      487 MB/s    124,830    0.06 ms   0.31 ms
   Logging      multi-stream write      4K    0/100    4      774 MB/s    198,201    0.02 ms   0.08 ms
   KV-Store     append+rand read       64K    80/20    8      312 MB/s      4,992    0.40 ms   1.10 ms
-  Training     seq read+shuffle      512K    100/0    2    1,956 MB/s      3,912    0.51 ms   1.15 ms
-  Lakehouse    scan+compact+lookup   512K    60/40    8    1,534 MB/s      3,068    0.65 ms   1.80 ms
+  Training     seq read+shuffle      256K    100/0    2    1,956 MB/s      7,824    0.51 ms   1.15 ms
+  Lakehouse    scan+compact+lookup     1M    60/40    8    1,534 MB/s      1,534    0.65 ms   1.80 ms
 
   Total I/O: 12,847,210 ops  (42% read, 58% write)
 
