@@ -454,7 +454,7 @@ make BFFIO
     --runtime=10 --time_based
 ```
 
-See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and [docs/BFFIO.md](docs/BFFIO.md) for design overview and baseline comparisons.
+See [tools/BFFIO/USAGE.md](tools/BFFIO/USAGE.md) for complete CLI reference and [docs/bffio.md](docs/bffio.md) for design overview and baseline comparisons.
 
 ## auracp — Async File Copy
 
@@ -482,11 +482,11 @@ Build all with `make integrations`. See the [Observability Guide](docs/observabi
 
 - [Architecture Guide](docs/architecture.md) — Design decisions, adoption guide
 - [API Quickstart](docs/API-Quickstart.md) — Get started with C, C++, or Rust in minutes
-- [API Reference](docs/api_reference.md) — Full function documentation
-- [Async Lifecycle](docs/ASYNC_LIFECYCLE.md) — Submission vs completion semantics
+- [API Reference](docs/api-reference.md) — Full function documentation
+- [Async Lifecycle](docs/async-lifecycle.md) — Submission vs completion semantics
 - [Observability Guide](docs/observability.md) — Stats API, Prometheus integration, sampling costs
 - [Performance Guide](docs/performance.md) — Tuning constants, benchmark methodology
-- [BFFIO Overview](docs/BFFIO.md) — FIO-compatible benchmark design and baseline comparisons
+- [BFFIO Overview](docs/bffio.md) — FIO-compatible benchmark design and baseline comparisons
 - [BFFIO Usage Guide](tools/BFFIO/USAGE.md) — Complete CLI reference, options, examples
 - [Examples](examples/) — Working code samples
 
