@@ -424,8 +424,13 @@ static void node_free(tree_node_t *n) {
 // ============================================================================
 
 typedef struct {
+    atomic_int remaining;
+    atomic_bool abandoned; /* set by caller when bailing on interruption */
+} statx_batch_t;
+
+typedef struct {
     tree_node_t *node;
-    atomic_int *remaining;
+    statx_batch_t *batch;
 } statx_ctx_t;
 
 static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_data) {
@@ -434,7 +439,13 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
     if (result == 0) {
         ctx->node->is_dir = S_ISDIR(ctx->node->st.stx_mode);
     }
-    atomic_fetch_sub(ctx->remaining, 1);
+    /* If we're the last completion and the caller abandoned us,
+       free the shared batch struct. */
+    if (atomic_fetch_sub(&ctx->batch->remaining, 1) == 1) {
+        if (atomic_load(&ctx->batch->abandoned)) {
+            free(ctx->batch);
+        }
+    }
     free(ctx);
 }
 
@@ -489,29 +500,30 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 
     if (dir_node->num_children == 0) return 0;
 
-    /* Heap-allocate remaining counter — shared with async callbacks, so it must
-       outlive this function if we ever bail out of the drain loop early. */
-    atomic_int *remaining = malloc(sizeof(*remaining));
-    if (!remaining) return -1;
-    atomic_store(remaining, dir_node->num_children);
+    /* Heap-allocate batch state — shared with async callbacks, so it must
+       outlive this function if we bail out of the drain loop early. */
+    statx_batch_t *batch = malloc(sizeof(*batch));
+    if (!batch) return -1;
+    atomic_store(&batch->remaining, (int)dir_node->num_children);
+    atomic_store(&batch->abandoned, false);
 
     for (size_t i = 0; i < dir_node->num_children; i++) {
         tree_node_t *child = dir_node->children[i];
 
         statx_ctx_t *ctx = malloc(sizeof(*ctx));
         if (!ctx) {
-            atomic_fetch_sub(remaining, 1);
+            atomic_fetch_sub(&batch->remaining, 1);
             continue;
         }
         ctx->node = child;
-        ctx->remaining = remaining;
+        ctx->batch = batch;
 
         aura_request_t *req =
             aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW, STATX_MASK,
                        &child->st, on_statx_complete, ctx);
         if (!req) {
             free(ctx);
-            atomic_fetch_sub(remaining, 1);
+            atomic_fetch_sub(&batch->remaining, 1);
             /* Fallback: synchronous statx */
             struct statx stx;
             if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW, STATX_MASK, &stx) == 0) {
@@ -521,14 +533,17 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         }
     }
 
-    /* Drain completions — must wait for ALL callbacks to fire before freeing
-       remaining, even on interruption or error, to avoid use-after-free. */
-    while (atomic_load(remaining) > 0) {
+    /* Drain async completions. On interruption, mark the batch as abandoned
+       so the last in-flight callback frees it, and bail out immediately. */
+    while (atomic_load(&batch->remaining) > 0) {
+        if (atomic_load(&g_interrupted)) {
+            atomic_store(&batch->abandoned, true);
+            return -1;
+        }
         aura_wait(engine, 100);
     }
 
-    free(remaining);
-
+    free(batch);
     return 0;
 }
 
@@ -565,8 +580,16 @@ static bool wq_push(work_queue_t *wq, tree_node_t *node) {
 
 static tree_node_t *wq_pop(work_queue_t *wq) {
     pthread_mutex_lock(&wq->lock);
-    while (!wq->head && !wq->done) {
-        pthread_cond_wait(&wq->cond, &wq->lock);
+    while (!wq->head && !wq->done && !atomic_load(&g_interrupted)) {
+        /* Use a short timeout so we can poll g_interrupted periodically */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 50 * 1000000; /* 50ms */
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        pthread_cond_timedwait(&wq->cond, &wq->lock, &ts);
     }
     if (!wq->head) {
         pthread_mutex_unlock(&wq->lock);
