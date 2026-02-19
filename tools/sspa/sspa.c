@@ -433,14 +433,19 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
     wctx->worker_id = thread_id;
     wctx->io_size = w->io_size;
 
+    /* Seed PRNG early so rng_offset() works for starting offsets */
+    rng_seed(thread_id);
+
     switch (w->pattern) {
     case PATTERN_SEQ_WRITE:
         wctx->force_write = true;
         wctx->sequential = true;
+        wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
         break;
     case PATTERN_SEQ_READ:
         wctx->force_read = true;
         wctx->sequential = true;
+        wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
         break;
     case PATTERN_RAND_RW:
         break;
@@ -458,13 +463,17 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         if (thread_id == 0) {
             wctx->force_write = true;
             wctx->sequential = true;
+            wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
         } else {
             wctx->force_read = true;
         }
         break;
     case PATTERN_TRAINING:
         wctx->force_read = true;
-        if (thread_id == 0) wctx->sequential = true;
+        if (thread_id == 0) {
+            wctx->sequential = true;
+            wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
+        }
         break;
     case PATTERN_LAKEHOUSE: {
         off_t lh_region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
