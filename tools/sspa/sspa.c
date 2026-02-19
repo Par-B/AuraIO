@@ -208,9 +208,10 @@ typedef struct worker_ctx {
     struct timespec measure_end;
     bool measure_started;
 
-    /* Results (thread-local, no synchronization needed — each worker has its
-     * own engine with single_thread=true, so callbacks run on the same thread
-     * that calls aura_wait). */
+    /* Results and active_ops are thread-local — each worker has its own engine
+     * with single_thread=true, so callbacks run on the same thread that calls
+     * aura_wait.  No cross-thread access occurs; the main thread only reads
+     * active_ops after pthread_join(). */
     int64_t bytes_read;
     int64_t bytes_written;
     int64_t ops_read;
@@ -239,9 +240,9 @@ static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
         return;
     }
 
-    /* Short reads/writes are counted at actual bytes transferred. With O_DIRECT
-     * and block-aligned offsets these are rare; not worth resubmitting the
-     * remainder for a benchmark. */
+    /* Short reads/writes are counted at actual bytes transferred.  With O_DIRECT
+     * and block-aligned offsets these shouldn't happen; not worth resubmitting
+     * the remainder for a benchmark. */
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -351,8 +352,9 @@ static int worker_run(worker_ctx_t *wctx, double duration_sec) {
     if (!engine) return errno;
     wctx->engine = engine;
 
-    /* Stack-allocated slots — safe because aura_drain() below completes all
-     * in-flight ops before we return. */
+    /* Stack-allocated slots (~1 KiB at PIPELINE_DEPTH=32) — safe because
+     * aura_drain() below completes all in-flight ops before we return.
+     * If PIPELINE_DEPTH grows significantly, switch to heap allocation. */
     io_slot_t slots[PIPELINE_DEPTH];
     memset(slots, 0, sizeof(slots));
     wctx->slots = slots;
@@ -799,7 +801,8 @@ static int create_test_file(const char *path, off_t size) {
         /* Re-align to 512 after short writes to keep O_DIRECT happy */
         written += (n / 512) * 512;
         if (n % 512 != 0) {
-            /* Partial block written — seek to aligned position */
+            /* Partial block written — lseek corrects the file position
+             * to our computed aligned offset in case it diverges. */
             written = lseek(fd, written, SEEK_SET);
             if (written < 0) {
                 free(buf);
