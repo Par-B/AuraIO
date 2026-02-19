@@ -152,6 +152,8 @@ static double lat_avg(const lat_hist_t *h) {
     double sum = 0;
     for (int i = 0; i < LAT_BUCKETS; i++)
         sum += (double)h->buckets[i] * ((double)i + 0.5) * LAT_BUCKET_US;
+    /* Attribute overflow samples to the bucket ceiling (conservative estimate) */
+    sum += (double)h->overflow * (double)LAT_BUCKETS * LAT_BUCKET_US;
     return sum / (double)h->count;
 }
 
@@ -328,7 +330,7 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
 // ============================================================================
 
 static int worker_run(worker_ctx_t *wctx, double duration_sec) {
-    rng_seed(wctx->worker_id);
+    /* PRNG already seeded by assign_thread_role() */
 
     aura_options_t opts;
     aura_options_init(&opts);
@@ -433,7 +435,8 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
     wctx->worker_id = thread_id;
     wctx->io_size = w->io_size;
 
-    /* Seed PRNG early so rng_offset() works for starting offsets */
+    /* Seed PRNG so rng_offset() works for starting offsets.
+     * worker_run() will NOT re-seed — this is the single seed site. */
     rng_seed(thread_id);
 
     switch (w->pattern) {
@@ -476,6 +479,7 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         }
         break;
     case PATTERN_LAKEHOUSE: {
+        /* ~40% scan, ~30% compact, ~30% random lookup (ceiling division) */
         off_t lh_region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
         if (thread_id < (total_threads * 4 + 9) / 10 || total_threads == 1) {
             wctx->force_read = true;
@@ -513,7 +517,7 @@ static int run_test(int fd, off_t file_size, const workload_t *w, int num_thread
     if (w->io_size == 0 || w->io_size % 512 != 0) return EINVAL;
 
     struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    clock_gettime(CLOCK_MONOTONIC, &start); /* fallback if no worker records measurements */
 
     if (num_threads <= 1) {
         worker_ctx_t wctx;
@@ -861,8 +865,9 @@ int main(int argc, char **argv) {
 
         if (auto_size < MIN_TEST_SIZE) {
             fprintf(stderr,
-                    "sspa: insufficient free space (need at least 2.56 GiB for auto-sizing)\n"
-                    "  256 MiB minimum required. Use explicit size to override.\n");
+                    "sspa: insufficient free space (need at least 2.56 GiB free for auto-sizing)\n"
+                    "  Auto-size uses 10%% of free space (256 MiB minimum). Use explicit size to "
+                    "override.\n");
             return 1;
         }
         if (auto_size > MAX_AUTO_SIZE) auto_size = MAX_AUTO_SIZE;
