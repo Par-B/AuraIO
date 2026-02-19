@@ -654,7 +654,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    scan_directory(root, engine, config, 0, &visited);
+    scan_directory(root, engine, config, 0, NULL);
     aura_destroy(engine);
 
     /* Count child directories to decide on parallelism */
