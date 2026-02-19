@@ -160,7 +160,7 @@ impl Engine {
             aura_sys::aura_register_buffers(
                 self.inner.raw(),
                 iovecs.as_ptr() as *const _,
-                iovecs.len() as i32,
+                iovecs.len() as u32,
             )
         };
 
@@ -210,7 +210,7 @@ impl Engine {
             aura_sys::aura_register_files(
                 self.inner.raw(),
                 fds.as_ptr(),
-                fds.len() as i32,
+                fds.len() as u32,
             )
         };
         if ret == 0 {
@@ -928,7 +928,7 @@ impl Engine {
     /// Get buffer pool statistics
     pub fn buffer_stats(&self) -> Result<crate::stats::BufferStats> {
         let mut inner: aura_sys::aura_buffer_stats_t = unsafe { std::mem::zeroed() };
-        let ret = unsafe { aura_sys::aura_get_buffer_stats(self.inner.raw(), &mut inner) };
+        let ret = unsafe { aura_sys::aura_get_buffer_stats(self.inner.raw(), &mut inner, std::mem::size_of::<aura_sys::aura_buffer_stats_t>()) };
         if ret == 0 {
             Ok(crate::stats::BufferStats::new(inner))
         } else {

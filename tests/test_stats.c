@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_stats.c
  * @brief Unit tests for enhanced statistics API
@@ -265,7 +264,7 @@ TEST(buffer_stats_basic) {
     assert(engine != NULL);
 
     aura_buffer_stats_t bs;
-    int rc = aura_get_buffer_stats(engine, &bs);
+    int rc = aura_get_buffer_stats(engine, &bs, sizeof(aura_buffer_stats_t));
     assert(rc == 0);
     assert(bs.shard_count > 0);
 
@@ -273,12 +272,12 @@ TEST(buffer_stats_basic) {
 }
 
 TEST(buffer_stats_null) {
-    int rc = aura_get_buffer_stats(NULL, NULL);
+    int rc = aura_get_buffer_stats(NULL, NULL, sizeof(aura_buffer_stats_t));
     assert(rc == -1);
 
     aura_buffer_stats_t bs;
     memset(&bs, 0xFF, sizeof(bs));
-    rc = aura_get_buffer_stats(NULL, &bs);
+    rc = aura_get_buffer_stats(NULL, &bs, sizeof(aura_buffer_stats_t));
     assert(rc == -1);
     /* Struct unchanged when engine is NULL */
     assert(bs.shard_count == (int)0xFFFFFFFF);
@@ -287,7 +286,7 @@ TEST(buffer_stats_null) {
 TEST(buffer_stats_null_output) {
     aura_engine_t *engine = aura_create();
     assert(engine != NULL);
-    int rc = aura_get_buffer_stats(engine, NULL);
+    int rc = aura_get_buffer_stats(engine, NULL, sizeof(aura_buffer_stats_t));
     assert(rc == -1);
     aura_destroy(engine);
 }
@@ -301,7 +300,7 @@ TEST(buffer_stats_after_alloc) {
     void *buf2 = aura_buffer_alloc(engine, 8192);
 
     aura_buffer_stats_t bs;
-    aura_get_buffer_stats(engine, &bs);
+    aura_get_buffer_stats(engine, &bs, sizeof(aura_buffer_stats_t));
 
     assert(bs.total_allocated_bytes >= 12288);
     assert(bs.total_buffers >= 2);
@@ -312,7 +311,7 @@ TEST(buffer_stats_after_alloc) {
     aura_buffer_free(engine, buf2);
 
     aura_buffer_stats_t bs2;
-    aura_get_buffer_stats(engine, &bs2);
+    aura_get_buffer_stats(engine, &bs2, sizeof(aura_buffer_stats_t));
     assert(bs2.total_allocated_bytes <= bs.total_allocated_bytes);
     assert(bs2.total_buffers <= bs.total_buffers);
 
@@ -877,8 +876,7 @@ TEST(cancel_completed_request) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
@@ -907,8 +905,7 @@ TEST(cancel_pending_request) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
     assert(req != NULL);
 
     /* Try to cancel — may succeed (0) or fail (-1/EALREADY) if already completed */
@@ -956,7 +953,7 @@ static void *stats_reader_thread(void *arg) {
         }
 
         aura_buffer_stats_t bs;
-        aura_get_buffer_stats(ctx->engine, &bs);
+        aura_get_buffer_stats(ctx->engine, &bs, sizeof(aura_buffer_stats_t));
         assert(bs.shard_count > 0);
 
         atomic_fetch_add(&ctx->reads_done, 1);

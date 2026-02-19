@@ -109,7 +109,7 @@ When adaptive tuning is disabled (`disable_adaptive = true`), the histogram is n
 
 ```c
 aura_buffer_stats_t bs;
-aura_get_buffer_stats(engine, &bs);
+aura_get_buffer_stats(engine, &bs, sizeof(aura_buffer_stats_t));
 
 printf("Pool: %zu buffers, %zu bytes across %d shards\n",
        bs.total_buffers, bs.total_allocated_bytes, bs.shard_count);

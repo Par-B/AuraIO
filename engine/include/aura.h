@@ -523,12 +523,16 @@ typedef struct {
 /**
  * Create a buffer descriptor for an unregistered (regular) buffer
  *
+ * Accepts const void* so callers with const buffers (e.g., for writes)
+ * don't need to cast. The internal pointer is stored as void* because
+ * read operations require a mutable target buffer.
+ *
  * @param ptr Pointer to user-provided buffer
  * @return Buffer descriptor
  */
-static inline aura_buf_t aura_buf(void *ptr) {
+static inline aura_buf_t aura_buf(const void *ptr) {
     aura_buf_t buf = {AURA_BUF_UNREGISTERED, {0}};
-    buf.u.ptr = ptr;
+    buf.u.ptr = (void *)ptr;
     return buf;
 }
 
@@ -1069,6 +1073,11 @@ AURA_API int aura_wait(aura_engine_t *engine, int timeout_ms);
  * Blocks, continuously processing completions until aura_stop() is called.
  * Useful for dedicating a thread to I/O processing.
  *
+ * After aura_stop() is called, drains remaining in-flight I/O with a
+ * 10-second timeout. If I/O is still in-flight after the timeout, returns
+ * with a warning log. Callers requiring guaranteed completion should use
+ * aura_drain() with an explicit timeout after aura_run() returns.
+ *
  * Must NOT be called concurrently with aura_poll(), aura_wait(), or
  * aura_drain() on the same engine (see aura_poll() threading model note).
  *
@@ -1199,7 +1208,7 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
  *         already registered, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs,
-                                                    int count);
+                                                    unsigned int count);
 
 /* ============================================================================
  * Registered Files (Advanced)
@@ -1226,7 +1235,8 @@ AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const
  * @return 0 on success, -1 on error (errno set to EINVAL, EBUSY if
  *         already registered, or ENOMEM)
  */
-AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const int *fds, int count);
+AURA_API AURA_WARN_UNUSED int aura_register_files(aura_engine_t *engine, const int *fds,
+                                                  unsigned int count);
 
 /**
  * Update a registered file descriptor
@@ -1384,11 +1394,16 @@ AURA_API int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_
  * Thread-safe: reads atomic counters from the buffer pool.
  * If engine or stats is NULL, returns -1 without modifying stats.
  *
- * @param engine Engine handle
- * @param stats  Output statistics structure
+ * The stats_size parameter enables forward compatibility: pass
+ * sizeof(aura_buffer_stats_t) so the library writes at most that many bytes.
+ *
+ * @param engine     Engine handle
+ * @param stats      Output statistics structure
+ * @param stats_size sizeof(aura_buffer_stats_t) from caller's compilation
  * @return 0 on success, -1 on error (NULL engine or stats)
  */
-AURA_API int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats);
+AURA_API int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats,
+                                   size_t stats_size);
 
 /**
  * Get human-readable name for an AIMD phase value

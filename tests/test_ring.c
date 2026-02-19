@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_ring.c
  * @brief Unit tests for io_uring ring wrapper
@@ -983,9 +982,9 @@ TEST(registered_files_invalid) {
     ret = aura_register_files(engine, &fd, 0);
     assert(ret == -1 && errno == EINVAL);
 
-    /* Negative count */
+    /* Overflow count */
     errno = 0;
-    ret = aura_register_files(engine, &fd, -1);
+    ret = aura_register_files(engine, &fd, UINT_MAX);
     assert(ret == -1 && errno == EINVAL);
 
     /* Update without registering first */
@@ -1050,9 +1049,9 @@ TEST(register_buffers_overflow_count) {
     posix_memalign(&buf, 4096, 4096);
     struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
 
-    /* Negative count should fail with EINVAL (overflow guard) */
+    /* Overflow count should fail with EINVAL */
     errno = 0;
-    int ret = aura_register_buffers(engine, &iov, -1);
+    int ret = aura_register_buffers(engine, &iov, UINT_MAX);
     assert(ret == -1 && errno == EINVAL);
 
     /* Large count: allocate a proper array so memcpy is safe.
@@ -1076,10 +1075,10 @@ TEST(register_files_overflow_count) {
     aura_engine_t *engine = aura_create();
     assert(engine != NULL);
 
-    /* Negative count should fail with EINVAL (overflow guard) */
+    /* Overflow count should fail with EINVAL */
     int fd = 0;
     errno = 0;
-    int ret = aura_register_files(engine, &fd, -1);
+    int ret = aura_register_files(engine, &fd, UINT_MAX);
     assert(ret == -1 && errno == EINVAL);
 
     /* Large count: allocate a proper array so memcpy is safe.

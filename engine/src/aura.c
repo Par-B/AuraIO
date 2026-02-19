@@ -797,19 +797,29 @@ aura_engine_t *aura_create(void) {
  * Returns NULL on failure with errno set.
  */
 static aura_engine_t *validate_and_init_engine_core(const aura_options_t *options) {
-    /* Validate struct_size for ABI forward-compatibility */
-    if (options->struct_size < sizeof(aura_options_t)) {
+    /* Validate struct_size for ABI forward-compatibility.
+     * Accept structs from older headers (smaller) — fields beyond
+     * the caller's struct_size are treated as zero (defaults).
+     * Reject struct_size == 0 (uninitialized) or larger than we know
+     * (future header with fields we can't validate). */
+    if (options->struct_size == 0 || options->struct_size > sizeof(aura_options_t)) {
         errno = EINVAL;
         return NULL;
     }
 
     /* Reject non-zero reserved fields for forward-compatibility.
      * Future versions may assign meaning to these; non-zero values from
-     * a caller built against an older header would silently misbehave. */
-    for (int i = 0; i < (int)(sizeof(options->_reserved) / sizeof(options->_reserved[0])); i++) {
-        if (options->_reserved[i] != 0) {
-            errno = EINVAL;
-            return NULL;
+     * a caller built against an older header would silently misbehave.
+     * Only check reserved fields within the caller's struct_size. */
+    size_t reserved_offset = offsetof(aura_options_t, _reserved);
+    if (options->struct_size > reserved_offset) {
+        size_t reserved_bytes = options->struct_size - reserved_offset;
+        size_t reserved_count = reserved_bytes / sizeof(options->_reserved[0]);
+        for (size_t i = 0; i < reserved_count; i++) {
+            if (options->_reserved[i] != 0) {
+                errno = EINVAL;
+                return NULL;
+            }
         }
     }
 
@@ -1907,8 +1917,8 @@ void aura_buffer_free(aura_engine_t *engine, void *buf) {
  * ============================================================================
  */
 
-int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int count) {
-    if (!engine || !iovs || count <= 0 || (size_t)count > SIZE_MAX / sizeof(struct iovec)) {
+int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, unsigned int count) {
+    if (!engine || !iovs || count == 0 || count > (unsigned int)INT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -2079,8 +2089,8 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
  * ============================================================================
  */
 
-int aura_register_files(aura_engine_t *engine, const int *fds, int count) {
-    if (!engine || !fds || count <= 0 || (size_t)count > SIZE_MAX / sizeof(int)) {
+int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int count) {
+    if (!engine || !fds || count == 0 || count > (unsigned int)INT_MAX) {
         errno = EINVAL;
         return (-1);
     }
@@ -2368,19 +2378,23 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
     return 0;
 }
 
-int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats) {
-    if (!engine || !stats) {
+int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats,
+                          size_t stats_size) {
+    if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;
         return -1;
     }
 
-    memset(stats, 0, sizeof(*stats));
+    aura_buffer_stats_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
 
     const buffer_pool_t *pool = &engine->buffer_pool;
-    stats->total_allocated_bytes =
-        atomic_load_explicit(&pool->total_allocated, memory_order_relaxed);
-    stats->total_buffers = atomic_load_explicit(&pool->total_buffers, memory_order_relaxed);
-    stats->shard_count = pool->shard_count;
+    tmp.total_allocated_bytes = atomic_load_explicit(&pool->total_allocated, memory_order_relaxed);
+    tmp.total_buffers = atomic_load_explicit(&pool->total_buffers, memory_order_relaxed);
+    tmp.shard_count = pool->shard_count;
+
+    size_t copy_size = stats_size < sizeof(tmp) ? stats_size : sizeof(tmp);
+    memcpy(stats, &tmp, copy_size);
     return 0;
 }
 

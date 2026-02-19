@@ -1044,7 +1044,7 @@ Get a latency histogram snapshot for a ring. The snapshot is approximate -- see 
 ##### `aura_get_buffer_stats`
 
 ```c
-int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats);
+int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stats, size_t stats_size);
 ```
 
 Get buffer pool statistics. Lockless -- reads atomic counters.
@@ -1053,6 +1053,7 @@ Get buffer pool statistics. Lockless -- reads atomic counters.
 |-----------|------|-------------|
 | `engine` | `const aura_engine_t *` | Engine handle |
 | `stats` | `aura_buffer_stats_t *` | Output struct |
+| `stats_size` | `size_t` | Size of stats struct (use `sizeof(aura_buffer_stats_t)`) |
 
 **Returns:** 0 on success, -1 if engine or stats is `NULL`.
 

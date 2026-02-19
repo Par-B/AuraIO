@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_coverage.c
  * @brief Expanded coverage tests for AuraIO core
@@ -717,7 +716,7 @@ TEST(register_buffers_null_args) {
     assert(aura_register_buffers(engine, &iov, 0) == -1);
     assert(errno == EINVAL);
 
-    assert(aura_register_buffers(engine, &iov, -1) == -1);
+    assert(aura_register_buffers(engine, &iov, UINT_MAX) == -1);
     assert(errno == EINVAL);
 
     aura_destroy(engine);
@@ -844,7 +843,7 @@ TEST(register_files_null_args) {
     assert(aura_register_files(engine, &fd, 0) == -1);
     assert(errno == EINVAL);
 
-    assert(aura_register_files(engine, &fd, -1) == -1);
+    assert(aura_register_files(engine, &fd, UINT_MAX) == -1);
     assert(errno == EINVAL);
 
     aura_destroy(engine);

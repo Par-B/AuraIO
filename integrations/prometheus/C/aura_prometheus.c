@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file aura_prometheus.c
  * @brief Prometheus exposition text formatter for AuraIO metrics
@@ -226,7 +225,7 @@ int aura_metrics_prometheus(aura_engine_t *engine, char *buf, size_t buf_size) {
 
     /* --- Buffer pool stats --- */
     aura_buffer_stats_t bstats;
-    aura_get_buffer_stats(engine, &bstats);
+    aura_get_buffer_stats(engine, &bstats, sizeof(aura_buffer_stats_t));
 
     PROM_APPEND("# HELP aura_buffer_pool_allocated_bytes Total bytes allocated from buffer pool\n"
                 "# TYPE aura_buffer_pool_allocated_bytes gauge\n"

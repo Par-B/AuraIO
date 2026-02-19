@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file aura_otel.c
  * @brief OpenTelemetry OTLP/JSON metrics formatter for AuraIO
@@ -60,7 +59,7 @@ int aura_metrics_otel(aura_engine_t *engine, char *buf, size_t buf_size) {
 
     /* --- Buffer pool stats --- */
     aura_buffer_stats_t bstats;
-    aura_get_buffer_stats(engine, &bstats);
+    aura_get_buffer_stats(engine, &bstats, sizeof(aura_buffer_stats_t));
 
     /* Begin ExportMetricsServiceRequest */
     OTEL_APPEND("{\"resourceMetrics\":[{\"resource\":{\"attributes\":["

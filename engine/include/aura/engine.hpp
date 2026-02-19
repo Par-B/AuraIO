@@ -778,7 +778,7 @@ class Engine {
      */
     [[nodiscard]] BufferStats get_buffer_stats() const {
         BufferStats bs;
-        if (aura_get_buffer_stats(handle_, &bs.stats_) != 0) {
+        if (aura_get_buffer_stats(handle_, &bs.stats_, sizeof(aura_buffer_stats_t)) != 0) {
             throw Error(errno, "aura_get_buffer_stats");
         }
         return bs;

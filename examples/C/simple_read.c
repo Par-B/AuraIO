@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file simple_read.c
  * @brief Simple async file read example
@@ -183,7 +182,7 @@ int main(int argc, char **argv) {
 
     /* Buffer pool statistics (demonstrates aura_get_buffer_stats) */
     aura_buffer_stats_t buf_stats;
-    if (aura_get_buffer_stats(engine, &buf_stats) == 0) {
+    if (aura_get_buffer_stats(engine, &buf_stats, sizeof(aura_buffer_stats_t)) == 0) {
         printf("\nBuffer Pool Statistics:\n");
         printf("  Total allocated:  %zu bytes\n", buf_stats.total_allocated_bytes);
         printf("  Buffer count:     %zu\n", buf_stats.total_buffers);
