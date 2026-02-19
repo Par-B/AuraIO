@@ -897,12 +897,16 @@ int main(int argc, char **argv) {
     int64_t size_mib = test_size / (1024 * 1024);
     char size_str[32];
     fmt_comma(size_str, sizeof(size_str), size_mib);
+    double warmup_sec = 3.0;
+    double measure_sec = duration_sec - warmup_sec;
     if (max_p99_latency_ms > 0)
-        fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test, P99 target: %.1f ms)\n\n",
-                test_dir, size_str, duration_sec, max_p99_latency_ms);
+        fprintf(stderr,
+                "\nsspa: %s  (%s MiB test file, %.0fs warmup + %.0fs measure per test,"
+                " P99 target: %.1f ms)\n\n",
+                test_dir, size_str, warmup_sec, measure_sec, max_p99_latency_ms);
     else
-        fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs per test)\n\n", test_dir, size_str,
-                duration_sec);
+        fprintf(stderr, "\nsspa: %s  (%s MiB test file, %.0fs warmup + %.0fs measure per test)\n\n",
+                test_dir, size_str, warmup_sec, measure_sec);
 
     if (create_test_file(g_tmpfile, test_size) != 0) {
         fprintf(stderr, "sspa: failed to create test file: %s\n", strerror(errno));
