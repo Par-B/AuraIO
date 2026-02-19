@@ -194,6 +194,7 @@ typedef struct worker_ctx {
     bool sequential;
     off_t seq_offset;
     off_t seq_region_start;
+    off_t seq_region_end;
 
     /* Pipeline state */
     aura_engine_t *engine;
@@ -301,7 +302,7 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
     if (wctx->sequential) {
         offset = wctx->seq_offset;
         wctx->seq_offset += (off_t)io_size;
-        if (wctx->seq_offset + (off_t)io_size > wctx->file_size)
+        if (wctx->seq_offset + (off_t)io_size > wctx->seq_region_end)
             wctx->seq_offset = wctx->seq_region_start;
     } else {
         offset = rng_offset(wctx->file_size, io_size);
@@ -453,12 +454,14 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         wctx->sequential = true;
         wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
         wctx->seq_region_start = 0;
+        wctx->seq_region_end = wctx->file_size;
         break;
     case PATTERN_SEQ_READ:
         wctx->force_read = true;
         wctx->sequential = true;
         wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
         wctx->seq_region_start = 0;
+        wctx->seq_region_end = wctx->file_size;
         break;
     case PATTERN_RAND_RW:
         break;
@@ -469,8 +472,11 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
         wctx->force_write = true;
         wctx->sequential = true;
         off_t region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
+        if (region < (off_t)w->io_size) region = (off_t)w->io_size;
         wctx->seq_offset = region * thread_id;
         wctx->seq_region_start = wctx->seq_offset;
+        wctx->seq_region_end = wctx->seq_offset + region;
+        if (wctx->seq_region_end > wctx->file_size) wctx->seq_region_end = wctx->file_size;
         break;
     }
     case PATTERN_KV_STORE:
@@ -479,6 +485,7 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
             wctx->sequential = true;
             wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
             wctx->seq_region_start = 0;
+            wctx->seq_region_end = wctx->file_size;
         } else {
             wctx->force_read = true;
         }
@@ -489,21 +496,27 @@ static void assign_thread_role(worker_ctx_t *wctx, int thread_id, int total_thre
             wctx->sequential = true;
             wctx->seq_offset = rng_offset(wctx->file_size, w->io_size);
             wctx->seq_region_start = 0;
+            wctx->seq_region_end = wctx->file_size;
         }
         break;
     case PATTERN_LAKEHOUSE: {
         /* ~40% scan, ~30% compact, ~30% random lookup (ceiling division) */
         off_t lh_region = (wctx->file_size / total_threads / (off_t)w->io_size) * (off_t)w->io_size;
+        if (lh_region < (off_t)w->io_size) lh_region = (off_t)w->io_size;
         if (thread_id < (total_threads * 4 + 9) / 10 || total_threads == 1) {
             wctx->force_read = true;
             wctx->sequential = true;
             wctx->seq_offset = lh_region * thread_id;
             wctx->seq_region_start = wctx->seq_offset;
+            wctx->seq_region_end = wctx->seq_offset + lh_region;
+            if (wctx->seq_region_end > wctx->file_size) wctx->seq_region_end = wctx->file_size;
         } else if (thread_id < (total_threads * 7 + 9) / 10) {
             wctx->force_write = true;
             wctx->sequential = true;
             wctx->seq_offset = lh_region * thread_id;
             wctx->seq_region_start = wctx->seq_offset;
+            wctx->seq_region_end = wctx->seq_offset + lh_region;
+            if (wctx->seq_region_end > wctx->file_size) wctx->seq_region_end = wctx->file_size;
         } else {
             wctx->force_read = true;
             wctx->io_size = 4096;
@@ -777,12 +790,23 @@ static int create_test_file(const char *path, off_t size) {
         /* Stamp offset to make each chunk unique (defeats dedup) */
         memcpy(buf, &written, sizeof(written));
         ssize_t n = write(fd, buf, to_write);
-        if (n <= 0) {
+        if (n < 0) {
             free(buf);
             close(fd);
             return -1;
         }
-        written += n;
+        if (n == 0) break;
+        /* Re-align to 512 after short writes to keep O_DIRECT happy */
+        written += (n / 512) * 512;
+        if (n % 512 != 0) {
+            /* Partial block written — seek to aligned position */
+            written = lseek(fd, written, SEEK_SET);
+            if (written < 0) {
+                free(buf);
+                close(fd);
+                return -1;
+            }
+        }
 
         if (isatty(STDERR_FILENO)) {
             int pct = (int)((double)written / (double)size * 100.0);
@@ -992,7 +1016,10 @@ int main(int argc, char **argv) {
         fmt_lat(avg_str, sizeof(avg_str), avg_lat_us);
         fmt_lat(p99_str, sizeof(p99_str), p99_lat_us);
         fmt_io_size(io_str, sizeof(io_str), w->io_size);
-        snprintf(rw_str, sizeof(rw_str), "%d/%d", w->read_pct, 100 - w->read_pct);
+        int actual_read_pct = w->read_pct;
+        if (total_io > 0)
+            actual_read_pct = (int)((double)result.ops_read / (double)total_io * 100.0 + 0.5);
+        snprintf(rw_str, sizeof(rw_str), "%d/%d", actual_read_pct, 100 - actual_read_pct);
 
         printf("  %-12s %-20s %7s  %5s  %3d  %7s MB/s %10s  %9s %9s\n", w->name, w->description,
                io_str, rw_str, threads, bw_str, iops_str, avg_str, p99_str);
