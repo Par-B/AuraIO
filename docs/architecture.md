@@ -15,9 +15,9 @@ The high-level container that manages the lifecycle of the entire runtime.
 ### 2. Rings (`ring_ctx_t`)
 A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
 - **Placement**: Typically pinned or logically associated with a specific CPU core.
-- **Locking**: Uses a fine-grained `pthread_mutex` for submission. While `io_uring` is lock-free, the library layer adds a lightweight lock to ensure thread safety when multiple application threads submit to the same core's ring.
+- **Locking**: Uses a fine-grained `pthread_mutex` for submission. A second `pthread_mutex` protects the completion queue, ensuring thread-safe CQE draining. While `io_uring` is lock-free, the library layer adds these lightweight locks to ensure thread safety when multiple application threads submit to or poll from the same core's ring.
 - **Ring Selection Modes** (`aura_ring_select_t`):
-  - **ADAPTIVE** (default): Uses CPU-local ring normally. When the local ring is congested (>75% of in-flight limit), a two-gate check decides whether to spill: if the local ring's load is more than 2x the global average, the thread is an outlier and stays local for cache benefits. Otherwise, system-wide pressure is detected and a power-of-two random choice picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced.
+  - **ADAPTIVE** (default): Uses CPU-local ring normally. When the local ring is congested (>75% of in-flight limit), a two-gate check decides whether to spill: if the local ring's load is within 2x of the global average, pressure is broadly distributed and spilling won't help, so the thread stays local for cache benefits. If the local ring's load exceeds 2x the global average, the local ring is an outlier, so a power-of-two random choice picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced.
   - **CPU_LOCAL**: Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Fallback: `pthread_self() % ring_count`. Best for NUMA-sensitive workloads.
   - **ROUND_ROBIN**: Always selects via `atomic_fetch_add(&next_ring) % ring_count`. Maximum single-thread scaling across all rings.
 
@@ -151,8 +151,7 @@ graph TD
 ### Completion Flow
 1. User calls `aura_poll()` or `aura_wait()`.
 2. Library iterates over **all** rings, draining each Completion Queue under that ring's completion lock.
-3. For each CQE: invokes user callback, then returns the request slot to the free stack.
-4. Adaptive controller records latency sample and updates throughput counters.
+3. For each CQE: records latency sample and updates throughput counters, invokes user callback, then returns the request slot to the free stack.
 
 **Thread affinity note:** Because step 2 drains all rings, a callback for I/O submitted on Core N may execute on whichever thread called `aura_wait()` — which may be running on Core M. Applications must not assume callbacks run on the submitting thread. Pass all per-operation state through the `user_data` pointer rather than thread-local storage.
 

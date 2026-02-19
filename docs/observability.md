@@ -99,7 +99,19 @@ for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
 }
 printf("  >%d us (overflow): %u ops\n", hist.max_tracked_us, hist.overflow);
 printf("  total: %u ops\n", hist.total_count);
+
+// Compute a specific percentile from the histogram
+double p99 = aura_histogram_percentile(&hist, 0.99);
+printf("  P99: %.2f ms\n", p99);
 ```
+
+#### `aura_histogram_percentile()`
+
+```c
+double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
+```
+
+Returns the estimated latency in **milliseconds** for the given percentile (0.0-1.0). Returns -1.0 if the histogram is empty or the percentile is out of range.
 
 The histogram is an **approximate snapshot of the active window** — AuraIO double-buffers histograms internally and swaps them periodically. Because the snapshot is read from a concurrently-written histogram, individual bucket values are atomic but `total_count` may differ slightly from the sum of all buckets + overflow. For monitoring purposes this is negligible.
 
@@ -220,6 +232,7 @@ Integrate this into whichever HTTP server you already run — there is no built-
 | `aura_ring_throughput_bytes_per_second` | gauge | `ring` | Throughput per ring |
 | `aura_ring_aimd_phase` | gauge | `ring` | AIMD phase (0-5) per ring |
 | `aura_latency_seconds` | histogram | `ring` | Latency distribution per ring (sum estimated from bucket midpoints) |
+| `aura_adaptive_spills_total` | counter | — | ADAPTIVE mode: submissions spilled to non-local ring |
 | `aura_buffer_pool_allocated_bytes` | gauge | — | Buffer pool allocated bytes |
 | `aura_buffer_pool_buffers` | gauge | — | Total buffers in pool |
 | `aura_buffer_pool_shards` | gauge | — | Number of pool shards |
@@ -234,6 +247,67 @@ curl -s http://localhost:9091/metrics
 ```
 
 This is a demo only — it runs a single-threaded accept loop and is not intended for production use. In production, call `aura_metrics_prometheus()` from your existing HTTP/metrics infrastructure.
+
+## OpenTelemetry Integration
+
+### `aura_metrics_otel()`
+
+```c
+#include "integrations/opentelemetry/C/aura_otel.h"
+
+int aura_metrics_otel(aura_engine_t *engine, char *buf, size_t buf_size);
+```
+
+Formats all AuraIO metrics as an OTLP/JSON `ExportMetricsServiceRequest`. The output can be POSTed directly to an OpenTelemetry collector's `/v1/metrics` endpoint.
+
+Recommended buffer size: **32KB + 24KB per ring**.
+
+On success, returns the number of bytes written (excluding null terminator). On failure, returns a negative value: if `errno == ENOBUFS`, the absolute value is an estimate of the required buffer size; if `errno == ENOMEM`, a hard allocation failure occurred.
+
+```c
+#include "integrations/opentelemetry/C/aura_otel.h"
+
+char buf[131072];
+int len = aura_metrics_otel(engine, buf, sizeof(buf));
+if (len < 0) {
+    // Buffer too small or allocation failure
+}
+// POST buf[0..len] to OTel collector /v1/metrics endpoint
+// Content-Type: application/json
+```
+
+## Syslog Integration
+
+### `aura_syslog_install()` / `aura_syslog_remove()`
+
+```c
+#include "integrations/syslog/C/aura_syslog.h"
+
+void aura_syslog_install(const aura_syslog_options_t *options);
+void aura_syslog_remove(void);
+```
+
+Forwards AuraIO library log messages to `syslog(3)`. AuraIO log levels map directly to syslog priorities (e.g., `AURA_LOG_ERR` to `LOG_ERR`, `AURA_LOG_INFO` to `LOG_INFO`).
+
+Pass `NULL` to `aura_syslog_install()` for sensible defaults (`ident="aura"`, `facility=LOG_USER`, `LOG_PID | LOG_NDELAY`). To customize, populate an `aura_syslog_options_t`:
+
+```c
+typedef struct {
+    const char *ident;   // openlog ident (default: "aura")
+    int facility;        // syslog facility (default: LOG_USER, -1 for default)
+    int log_options;     // openlog() flags (default: LOG_PID | LOG_NDELAY, -1 for default)
+} aura_syslog_options_t;
+```
+
+```c
+#include "integrations/syslog/C/aura_syslog.h"
+
+aura_syslog_install(NULL);  // use defaults
+aura_engine_t *e = aura_create();
+// ... library and app logs forwarded to syslog ...
+aura_syslog_remove();
+aura_destroy(e);
+```
 
 ### Grafana Dashboard
 

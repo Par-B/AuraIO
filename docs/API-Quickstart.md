@@ -308,6 +308,7 @@ aura::Task<void> copy_chunk(aura::Engine& engine, int src, int dst,
 
 // Drive the coroutine
 auto task = copy_chunk(engine, src_fd, dst_fd, 65536, 0);
+task.resume();  // Start the coroutine (submits first I/O)
 while (!task.done()) {
     engine.wait(100);
     task.resume();

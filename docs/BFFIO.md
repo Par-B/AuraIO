@@ -102,6 +102,10 @@ Each `[section]` runs as a separate job with a fresh AuraIO engine for clean AIM
 | `fsync` | `0` | Issue fsync every N writes |
 | `target-p99` | `0` (disabled) | P99 latency ceiling. Suffixes: `us`, `ms`, `s`. Bare number = ms |
 | `ioengine` | `AuraIO` | Accepted (case-insensitive) but always uses AuraIO |
+| `nrfiles` | `1` | Number of files per job (directory mode only) |
+| `filesize` | `size/nrfiles` | Per-file size. Suffixes: `K`, `M`, `G` |
+| `file_service_type` | `roundrobin` | File selection: `roundrobin`, `sequential`, `random` |
+| `ring-select` | `adaptive` | Ring selection: `adaptive`, `cpu_local`, `round_robin` |
 | `output-format` | `normal` | `normal` (FIO text) or `json` (FIO 3.36 JSON) |
 
 ## Latency-Constrained Throughput (`--target-p99`)
@@ -249,17 +253,17 @@ main.c
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main.c` | ~300 | CLI parsing, help text, engine lifecycle |
-| `job_parser.h` | ~80 | `job_config_t`, `bench_config_t`, parse declarations |
-| `job_parser.c` | ~530 | .fio INI parser + CLI arg parser |
-| `workload.h` | ~80 | `io_ctx_t`, `io_ctx_pool_t`, `thread_ctx_t`, `file_set_t` |
-| `workload.c` | ~750 | I/O loop, callbacks, worker threads, file management |
-| `stats.h` | ~130 | `thread_stats_t`, `direction_result_t`, `job_result_t` |
-| `stats.c` | ~490 | Histogram, percentiles, BW/IOPS sampling, aggregation |
-| `output.h` | ~35 | `output_normal()`, `output_json()` declarations |
-| `output.c` | ~620 | FIO-compatible text + JSON formatters |
-| `test_BFFIO.sh` | ~260 | Functional test suite |
-| `run_baseline.sh` | ~250 | FIO comparison with delta report |
+| `main.c` | ~265 | CLI parsing, help text, engine lifecycle |
+| `job_parser.h` | ~105 | `job_config_t`, `bench_config_t`, parse declarations |
+| `job_parser.c` | ~740 | .fio INI parser + CLI arg parser |
+| `workload.h` | ~100 | `io_ctx_t`, `io_ctx_pool_t`, `thread_ctx_t`, `file_set_t` |
+| `workload.c` | ~930 | I/O loop, callbacks, worker threads, file management |
+| `stats.h` | ~140 | `thread_stats_t`, `direction_result_t`, `job_result_t` |
+| `stats.c` | ~460 | Histogram, percentiles, BW/IOPS sampling, aggregation |
+| `output.h` | ~40 | `output_normal()`, `output_json()` declarations |
+| `output.c` | ~670 | FIO-compatible text + JSON formatters |
+| `test_BFFIO.sh` | ~300 | Functional test suite |
+| `run_baseline.sh` | ~550 | FIO comparison with delta report |
 
 ---
 

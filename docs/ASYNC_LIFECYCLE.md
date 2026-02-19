@@ -75,8 +75,10 @@ Unregistering buffers while I/O is in-flight requires the deferred pattern:
 
 ```c
 // From a callback or any context:
-aura_request_unregister_buffers(engine);
+aura_request_unregister(engine, AURA_REG_BUFFERS);
 // Returns immediately. New fixed-buffer submissions fail with EBUSY.
+// Note: if no fixed-buffer operations are in-flight, unregistration completes
+// synchronously and may block briefly for the kernel call.
 // Actual unregister happens when all in-flight fixed-buffer ops complete.
 // After finalization, fixed-buffer submissions fail with ENOENT.
 ```
@@ -85,7 +87,7 @@ aura_request_unregister_buffers(engine);
 
 ```c
 // From a non-callback context:
-aura_unregister_buffers(engine);
+aura_unregister(engine, AURA_REG_BUFFERS);
 // Blocks until all in-flight fixed-buffer ops complete and unregister finishes.
 // If called from a callback, degrades to deferred mode automatically.
 ```
@@ -93,8 +95,8 @@ aura_unregister_buffers(engine);
 ### State Transitions
 
 ```
-UNREGISTERED ──register──> REGISTERED ──request_unregister──> DRAINING ──all complete──> UNREGISTERED
-                                       └──unregister (sync)──> blocks until UNREGISTERED
+UNREGISTERED ──register──> REGISTERED ──aura_request_unregister()──> DRAINING ──all complete──> UNREGISTERED
+                                       └──aura_unregister() (sync)──> blocks until UNREGISTERED
 ```
 
 During DRAINING:
@@ -104,7 +106,7 @@ During DRAINING:
 
 ## Registered File Lifecycle
 
-File descriptor registration follows the same pattern as buffer registration, with `aura_register_files()`, `aura_request_unregister_files()`, and `aura_unregister_files()`.
+File descriptor registration follows the same pattern as buffer registration, with `aura_register_files()`, `aura_request_unregister(engine, AURA_REG_FILES)`, and `aura_unregister(engine, AURA_REG_FILES)`.
 
 ## Recommended Pattern
 

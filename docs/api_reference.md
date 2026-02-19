@@ -190,8 +190,8 @@ Create with inline helpers -- do not construct manually:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `AURA_STATX_SYMLINK_NOFOLLOW` | `0x100` | Don't follow symlinks |
-| `AURA_STATX_EMPTY_PATH` | `0x1000` | Operate on fd itself (pathname="") |
+| `AURA_STATX_SYMLINK_NOFOLLOW` | `0x100` | Don't follow symlinks (deprecated alias for `AURA_AT_SYMLINK_NOFOLLOW`) |
+| `AURA_STATX_EMPTY_PATH` | `0x1000` | Operate on fd itself (pathname="") (deprecated alias for `AURA_AT_EMPTY_PATH`) |
 
 #### Statx Field Mask (for `aura_statx` mask parameter)
 
@@ -218,7 +218,7 @@ Create with inline helpers -- do not construct manually:
 | `AURA_O_CREAT` | `0x0040` | Create file if it doesn't exist |
 | `AURA_O_TRUNC` | `0x0200` | Truncate file to zero length |
 | `AURA_O_APPEND` | `0x0400` | Append to end of file |
-| `AURA_O_DIRECT` | `0x4000` | Direct I/O (bypass page cache) |
+| `AURA_O_DIRECT` | `0x10000` | Direct I/O (bypass page cache) |
 
 #### Log Levels (for `aura_set_log_handler` / `aura_log_emit`)
 
@@ -699,7 +699,7 @@ Cancel a pending I/O operation (best-effort). If cancelled, the callback receive
 
 **Returns:** 0 if cancellation submitted, -1 on error. A return of 0 does not guarantee the operation will actually be cancelled.
 
-**Errors:** `EINVAL`, `EALREADY`, `ESHUTDOWN`, `ENOMEM`
+**Errors:** `EINVAL`, `EALREADY`, `EBUSY`, `ESHUTDOWN`, `ENOMEM`
 
 ---
 
@@ -800,7 +800,7 @@ Block until at least one operation completes or timeout expires.
 void aura_run(aura_engine_t *engine);
 ```
 
-Run the event loop until `aura_stop()` is called. Blocks the calling thread. Useful for dedicating a thread to I/O processing.
+Run the event loop until `aura_stop()` is called. Blocks the calling thread. Useful for dedicating a thread to I/O processing. After `aura_stop()` is called, `aura_run()` drains all in-flight I/O with a 10-second timeout before returning.
 
 ---
 
@@ -876,7 +876,7 @@ Registered buffers eliminate kernel mapping overhead for small, frequent I/O. Af
 ##### `aura_register_buffers`
 
 ```c
-int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, int count);
+int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, unsigned int count);
 ```
 
 Pre-register buffers with the kernel for zero-copy I/O. Call once at startup. After registration, use `aura_buf_fixed()` to reference buffers by index in read/write calls.
@@ -898,7 +898,7 @@ Fixed-buffer submissions fail with `EBUSY` while a deferred unregister is draini
 ##### `aura_register_files`
 
 ```c
-int aura_register_files(aura_engine_t *engine, const int *fds, int count);
+int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int count);
 ```
 
 Pre-register file descriptors with the kernel to eliminate lookup overhead.
@@ -1114,7 +1114,7 @@ Compute a latency percentile from a histogram snapshot. The histogram must have 
 | `hist` | `const aura_histogram_t *` | Histogram snapshot |
 | `percentile` | `double` | Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99) |
 
-**Returns:** Latency in microseconds, or -1.0 if histogram is empty or percentile is out of range.
+**Returns:** Latency in milliseconds, or -1.0 if histogram is empty or percentile is out of range.
 
 ---
 
@@ -1504,7 +1504,7 @@ All defined in `<aura/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `max_tracked_us()` | `int` | Maximum tracked latency (us) |
 | `bucket_lower_us(int idx)` | `int` | Lower bound of bucket (us). 0 for out-of-range |
 | `bucket_upper_us(int idx)` | `int` | Upper bound of bucket (us). 0 for out-of-range |
-| `percentile(double pct)` | `double` | Compute percentile (0.0-100.0). Returns latency in us, or -1.0 if empty/out-of-range |
+| `percentile(double pct)` | `double` | Compute percentile (0.0-100.0). Returns latency in ms, or -1.0 if empty/out-of-range |
 | `c_histogram()` | `const aura_histogram_t&` | Full C struct |
 
 #### `aura::BufferStats`
@@ -1857,7 +1857,7 @@ Latency histogram snapshot. `Clone + Debug`.
 | `bucket_width_us()` | `i32` | Bucket width (us) |
 | `bucket_lower_us(usize)` | `i32` | Lower bound of bucket (us) |
 | `bucket_upper_us(usize)` | `i32` | Upper bound of bucket (us) |
-| `percentile(f64)` | `Option<f64>` | Compute percentile (0.0-100.0). Returns `Some(latency_us)` or `None` if empty/out-of-range |
+| `percentile(f64)` | `Option<f64>` | Compute percentile (0.0-100.0). Returns `Some(latency_ms)` or `None` if empty/out-of-range |
 
 #### `aura::BufferStats`
 

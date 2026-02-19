@@ -32,7 +32,7 @@ All buffers are automatically aligned to 4096 bytes (or custom alignment) to ens
 ### Ring Selection Modes
 AuraIO provides three ring selection modes to balance cache locality against throughput scaling:
 
-- **ADAPTIVE** (default, `AURA_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load exceeds 2x the global average, the thread is an outlier (most rings are idle) and stays local. Otherwise, system-wide pressure is detected and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `aura_stats_t.adaptive_spills`.
+- **ADAPTIVE** (default, `AURA_SELECT_ADAPTIVE`): Uses the CPU-local ring for maximum cache locality. When the local ring is congested (>75% of in-flight limit), a two-gate spill check runs: if local load is within 2x the global average, load is broadly distributed and spilling won't help, so it stays local. If local load exceeds 2x the global average, the local ring is an outlier and a **power-of-two random choice** picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced; spills only occur under broad system pressure. Monitor spills via `aura_stats_t.adaptive_spills`.
 
 - **CPU_LOCAL** (`AURA_SELECT_CPU_LOCAL`): Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring's capacity.
 
