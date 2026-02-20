@@ -34,9 +34,28 @@
 #include <sched.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 
 #include <aura.h>
+
+// ============================================================================
+// Raw getdents64 for faster directory reading
+// ============================================================================
+
+struct linux_dirent64 {
+    uint64_t d_ino;
+    int64_t d_off;
+    uint16_t d_reclen;
+    uint8_t d_type;
+    char d_name[];
+};
+
+#define GETDENTS_BUFSZ (32 * 1024) /* 32KB — ~4x glibc default */
+
+static inline long sys_getdents64(int fd, void *buf, size_t count) {
+    return syscall(SYS_getdents64, fd, buf, count);
+}
 
 // ============================================================================
 // Constants
@@ -803,52 +822,53 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
         }
     }
 
-    /* --- Phase 2: readdir on each opened fd --- */
-    DIR *dir_handles[DIRS_PER_BATCH] = { NULL };
+    /* --- Phase 2: getdents64 on each opened fd (faster than readdir) --- */
     size_t total_children = 0;
+    char dents_buf[GETDENTS_BUFSZ];
 
     for (size_t i = 0; i < ndirs; i++) {
         if (octxs[i].fd < 0) continue;
 
-        DIR *d = fdopendir(octxs[i].fd);
-        if (!d) {
-            fprintf(stderr, "atree: cannot fdopendir '%s': %s\n", dirs[i]->full_path,
-                    strerror(errno));
-            close(octxs[i].fd);
-            octxs[i].fd = -1;
-            continue;
-        }
-        dir_handles[i] = d;
-
-        struct dirent *ent;
-        errno = 0;
-        while ((ent = readdir(d)) != NULL) {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-            if (!config->show_hidden && ent->d_name[0] == '.') continue;
-            if (config->dirs_only && ent->d_type != DT_DIR && ent->d_type != DT_UNKNOWN) continue;
-
-            char path[PATH_MAX];
-            int plen = snprintf(path, sizeof(path), "%s/%s", dirs[i]->full_path, ent->d_name);
-            if (plen < 0 || (size_t)plen >= sizeof(path)) continue;
-
-            tree_node_t *child = node_create(ent->d_name, path);
-            if (!child) continue;
-            child->depth = dirs[i]->depth + 1;
-            if (ent->d_type == DT_DIR) child->is_dir = true;
-
-            if (!node_add_child(dirs[i], child)) {
-                node_free(child);
-                continue;
+        for (;;) {
+            long nread = sys_getdents64(octxs[i].fd, dents_buf, sizeof(dents_buf));
+            if (nread <= 0) {
+                if (nread < 0) {
+                    fprintf(stderr, "atree: error reading '%s': %s\n", dirs[i]->full_path,
+                            strerror(errno));
+                }
+                break;
             }
-            errno = 0;
-        }
-        if (errno != 0) {
-            fprintf(stderr, "atree: error reading '%s': %s\n", dirs[i]->full_path, strerror(errno));
+            for (long off = 0; off < nread;) {
+                struct linux_dirent64 *de = (struct linux_dirent64 *)(dents_buf + off);
+                off += de->d_reclen;
+
+                /* Skip . and .. */
+                if (de->d_name[0] == '.') {
+                    if (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0'))
+                        continue;
+                    if (!config->show_hidden) continue;
+                }
+                if (config->dirs_only && de->d_type != DT_DIR && de->d_type != DT_UNKNOWN) continue;
+
+                char path[PATH_MAX];
+                int plen = snprintf(path, sizeof(path), "%s/%s", dirs[i]->full_path, de->d_name);
+                if (plen < 0 || (size_t)plen >= sizeof(path)) continue;
+
+                tree_node_t *child = node_create(de->d_name, path);
+                if (!child) continue;
+                child->depth = dirs[i]->depth + 1;
+                if (de->d_type == DT_DIR) child->is_dir = true;
+
+                if (!node_add_child(dirs[i], child)) {
+                    node_free(child);
+                    continue;
+                }
+            }
         }
         total_children += dirs[i]->num_children;
     }
 
-    /* --- Phase 3: Batched statx across ALL children of all directories --- */
+    /* --- Phase 3: Batched statx using dir fd + name (avoids path re-walk) --- */
     if (total_children > 0) {
         statx_batch_t *batch = malloc(sizeof(*batch) + total_children * sizeof(statx_ctx_t));
         if (batch) {
@@ -857,19 +877,23 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
             size_t ci = 0;
 
             for (size_t i = 0; i < ndirs; i++) {
+                int dirfd = octxs[i].fd; /* use dir fd for relative statx */
                 for (size_t j = 0; j < dirs[i]->num_children; j++) {
                     tree_node_t *child = dirs[i]->children[j];
                     ctxs[ci].node = child;
                     ctxs[ci].batch = batch;
 
+                    /* Use dir fd + basename instead of AT_FDCWD + full path */
+                    int sfd = (dirfd >= 0) ? dirfd : AT_FDCWD;
+                    const char *spath = (dirfd >= 0) ? child->name : child->full_path;
+
                     aura_request_t *req =
-                        aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW,
-                                   AURA_STATX_MASK, &child->st, on_statx_complete, &ctxs[ci]);
+                        aura_statx(engine, sfd, spath, AURA_AT_SYMLINK_NOFOLLOW, AURA_STATX_MASK,
+                                   &child->st, on_statx_complete, &ctxs[ci]);
                     if (!req) {
                         atomic_fetch_sub(&batch->remaining, 1);
                         struct statx stx;
-                        if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW,
-                                  KERNEL_STATX_MASK, &stx) == 0) {
+                        if (statx(sfd, spath, AT_SYMLINK_NOFOLLOW, KERNEL_STATX_MASK, &stx) == 0) {
                             child->st = stx;
                             child->is_dir = S_ISDIR(stx.stx_mode);
                         }
@@ -888,11 +912,10 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
         }
     }
 
-    /* --- Phase 4: Cleanup --- */
+    /* --- Phase 4: Cleanup — close fds and prune non-directories --- */
     for (size_t i = 0; i < ndirs; i++) {
-        if (dir_handles[i]) closedir(dir_handles[i]); /* closes fd too */
+        if (octxs[i].fd >= 0) close(octxs[i].fd);
 
-        /* Prune non-directories when dirs_only is set */
         if (config->dirs_only) {
             size_t dst = 0;
             for (size_t j = 0; j < dirs[i]->num_children; j++) {
@@ -1392,56 +1415,31 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     else if (!node->is_dir) (*file_count)++;
 }
 
-/* Iterative pre-order tree printer to avoid stack overflow on deep trees.
-   Instead of heap-allocating a prefix string per frame, we maintain a stack of
-   is_last booleans and build the prefix on-the-fly into a reusable buffer. */
+/* Iterative pre-order tree printer with incrementally maintained prefix buffer.
+   Instead of rebuilding the prefix from scratch for every node (O(depth × stack)),
+   we push/pop 4-6 bytes as we descend/ascend for O(1) prefix updates per node. */
 typedef struct {
     const tree_node_t *node;
     bool is_last;
     int depth;
     ssize_t child_idx; /* next visible child to process; -1 = node not yet printed */
+    size_t prefix_pos; /* position in prefix buffer when this frame was pushed */
 } print_frame_t;
-
-/* Build prefix string from the is_last history in the stack.
-   For depth d, we look at frames 1..d-1 (frame 0 is root, no prefix). */
-static void build_prefix(const print_frame_t *stack, size_t sp, int depth, line_buf_t *pb) {
-    /* Each level adds at most 6 bytes (UTF-8 "│   " = 6 bytes, "    " = 4 bytes) */
-    size_t needed = (size_t)depth * 7 + 1;
-    if (!line_buf_ensure(pb, needed)) {
-        pb->buf[0] = '\0';
-        return;
-    }
-    char *p = pb->buf;
-    /* Walk the stack to find ancestor frames. Stack layout: frame at index i
-       corresponds to depth frame->depth. We need frames at depth 1..depth-1. */
-    /* Build a simpler approach: iterate the stack and pick frames depth 1..depth-1 */
-    for (size_t i = 0; i < sp; i++) {
-        if (stack[i].depth >= 1 && stack[i].depth < depth) {
-            if (stack[i].is_last) {
-                memcpy(p, "    ", 4);
-                p += 4;
-            } else {
-                memcpy(p, "\xe2\x94\x82   ", 6);
-                p += 6;
-            }
-        }
-    }
-    *p = '\0';
-}
 
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
                        const char *prefix, bool is_last, int depth, int64_t *file_count,
                        int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
-    (void)prefix; /* no longer used — prefix computed from stack */
+    (void)prefix;
     line_buf_t lb = { 0 };
-    line_buf_t pb = { 0 }; /* prefix buffer */
+    line_buf_t pb = { 0 }; /* incrementally maintained prefix buffer */
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
     size_t sp = 0;
 
-    stack[sp++] =
-        (print_frame_t){ .node = root, .is_last = is_last, .depth = depth, .child_idx = -1 };
+    stack[sp++] = (print_frame_t){
+        .node = root, .is_last = is_last, .depth = depth, .child_idx = -1, .prefix_pos = 0
+    };
 
     while (sp > 0) {
         print_frame_t *frame = &stack[sp - 1];
@@ -1454,7 +1452,10 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
 
         /* First visit: print the node itself */
         if (frame->child_idx == -1) {
-            build_prefix(stack, sp, frame->depth, &pb);
+            /* Ensure prefix is null-terminated at this frame's position */
+            if (line_buf_ensure(&pb, frame->prefix_pos + 1)) {
+                pb.buf[frame->prefix_pos] = '\0';
+            }
             emit_node(node, config, cs, pb.buf, frame->is_last, frame->depth, file_count, dir_count,
                       uid_cache, gid_cache, &lb);
             frame->child_idx = 0;
@@ -1467,7 +1468,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         }
 
         /* Find next visible child */
-        size_t ci = (size_t)frame->child_idx; /* safe: child_idx >= 0 here */
+        size_t ci = (size_t)frame->child_idx;
         while (ci < node->num_children) {
             if (!config->dirs_only || node->children[ci]->is_dir) break;
             ci++;
@@ -1489,6 +1490,22 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             }
         }
 
+        /* Incrementally extend prefix for the child: append this frame's
+           connector segment (space or │) at frame->prefix_pos.
+           Only frames at depth >= 1 contribute to the prefix. */
+        size_t child_prefix_pos = frame->prefix_pos;
+        if (frame->depth >= 1) {
+            size_t seg_len = frame->is_last ? 4 : 6; /* "    " or "│   " */
+            child_prefix_pos = frame->prefix_pos + seg_len;
+            if (line_buf_ensure(&pb, child_prefix_pos + 1)) {
+                if (frame->is_last) {
+                    memcpy(pb.buf + frame->prefix_pos, "    ", 4);
+                } else {
+                    memcpy(pb.buf + frame->prefix_pos, "\xe2\x94\x82   ", 6);
+                }
+            }
+        }
+
         /* Push child frame */
         if (sp >= cap) {
             cap *= 2;
@@ -1505,7 +1522,8 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         stack[sp++] = (print_frame_t){ .node = node->children[ci],
                                        .is_last = child_is_last,
                                        .depth = frame->depth + 1,
-                                       .child_idx = -1 };
+                                       .child_idx = -1,
+                                       .prefix_pos = child_prefix_pos };
     }
     free(stack);
     free(lb.buf);
