@@ -450,7 +450,6 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
         ctx->node->is_dir = S_ISDIR(ctx->node->st.stx_mode);
     }
     atomic_fetch_sub(&ctx->batch->remaining, 1);
-    free(ctx);
 }
 
 // ============================================================================
@@ -512,28 +511,24 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 
     if (dir_node->num_children == 0) return 0;
 
-    /* Heap-allocate batch state — shared with async callbacks, so it must
-       outlive this function if we bail out of the drain loop early. */
-    statx_batch_t *batch = malloc(sizeof(*batch));
+    /* Heap-allocate batch state and context array in a single allocation.
+       Shared with async callbacks, so it must outlive the drain loop. */
+    size_t nchildren = dir_node->num_children;
+    statx_batch_t *batch = malloc(sizeof(*batch) + nchildren * sizeof(statx_ctx_t));
     if (!batch) return -1;
-    atomic_store(&batch->remaining, dir_node->num_children);
+    statx_ctx_t *ctxs = (statx_ctx_t *)(batch + 1);
+    atomic_store(&batch->remaining, nchildren);
 
-    for (size_t i = 0; i < dir_node->num_children; i++) {
+    for (size_t i = 0; i < nchildren; i++) {
         tree_node_t *child = dir_node->children[i];
 
-        statx_ctx_t *ctx = malloc(sizeof(*ctx));
-        if (!ctx) {
-            atomic_fetch_sub(&batch->remaining, 1);
-            continue;
-        }
-        ctx->node = child;
-        ctx->batch = batch;
+        ctxs[i].node = child;
+        ctxs[i].batch = batch;
 
         aura_request_t *req =
             aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW,
-                       AURA_STATX_MASK, &child->st, on_statx_complete, ctx);
+                       AURA_STATX_MASK, &child->st, on_statx_complete, &ctxs[i]);
         if (!req) {
-            free(ctx);
             atomic_fetch_sub(&batch->remaining, 1);
             /* Fallback: synchronous statx */
             struct statx stx;
