@@ -277,6 +277,15 @@ static void wip_free(work_item_pool_t *pool, work_item_t *item) {
     pthread_mutex_unlock(&pool->lock);
 }
 
+/* Batch-return a linked list of items to the pool in one lock acquisition. */
+static void wip_free_batch(work_item_pool_t *pool, work_item_t *head, work_item_t *tail) {
+    if (!head) return;
+    pthread_mutex_lock(&pool->lock);
+    tail->next = pool->free_list;
+    pool->free_list = head;
+    pthread_mutex_unlock(&pool->lock);
+}
+
 typedef struct {
     work_item_t *head;
     work_item_t *tail;
@@ -311,6 +320,7 @@ typedef struct {
     char pipe[32];
     char sock[32];
     char reset[8];
+    size_t dir_len, exec_len, link_len, pipe_len, sock_len, reset_len;
 } color_scheme_t;
 
 static void parse_ansi_code(const char *code, char *out, size_t outsz) {
@@ -330,6 +340,14 @@ static void color_init(color_scheme_t *cs, bool enabled) {
     parse_ansi_code("36", cs->link, sizeof(cs->link));
     parse_ansi_code("33", cs->pipe, sizeof(cs->pipe));
     parse_ansi_code("35", cs->sock, sizeof(cs->sock));
+
+    /* Precompute lengths */
+    cs->dir_len = strlen(cs->dir);
+    cs->exec_len = strlen(cs->exec);
+    cs->link_len = strlen(cs->link);
+    cs->pipe_len = strlen(cs->pipe);
+    cs->sock_len = strlen(cs->sock);
+    cs->reset_len = strlen(cs->reset);
 
     /* Parse LS_COLORS */
     const char *lsc = getenv("LS_COLORS");
@@ -353,39 +371,73 @@ static void color_init(color_scheme_t *cs, bool enabled) {
         else if (strcmp(key, "so") == 0) parse_ansi_code(val, cs->sock, sizeof(cs->sock));
     }
     free(copy);
+
+    /* Recompute lengths after LS_COLORS overrides */
+    cs->dir_len = strlen(cs->dir);
+    cs->exec_len = strlen(cs->exec);
+    cs->link_len = strlen(cs->link);
+    cs->pipe_len = strlen(cs->pipe);
+    cs->sock_len = strlen(cs->sock);
 }
 
-static const char *color_for_node(const color_scheme_t *cs, const tree_node_t *node) {
-    if (!cs->enabled) return "";
-    if (node->is_dir) return cs->dir;
-    if (S_ISLNK(node->st.stx_mode)) return cs->link;
-    if (S_ISFIFO(node->st.stx_mode)) return cs->pipe;
-    if (S_ISSOCK(node->st.stx_mode)) return cs->sock;
-    if (node->st.stx_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) return cs->exec;
-    return "";
+typedef struct {
+    const char *str;
+    size_t len;
+} color_ref_t;
+
+static color_ref_t color_for_node(const color_scheme_t *cs, const tree_node_t *node) {
+    if (!cs->enabled) return (color_ref_t){ "", 0 };
+    if (node->is_dir) return (color_ref_t){ cs->dir, cs->dir_len };
+    if (S_ISLNK(node->st.stx_mode)) return (color_ref_t){ cs->link, cs->link_len };
+    if (S_ISFIFO(node->st.stx_mode)) return (color_ref_t){ cs->pipe, cs->pipe_len };
+    if (S_ISSOCK(node->st.stx_mode)) return (color_ref_t){ cs->sock, cs->sock_len };
+    if (node->st.stx_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+        return (color_ref_t){ cs->exec, cs->exec_len };
+    return (color_ref_t){ "", 0 };
 }
 
 // ============================================================================
 // Formatting helpers
 // ============================================================================
 
+/* Fast integer-to-string (avoids snprintf overhead).
+   Writes digits into buf and returns number of characters written. */
+static int fmt_i64(char *buf, int64_t val);
+
+/* Fast "X.YS" formatter: writes "integer.digit suffix" without snprintf.
+   Returns number of chars written (not null-terminated). */
+static int fmt_size_human(char *buf, uint64_t bytes, uint64_t unit, char suffix) {
+    uint64_t whole = bytes / unit;
+    uint64_t frac = (bytes % unit) * 10 / unit;
+    int n = fmt_i64(buf, (int64_t)whole);
+    buf[n++] = '.';
+    buf[n++] = '0' + (char)frac;
+    buf[n++] = suffix;
+    buf[n] = '\0';
+    return n;
+}
+
 static void format_size(char *buf, size_t bufsz, uint64_t bytes, bool raw) {
+    (void)bufsz;
     if (raw) {
-        snprintf(buf, bufsz, "%" PRIu64, bytes);
+        int n = fmt_i64(buf, (int64_t)bytes);
+        buf[n] = '\0';
         return;
     }
-    double b = (double)bytes;
-    const double KB = 1024.0;
-    const double MB = KB * 1024.0;
-    const double GB = MB * 1024.0;
-    const double TB = GB * 1024.0;
-    const double PB = TB * 1024.0;
-    if (b >= PB) snprintf(buf, bufsz, "%.1fP", b / PB);
-    else if (b >= TB) snprintf(buf, bufsz, "%.1fT", b / TB);
-    else if (b >= GB) snprintf(buf, bufsz, "%.1fG", b / GB);
-    else if (b >= MB) snprintf(buf, bufsz, "%.1fM", b / MB);
-    else if (b >= KB) snprintf(buf, bufsz, "%.1fK", b / KB);
-    else snprintf(buf, bufsz, "%" PRIu64, bytes);
+    const uint64_t KB = 1024;
+    const uint64_t MB = 1024 * 1024;
+    const uint64_t GB = 1024ULL * 1024 * 1024;
+    const uint64_t TB = 1024ULL * 1024 * 1024 * 1024;
+    const uint64_t PB = 1024ULL * 1024 * 1024 * 1024 * 1024;
+    if (bytes >= PB) fmt_size_human(buf, bytes, PB, 'P');
+    else if (bytes >= TB) fmt_size_human(buf, bytes, TB, 'T');
+    else if (bytes >= GB) fmt_size_human(buf, bytes, GB, 'G');
+    else if (bytes >= MB) fmt_size_human(buf, bytes, MB, 'M');
+    else if (bytes >= KB) fmt_size_human(buf, bytes, KB, 'K');
+    else {
+        int n = fmt_i64(buf, (int64_t)bytes);
+        buf[n] = '\0';
+    }
 }
 
 static void format_mode(char *buf, uint32_t mode) {
@@ -408,14 +460,32 @@ static void format_mode(char *buf, uint32_t mode) {
     buf[10] = '\0';
 }
 
-static void format_date(char *buf, size_t bufsz, const struct statx_timestamp *ts) {
+/* Date formatting with 1-entry cache to avoid repeated localtime_r calls.
+   Most files in a directory share the same date, so even a single-entry
+   cache has a high hit rate. */
+typedef struct {
+    time_t cached_day; /* tv_sec truncated to day boundary */
+    char cached_str[12]; /* "YYYY-MM-DD\0" */
+    bool valid;
+} date_cache_t;
+
+static void format_date(char *buf, size_t bufsz, const struct statx_timestamp *ts,
+                        date_cache_t *dc) {
     time_t t = (time_t)ts->tv_sec;
+    time_t day = t - (t % 86400); /* truncate to day */
+    if (dc->valid && dc->cached_day == day) {
+        memcpy(buf, dc->cached_str, 11);
+        return;
+    }
     struct tm tm;
     if (!localtime_r(&t, &tm)) {
         snprintf(buf, bufsz, "----/--/--");
         return;
     }
     strftime(buf, bufsz, "%Y-%m-%d", &tm);
+    dc->cached_day = day;
+    memcpy(dc->cached_str, buf, 11);
+    dc->valid = true;
 }
 
 // ============================================================================
@@ -627,16 +697,20 @@ static size_t wq_pop_batch(work_queue_t *wq, tree_node_t **out, size_t max_count
         pthread_cond_timedwait(&wq->cond, &wq->lock, &ts);
     }
     size_t n = 0;
+    work_item_t *free_head = NULL, *free_tail = NULL;
     while (n < max_count && wq->head) {
         work_item_t *item = wq->head;
         wq->head = item->next;
         out[n++] = item->node;
-        /* Return item to freelist (lock-free since we hold wq->lock and
-           wip_free takes its own lock — just call it) */
-        wip_free(&wq->pool, item);
+        /* Collect freed items into a batch list */
+        item->next = free_head;
+        free_head = item;
+        if (!free_tail) free_tail = item;
     }
     if (!wq->head) wq->tail = NULL;
     pthread_mutex_unlock(&wq->lock);
+    /* Batch-return all items to pool in one lock acquisition */
+    if (free_head) wip_free_batch(&wq->pool, free_head, free_tail);
     return n;
 }
 
@@ -1137,8 +1211,8 @@ static void aggregate(tree_node_t *root) {
             tree_node_t *c = node->children[(size_t)frame->child_idx];
             frame->child_idx++;
 
-            /* If child already processed (leaf or previously visited), accumulate */
             if (!c->is_dir) {
+                /* Leaf file — accumulate immediately */
                 c->total_size = c->st.stx_size;
                 node->total_files++;
                 node->total_size += c->total_size;
@@ -1157,16 +1231,14 @@ static void aggregate(tree_node_t *root) {
                 stack[sp++] = (agg_frame_t){ .node = c, .child_idx = -1 };
             }
         } else {
-            /* All children processed — accumulate dir children */
-            for (size_t i = 0; i < node->num_children; i++) {
-                tree_node_t *c = node->children[i];
-                if (c->is_dir) {
-                    node->total_dirs += 1 + c->total_dirs;
-                    node->total_files += c->total_files;
-                    node->total_size += c->total_size;
-                }
-            }
+            /* All children processed — accumulate into parent (if any) */
             sp--;
+            if (sp > 0) {
+                tree_node_t *parent = stack[sp - 1].node;
+                parent->total_dirs += 1 + node->total_dirs;
+                parent->total_files += node->total_files;
+                parent->total_size += node->total_size;
+            }
         }
     }
     free(stack);
@@ -1349,7 +1421,7 @@ static bool line_buf_ensure(line_buf_t *lb, size_t needed) {
 static void emit_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
                       const char *prefix, bool is_last, int depth, int64_t *file_count,
                       int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache,
-                      line_buf_t *lb) {
+                      line_buf_t *lb, date_cache_t *dc) {
     if (config->dirs_only && !node->is_dir) return;
 
     /* Build the entire output line (tree prefix + name + padding + stats + \n)
@@ -1363,13 +1435,13 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     size_t p = 0;
 
     /* --- Part 1: tree connector + colored name --- */
-    const char *clr = color_for_node(cs, node);
-    size_t clr_len = strlen(clr);
+    color_ref_t clr = color_for_node(cs, node);
+    size_t clr_len = clr.len;
     const char *rst = cs->enabled ? cs->reset : "";
-    size_t rst_len = strlen(rst);
+    size_t rst_len = cs->enabled ? cs->reset_len : 0;
 
     if (depth == 0) {
-        p = buf_append(buf, p, clr, clr_len);
+        p = buf_append(buf, p, clr.str, clr_len);
         p = buf_append(buf, p, node->name, name_len);
         buf[p++] = '/';
         p = buf_append(buf, p, rst, rst_len);
@@ -1381,7 +1453,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
 
         p = buf_append(buf, p, prefix, prefix_len);
         p = buf_append(buf, p, conn, 10);
-        p = buf_append(buf, p, clr, clr_len);
+        p = buf_append(buf, p, clr.str, clr_len);
         p = buf_append(buf, p, node->name, name_len);
         if (node->is_dir) buf[p++] = '/';
         p = buf_append(buf, p, rst, rst_len);
@@ -1403,7 +1475,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         p = buf_appends(buf, p, errstr);
         buf[p++] = ']';
         buf[p++] = '\n';
-        fwrite(buf, 1, p, stdout);
+        fwrite_unlocked(buf, 1, p, stdout);
         if (!node->is_dir) (*file_count)++;
         return;
     }
@@ -1436,16 +1508,16 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             char sz[32];
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
             int64_t fc = node->total_files;
-            int64_t dc = node->total_dirs;
+            int64_t dircnt = node->total_dirs;
             buf[p++] = '[';
             p += (size_t)fmt_i64(buf + p, fc);
             p = buf_append(buf, p, " file", 5);
             if (fc != 1) buf[p++] = 's';
-            if (dc > 0) {
+            if (dircnt > 0) {
                 p = buf_append(buf, p, ", ", 2);
-                p += (size_t)fmt_i64(buf + p, dc);
+                p += (size_t)fmt_i64(buf + p, dircnt);
                 p = buf_append(buf, p, " dir", 4);
-                if (dc != 1) buf[p++] = 's';
+                if (dircnt != 1) buf[p++] = 's';
             }
             p = buf_append(buf, p, ", ", 2);
             p = buf_appends(buf, p, sz);
@@ -1453,7 +1525,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
-            format_date(date, sizeof(date), &node->st.stx_mtime);
+            format_date(date, sizeof(date), &node->st.stx_mtime, dc);
             size_t szlen = strlen(sz);
             /* Right-align size to 7 chars */
             if (szlen < 7) {
@@ -1469,16 +1541,16 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             char sz[32];
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
             int64_t fc = node->total_files;
-            int64_t dc = node->total_dirs;
+            int64_t dircnt = node->total_dirs;
             buf[p++] = '[';
             p += (size_t)fmt_i64(buf + p, fc);
             p = buf_append(buf, p, " file", 5);
             if (fc != 1) buf[p++] = 's';
-            if (dc > 0) {
+            if (dircnt > 0) {
                 p = buf_append(buf, p, ", ", 2);
-                p += (size_t)fmt_i64(buf + p, dc);
+                p += (size_t)fmt_i64(buf + p, dircnt);
                 p = buf_append(buf, p, " dir", 4);
-                if (dc != 1) buf[p++] = 's';
+                if (dircnt != 1) buf[p++] = 's';
             }
             p = buf_append(buf, p, ", ", 2);
             p = buf_appends(buf, p, sz);
@@ -1486,7 +1558,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
-            format_date(date, sizeof(date), &node->st.stx_mtime);
+            format_date(date, sizeof(date), &node->st.stx_mtime, dc);
             size_t szlen = strlen(sz);
             if (szlen < 7) {
                 memset(buf + p, ' ', 7 - szlen);
@@ -1499,7 +1571,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     }
 
     buf[p++] = '\n';
-    fwrite(buf, 1, p, stdout);
+    fwrite_unlocked(buf, 1, p, stdout);
 
     if (node->is_dir && depth > 0) (*dir_count)++;
     else if (!node->is_dir) (*file_count)++;
@@ -1523,6 +1595,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
     (void)prefix;
     line_buf_t lb = { 0 };
     line_buf_t pb = { 0 }; /* incrementally maintained prefix buffer */
+    date_cache_t dc = { 0 };
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
@@ -1548,7 +1621,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
                 pb.buf[frame->prefix_pos] = '\0';
             }
             emit_node(node, config, cs, pb.buf, frame->is_last, frame->depth, file_count, dir_count,
-                      uid_cache, gid_cache, &lb);
+                      uid_cache, gid_cache, &lb, &dc);
             frame->child_idx = 0;
             /* Find last visible child index once (avoids O(n²) forward scan) */
             frame->last_visible_child = 0;
