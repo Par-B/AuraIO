@@ -200,6 +200,21 @@ static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
                                                         memory_order_acquire)) {
                 vs->keys[idx] = (devino_t){ .dev = dev, .ino = ino };
                 atomic_store_explicit(&vs->buckets[idx], tag, memory_order_release);
+
+                /* Race check: another thread may have concurrently inserted
+                   the same (dev, ino) into an earlier slot that we skipped
+                   while it was PENDING.  Rescan from the home position up to
+                   (but not including) our slot to detect duplicates. */
+                size_t home = (size_t)visited_hash(dev, ino) & mask;
+                for (size_t j = home; j != idx; j = (j + 1) & mask) {
+                    uint64_t other = atomic_load_explicit(&vs->buckets[j], memory_order_acquire);
+                    if (other == tag && vs->keys[j].dev == dev && vs->keys[j].ino == ino) {
+                        /* Duplicate — release our slot */
+                        atomic_store_explicit(&vs->buckets[idx], 0, memory_order_release);
+                        return false;
+                    }
+                }
+
                 atomic_fetch_add_explicit(&vs->count, 1, memory_order_relaxed);
                 return true; /* newly inserted */
             }
