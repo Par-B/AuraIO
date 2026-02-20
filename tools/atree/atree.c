@@ -104,7 +104,7 @@ typedef struct tree_node {
     size_t cap_children;
     int depth;
     /* Aggregates (dirs only) */
-    off_t total_size;
+    uint64_t total_size;
     int64_t total_files;
     int64_t total_dirs;
 } tree_node_t;
@@ -364,17 +364,23 @@ static const char *color_for_node(const color_scheme_t *cs, const tree_node_t *n
 // Formatting helpers
 // ============================================================================
 
-static void format_size(char *buf, size_t bufsz, off_t bytes, bool raw) {
+static void format_size(char *buf, size_t bufsz, uint64_t bytes, bool raw) {
     if (raw) {
-        snprintf(buf, bufsz, "%lld", (long long)bytes);
+        snprintf(buf, bufsz, "%" PRIu64, bytes);
         return;
     }
     double b = (double)bytes;
-    if (b >= 1024.0 * 1024.0 * 1024.0)
-        snprintf(buf, bufsz, "%.1fG", b / (1024.0 * 1024.0 * 1024.0));
-    else if (b >= 1024.0 * 1024.0) snprintf(buf, bufsz, "%.1fM", b / (1024.0 * 1024.0));
-    else if (b >= 1024.0) snprintf(buf, bufsz, "%.1fK", b / 1024.0);
-    else snprintf(buf, bufsz, "%lld", (long long)bytes);
+    const double KB = 1024.0;
+    const double MB = KB * 1024.0;
+    const double GB = MB * 1024.0;
+    const double TB = GB * 1024.0;
+    const double PB = TB * 1024.0;
+    if (b >= PB) snprintf(buf, bufsz, "%.1fP", b / PB);
+    else if (b >= TB) snprintf(buf, bufsz, "%.1fT", b / TB);
+    else if (b >= GB) snprintf(buf, bufsz, "%.1fG", b / GB);
+    else if (b >= MB) snprintf(buf, bufsz, "%.1fM", b / MB);
+    else if (b >= KB) snprintf(buf, bufsz, "%.1fK", b / KB);
+    else snprintf(buf, bufsz, "%" PRIu64, bytes);
 }
 
 static void format_mode(char *buf, uint32_t mode) {
@@ -1046,7 +1052,7 @@ static void aggregate(tree_node_t *root) {
         tree_node_t *node = frame->node;
 
         if (!node->is_dir) {
-            node->total_size = (off_t)node->st.stx_size;
+            node->total_size = node->st.stx_size;
             sp--;
             continue;
         }
@@ -1065,7 +1071,7 @@ static void aggregate(tree_node_t *root) {
 
             /* If child already processed (leaf or previously visited), accumulate */
             if (!c->is_dir) {
-                c->total_size = (off_t)c->st.stx_size;
+                c->total_size = c->st.stx_size;
                 node->total_files++;
                 node->total_size += c->total_size;
             } else {
@@ -1115,8 +1121,8 @@ static int cmp_size(const void *a, const void *b) {
     const tree_node_t *nb = *(const tree_node_t **)b;
     /* Directories first, then largest first */
     if (na->is_dir != nb->is_dir) return nb->is_dir - na->is_dir;
-    off_t sa = na->is_dir ? na->total_size : (off_t)na->st.stx_size;
-    off_t sb = nb->is_dir ? nb->total_size : (off_t)nb->st.stx_size;
+    uint64_t sa = na->is_dir ? na->total_size : na->st.stx_size;
+    uint64_t sb = nb->is_dir ? nb->total_size : nb->st.stx_size;
     if (sb > sa) return 1;
     if (sb < sa) return -1;
     return strcasecmp(na->name, nb->name);
@@ -1310,7 +1316,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             }
         } else {
             char sz[32], date[16];
-            format_size(sz, sizeof(sz), (off_t)node->st.stx_size, config->raw_bytes);
+            format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
             snprintf(stats, sizeof(stats), "%s  %-8s %-8s  %7s  %s", mode_str, uname, gname, sz,
                      date);
@@ -1330,7 +1336,7 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             }
         } else {
             char sz[32], date[16];
-            format_size(sz, sizeof(sz), (off_t)node->st.stx_size, config->raw_bytes);
+            format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
             snprintf(stats, sizeof(stats), "%7s  %s", sz, date);
         }
@@ -1438,7 +1444,9 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
            Only frames at depth >= 1 contribute to the prefix. */
         size_t child_prefix_pos = frame->prefix_pos;
         if (frame->depth >= 1) {
-            size_t seg_len = frame->is_last ? 4 : 6; /* "    " or "│   " */
+            /* Both render as 4 visual columns, but "│   " is 6 bytes
+               (│ = 3 UTF-8 bytes + 3 spaces) vs "    " at 4 bytes. */
+            size_t seg_len = frame->is_last ? 4 : 6;
             child_prefix_pos = frame->prefix_pos + seg_len;
             if (line_buf_ensure(&pb, child_prefix_pos + 1)) {
                 if (frame->is_last) {
