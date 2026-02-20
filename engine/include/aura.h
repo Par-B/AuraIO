@@ -46,14 +46,14 @@
  */
 
 #define AURA_VERSION_MAJOR 0
-#define AURA_VERSION_MINOR 4
+#define AURA_VERSION_MINOR 5
 #define AURA_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
 #define AURA_VERSION (AURA_VERSION_MAJOR * 10000 + AURA_VERSION_MINOR * 100 + AURA_VERSION_PATCH)
 
 /** Version as a string */
-#define AURA_VERSION_STRING "0.4.0"
+#define AURA_VERSION_STRING "0.5.0"
 
 /* Ensure version components stay within packed integer limits */
 #if AURA_VERSION_MINOR > 99 || AURA_VERSION_PATCH > 99

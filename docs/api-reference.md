@@ -1,6 +1,6 @@
 # AuraIO API Reference
 
-**Version 0.4.0**
+**Version 0.5.0**
 
 AuraIO is a self-tuning async I/O library for Linux built on io_uring. It provides three API surfaces: a C11 core library, C++20 bindings with RAII and coroutine support, and Rust bindings with safe and async wrappers.
 
@@ -339,7 +339,7 @@ The histogram uses a tiered bucket layout to provide fine-grained resolution at 
 | `AURA_VERSION_MINOR` | 4 | Minor version |
 | `AURA_VERSION_PATCH` | 0 | Patch version |
 | `AURA_VERSION` | 400 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURA_VERSION_STRING` | `"0.4.0"` | Version string |
+| `AURA_VERSION_STRING` | `"0.5.0"` | Version string |
 
 #### AIMD Phase Constants
 
@@ -363,10 +363,10 @@ Used in `aura_ring_stats_t.aimd_phase`:
 | `AURA_HISTOGRAM_MAX_US` | 100000 | Maximum tracked latency (100 ms) |
 
 **Tiered Layout:** The histogram covers 0–100 ms in 4 tiers with increasing bucket widths:
-- Tier 0: 0–1,250 µs, 10 µs width (125 buckets)
-- Tier 1: 1,250–6,250 µs, 50 µs width (100 buckets)
-- Tier 2: 6,250–31,250 µs, 250 µs width (100 buckets)
-- Tier 3: 31,250–100,000 µs, 1,000 µs width (69 buckets)
+- Tier 0: 0–1,000 µs, 10 µs width (100 buckets)
+- Tier 1: 1,000–5,000 µs, 50 µs width (80 buckets)
+- Tier 2: 5,000–20,000 µs, 250 µs width (60 buckets)
+- Tier 3: 20,000–100,000 µs, 1,000 µs width (80 buckets)
 
 Operations exceeding 100 ms are counted in `overflow`.
 
@@ -1211,7 +1211,7 @@ Emit a log message through the registered handler. No-op when no handler is regi
 const char *aura_version(void);
 ```
 
-**Returns:** Version string (e.g., `"0.4.0"`).
+**Returns:** Version string (e.g., `"0.5.0"`).
 
 ---
 
@@ -1618,7 +1618,7 @@ When `co_await`ed, submits the fsync and suspends. Resumes with `void`. Throws `
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `aura::version()` | `const char*` | Library version string (e.g., `"0.4.0"`) |
+| `aura::version()` | `const char*` | Library version string (e.g., `"0.5.0"`) |
 | `aura::version_int()` | `int` | Version as integer (`major * 10000 + minor * 100 + patch`) |
 
 ---

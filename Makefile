@@ -10,7 +10,7 @@ CFLAGS += $(HARDEN_CFLAGS)
 
 # Version (keep in sync with engine/include/aura.h)
 VERSION_MAJOR = 0
-VERSION_MINOR = 4
+VERSION_MINOR = 5
 VERSION_PATCH = 0
 VERSION = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 
