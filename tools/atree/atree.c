@@ -61,7 +61,6 @@ static inline long sys_getdents64(int fd, void *buf, size_t count) {
 // Constants
 // ============================================================================
 
-#define MAX_WORKERS 8
 #define STATX_BATCH_DEFAULT 64
 #define STATX_BATCH_MAX 512
 #define DIRS_PER_BATCH 8
@@ -1015,10 +1014,9 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return 0;
     }
 
-    /* Determine worker count */
+    /* Determine worker count — use all available cores */
     long ncpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (ncpus < 1) ncpus = 1;
-    if (ncpus > MAX_WORKERS) ncpus = MAX_WORKERS;
     int num_workers = (int)ncpus;
     if (num_workers > child_dirs) num_workers = child_dirs;
 
@@ -1046,8 +1044,16 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     }
 
     /* Spawn workers */
-    pthread_t threads[MAX_WORKERS];
-    worker_ctx_t wctxs[MAX_WORKERS];
+    pthread_t *threads = malloc((size_t)num_workers * sizeof(*threads));
+    worker_ctx_t *wctxs = malloc((size_t)num_workers * sizeof(*wctxs));
+    if (!threads || !wctxs) {
+        free(threads);
+        free(wctxs);
+        fprintf(stderr, "atree: out of memory for worker threads\n");
+        wq_destroy(&wq);
+        visited_destroy(&visited);
+        return -1;
+    }
 
     for (int i = 0; i < num_workers; i++) {
         wctxs[i].wq = &wq;
@@ -1063,6 +1069,8 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
 
     if (num_workers == 0) {
         fprintf(stderr, "atree: failed to start any worker threads\n");
+        free(threads);
+        free(wctxs);
         wq_destroy(&wq);
         visited_destroy(&visited);
         return -1;
@@ -1072,6 +1080,8 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         pthread_join(threads[i], NULL);
     }
 
+    free(threads);
+    free(wctxs);
     wq_destroy(&wq);
     visited_destroy(&visited);
     return 0;
