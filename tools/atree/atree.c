@@ -330,7 +330,10 @@ static void format_mode(char *buf, uint32_t mode) {
 static void format_date(char *buf, size_t bufsz, const struct statx_timestamp *ts) {
     time_t t = (time_t)ts->tv_sec;
     struct tm tm;
-    localtime_r(&t, &tm);
+    if (!localtime_r(&t, &tm)) {
+        snprintf(buf, bufsz, "----/--/--");
+        return;
+    }
     strftime(buf, bufsz, "%Y-%m-%d", &tm);
 }
 
@@ -550,7 +553,11 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 static void wq_init(work_queue_t *wq) {
     memset(wq, 0, sizeof(*wq));
     pthread_mutex_init(&wq->lock, NULL);
-    pthread_cond_init(&wq->cond, NULL);
+    pthread_condattr_t cattr;
+    pthread_condattr_init(&cattr);
+    pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+    pthread_cond_init(&wq->cond, &cattr);
+    pthread_condattr_destroy(&cattr);
     atomic_store(&wq->pending, 0);
 }
 
@@ -586,7 +593,7 @@ static tree_node_t *wq_pop(work_queue_t *wq) {
     while (!wq->head && !wq->done && !atomic_load(&g_interrupted)) {
         /* Use a short timeout so we can poll g_interrupted periodically */
         struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
+        clock_gettime(CLOCK_MONOTONIC, &ts);
         ts.tv_nsec += 50 * 1000000; /* 50ms */
         if (ts.tv_nsec >= 1000000000) {
             ts.tv_sec += 1;
