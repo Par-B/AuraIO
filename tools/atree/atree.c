@@ -819,6 +819,8 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
                         if (statx(sfd, spath, AT_SYMLINK_NOFOLLOW, KERNEL_STATX_MASK, &stx) == 0) {
                             child->st = stx;
                             child->is_dir = S_ISDIR(stx.stx_mode);
+                        } else {
+                            child->stat_err = errno;
                         }
                     }
                     ci++;
