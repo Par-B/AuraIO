@@ -97,6 +97,7 @@ typedef struct tree_node {
     char *name;
     char *full_path;
     struct statx st;
+    int stat_err; /* 0 = ok, positive errno on statx failure */
     bool is_dir;
     struct tree_node **children;
     size_t num_children;
@@ -163,7 +164,7 @@ static bool visited_probe(visited_entry_t *buckets, size_t cap, dev_t dev, ino_t
                           size_t *out_idx) {
     size_t mask = cap - 1;
     size_t idx = (size_t)visited_hash(dev, ino) & mask;
-    for (;;) {
+    for (size_t i = 0; i < cap; i++) {
         if (!buckets[idx].occupied) {
             *out_idx = idx;
             return false; /* empty slot */
@@ -174,6 +175,9 @@ static bool visited_probe(visited_entry_t *buckets, size_t cap, dev_t dev, ino_t
         }
         idx = (idx + 1) & mask;
     }
+    /* Table completely full — should never happen due to load factor check */
+    *out_idx = (size_t)visited_hash(dev, ino) & mask;
+    return false;
 }
 
 static bool visited_grow(visited_set_t *vs) {
@@ -503,127 +507,10 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
     statx_ctx_t *ctx = (statx_ctx_t *)user_data;
     if (result == 0) {
         ctx->node->is_dir = S_ISDIR(ctx->node->st.stx_mode);
+    } else {
+        ctx->node->stat_err = (int)(-result);
     }
     atomic_fetch_sub(&ctx->batch->remaining, 1);
-}
-
-// ============================================================================
-// Directory scanning with batched statx
-// ============================================================================
-
-static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const config_t *config,
-                          int depth, visited_set_t *visited) {
-    /* Skip scanning beyond max_depth — no children to enumerate */
-    if (config->max_depth >= 0 && depth >= config->max_depth) return 0;
-
-    /* Cycle detection: skip directories we've already visited (symlink loops).
-       Use dev/ino from the statx result to avoid a redundant stat() syscall. */
-    if (visited) {
-        dev_t dev = makedev(dir_node->st.stx_dev_major, dir_node->st.stx_dev_minor);
-        if (!visited_insert(visited, dev, dir_node->st.stx_ino)) {
-            return 0; /* already visited */
-        }
-    }
-
-    DIR *d = opendir(dir_node->full_path);
-    if (!d) {
-        fprintf(stderr, "atree: cannot open '%s': %s\n", dir_node->full_path, strerror(errno));
-        return -1;
-    }
-
-    /* First pass: read all entries and create child nodes */
-    struct dirent *ent;
-    errno = 0;
-    while ((ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        if (!config->show_hidden && ent->d_name[0] == '.') continue;
-
-        /* When showing directories only, skip entries that dirent reports as
-           non-directories.  DT_UNKNOWN means the filesystem didn't provide a
-           type (e.g. XFS, some network FS), so we must keep those for statx. */
-        if (config->dirs_only && ent->d_type != DT_DIR && ent->d_type != DT_UNKNOWN) continue;
-
-        char path[PATH_MAX];
-        int plen = snprintf(path, sizeof(path), "%s/%s", dir_node->full_path, ent->d_name);
-        if (plen < 0 || (size_t)plen >= sizeof(path)) continue; /* path too long */
-
-        tree_node_t *child = node_create(ent->d_name, path);
-        if (!child) continue;
-        child->depth = depth + 1;
-
-        if (ent->d_type == DT_DIR) child->is_dir = true;
-
-        if (!node_add_child(dir_node, child)) {
-            node_free(child);
-            continue;
-        }
-        errno = 0;
-    }
-    if (errno != 0) {
-        fprintf(stderr, "atree: error reading '%s': %s\n", dir_node->full_path, strerror(errno));
-    }
-    closedir(d);
-
-    if (dir_node->num_children == 0) return 0;
-
-    /* Heap-allocate batch state and context array in a single allocation.
-       Shared with async callbacks, so it must outlive the drain loop. */
-    size_t nchildren = dir_node->num_children;
-    statx_batch_t *batch = malloc(sizeof(*batch) + nchildren * sizeof(statx_ctx_t));
-    if (!batch) return -1;
-    statx_ctx_t *ctxs = (statx_ctx_t *)(batch + 1);
-    atomic_store(&batch->remaining, nchildren);
-
-    for (size_t i = 0; i < nchildren; i++) {
-        tree_node_t *child = dir_node->children[i];
-
-        ctxs[i].node = child;
-        ctxs[i].batch = batch;
-
-        aura_request_t *req =
-            aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW,
-                       AURA_STATX_MASK, &child->st, on_statx_complete, &ctxs[i]);
-        if (!req) {
-            atomic_fetch_sub(&batch->remaining, 1);
-            /* Fallback: synchronous statx */
-            struct statx stx;
-            if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW, KERNEL_STATX_MASK, &stx) ==
-                0) {
-                child->st = stx;
-                child->is_dir = S_ISDIR(stx.stx_mode);
-            }
-        }
-    }
-
-    /* Drain async completions. This loop MUST be unbounded — do NOT add a
-       max-iteration timeout here. The kernel guarantees all in-flight io_uring
-       requests will complete, and breaking out early would free the batch while
-       callbacks still reference it (use-after-free). */
-    while (atomic_load(&batch->remaining) > 0) {
-        /* Try non-blocking poll first; only block if nothing completed */
-        if (aura_poll(engine) == 0) {
-            aura_wait(engine, 1);
-        }
-    }
-
-    free(batch);
-
-    /* When dirs_only is set, DT_UNKNOWN entries were kept for statx.  Now that
-       statx has resolved their types, prune any that turned out non-directory. */
-    if (config->dirs_only) {
-        size_t dst = 0;
-        for (size_t i = 0; i < dir_node->num_children; i++) {
-            tree_node_t *c = dir_node->children[i];
-            if (c->is_dir) {
-                dir_node->children[dst++] = c;
-            } else {
-                node_free(c);
-            }
-        }
-        dir_node->num_children = dst;
-    }
-
-    return g_interrupted ? -1 : 0;
 }
 
 // ============================================================================
@@ -1045,10 +932,10 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    /* Scan root directory first (single-threaded) */
+    /* Scan root directory using the same fast path as workers (getdents64 + async statx) */
     aura_options_t opts;
     aura_options_init(&opts);
-    opts.queue_depth = STATX_BATCH_DEFAULT * 2;
+    opts.queue_depth = STATX_BATCH_MAX * 2;
     opts.single_thread = true;
     opts.ring_count = 1;
 
@@ -1059,11 +946,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    if (scan_directory(root, engine, config, 0, &visited) != 0) {
-        aura_destroy(engine);
-        visited_destroy(&visited);
-        return -1;
-    }
+    process_dir_batch(&root, 1, engine, config, &visited);
     aura_destroy(engine);
 
     /* Count child directories to decide on parallelism */
@@ -1275,8 +1158,8 @@ static void sort_tree(tree_node_t *root, bool by_size) {
 // Phase 4: Print tree
 // ============================================================================
 
-/* Simple uid/gid -> name cache to avoid repeated NSS lookups */
-#define ID_CACHE_SIZE 64
+/* uid/gid -> name cache with linear probing to handle collisions correctly */
+#define ID_CACHE_SIZE 128 /* power of 2, ~70% load before performance degrades */
 
 typedef struct {
     uint32_t id;
@@ -1289,33 +1172,49 @@ typedef struct {
 } id_cache_t;
 
 static const char *id_cache_lookup_uid(id_cache_t *cache, uint32_t uid) {
-    uint32_t slot = uid % ID_CACHE_SIZE;
-    id_cache_entry_t *e = &cache->entries[slot];
-    if (e->valid && e->id == uid) return e->name;
-
-    struct passwd pw_buf, *pw_result;
-    char buf[1024];
-    getpwuid_r(uid, &pw_buf, buf, sizeof(buf), &pw_result);
-    e->id = uid;
-    e->valid = true;
-    if (pw_result) snprintf(e->name, sizeof(e->name), "%s", pw_result->pw_name);
-    else snprintf(e->name, sizeof(e->name), "%u", uid);
-    return e->name;
+    uint32_t mask = ID_CACHE_SIZE - 1;
+    uint32_t slot = uid & mask;
+    for (uint32_t i = 0; i < ID_CACHE_SIZE; i++) {
+        id_cache_entry_t *e = &cache->entries[(slot + i) & mask];
+        if (!e->valid) {
+            /* Empty slot — not cached yet, fill it */
+            struct passwd pw_buf, *pw_result;
+            char buf[1024];
+            getpwuid_r(uid, &pw_buf, buf, sizeof(buf), &pw_result);
+            e->id = uid;
+            e->valid = true;
+            if (pw_result) snprintf(e->name, sizeof(e->name), "%s", pw_result->pw_name);
+            else snprintf(e->name, sizeof(e->name), "%u", uid);
+            return e->name;
+        }
+        if (e->id == uid) return e->name;
+    }
+    /* Cache full — fall through to uncached lookup */
+    static char fallback[32];
+    snprintf(fallback, sizeof(fallback), "%u", uid);
+    return fallback;
 }
 
 static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
-    uint32_t slot = gid % ID_CACHE_SIZE;
-    id_cache_entry_t *e = &cache->entries[slot];
-    if (e->valid && e->id == gid) return e->name;
-
-    struct group gr_buf, *gr_result;
-    char buf[1024];
-    getgrgid_r(gid, &gr_buf, buf, sizeof(buf), &gr_result);
-    e->id = gid;
-    e->valid = true;
-    if (gr_result) snprintf(e->name, sizeof(e->name), "%s", gr_result->gr_name);
-    else snprintf(e->name, sizeof(e->name), "%u", gid);
-    return e->name;
+    uint32_t mask = ID_CACHE_SIZE - 1;
+    uint32_t slot = gid & mask;
+    for (uint32_t i = 0; i < ID_CACHE_SIZE; i++) {
+        id_cache_entry_t *e = &cache->entries[(slot + i) & mask];
+        if (!e->valid) {
+            struct group gr_buf, *gr_result;
+            char buf[1024];
+            getgrgid_r(gid, &gr_buf, buf, sizeof(buf), &gr_result);
+            e->id = gid;
+            e->valid = true;
+            if (gr_result) snprintf(e->name, sizeof(e->name), "%s", gr_result->gr_name);
+            else snprintf(e->name, sizeof(e->name), "%u", gid);
+            return e->name;
+        }
+        if (e->id == gid) return e->name;
+    }
+    static char fallback[32];
+    snprintf(fallback, sizeof(fallback), "%u", gid);
+    return fallback;
 }
 
 /* Column widths for alignment */
@@ -1377,6 +1276,17 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
 
     /* Right-aligned stats */
     char stats[256];
+
+    if (node->stat_err) {
+        snprintf(stats, sizeof(stats), "[error: %s]", strerror(node->stat_err));
+        int target_col = config->long_format ? LONG_COL : NAME_COL;
+        int pad = target_col - visible_len;
+        if (pad < 2) pad = 2;
+        fputs(line, stdout);
+        fprintf(stdout, "%*s%s\n", pad, "", stats);
+        if (!node->is_dir) (*file_count)++;
+        return;
+    }
 
     if (config->long_format) {
         char mode_str[12];
