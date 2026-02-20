@@ -1021,18 +1021,36 @@ static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
 #define NAME_COL 36
 #define LONG_COL 40
 
+/* Reusable line buffer for emit_node to avoid per-node malloc */
+typedef struct {
+    char *buf;
+    size_t cap;
+} line_buf_t;
+
+static bool line_buf_ensure(line_buf_t *lb, size_t needed) {
+    if (needed <= lb->cap) return true;
+    size_t newcap = lb->cap ? lb->cap : 256;
+    while (newcap < needed) newcap *= 2;
+    char *tmp = realloc(lb->buf, newcap);
+    if (!tmp) return false;
+    lb->buf = tmp;
+    lb->cap = newcap;
+    return true;
+}
+
 static void emit_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
                       const char *prefix, bool is_last, int depth, int64_t *file_count,
-                      int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
+                      int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache,
+                      line_buf_t *lb) {
     if (config->dirs_only && !node->is_dir) return;
 
-    /* Build the tree connector + name part using dynamic buffer */
+    /* Build the tree connector + name part using reusable buffer */
     size_t prefix_len = prefix ? strlen(prefix) : 0;
     size_t name_len = strlen(node->name);
     /* Worst case: prefix + connector(10) + color(16) + name + "/" + reset(8) + NUL */
     size_t line_sz = prefix_len + name_len + 64;
-    char *line = malloc(line_sz);
-    if (!line) return;
+    if (!line_buf_ensure(lb, line_sz)) return;
+    char *line = lb->buf;
 
     if (depth == 0) {
         const char *clr = color_for_node(cs, node);
@@ -1114,7 +1132,6 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     printf("%s", line);
     for (int i = 0; i < pad; i++) putchar(' ');
     printf("%s\n", stats);
-    free(line);
 
     if (node->is_dir && depth > 0) (*dir_count)++;
     else if (!node->is_dir) (*file_count)++;
@@ -1132,6 +1149,7 @@ typedef struct {
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
                        const char *prefix, bool is_last, int depth, int64_t *file_count,
                        int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
+    line_buf_t lb = { 0 };
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
@@ -1159,7 +1177,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         /* First visit: print the node itself */
         if (frame->child_idx == -1) {
             emit_node(node, config, cs, frame->prefix, frame->is_last, frame->depth, file_count,
-                      dir_count, uid_cache, gid_cache);
+                      dir_count, uid_cache, gid_cache, &lb);
             frame->child_idx = 0;
         }
 
@@ -1231,6 +1249,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
                                        .child_idx = -1 };
     }
     free(stack);
+    free(lb.buf);
 }
 
 // ============================================================================
