@@ -545,7 +545,10 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
        requests will complete, and breaking out early would free the batch while
        callbacks still reference it (use-after-free). */
     while (atomic_load(&batch->remaining) > 0) {
-        aura_wait(engine, 100);
+        /* Try non-blocking poll first; only block if nothing completed */
+        if (aura_poll(engine) == 0) {
+            aura_wait(engine, 1);
+        }
     }
 
     free(batch);
