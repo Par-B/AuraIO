@@ -531,8 +531,10 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         }
     }
 
-    /* Drain async completions. On interruption, we still must wait for all
-       in-flight completions before freeing the batch to avoid use-after-free. */
+    /* Drain async completions. This loop MUST be unbounded — do NOT add a
+       max-iteration timeout here. The kernel guarantees all in-flight io_uring
+       requests will complete, and breaking out early would free the batch while
+       callbacks still reference it (use-after-free). */
     while (atomic_load(&batch->remaining) > 0) {
         aura_wait(engine, 100);
     }
@@ -678,14 +680,6 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    /* Register root directory to prevent cycles back to it */
-    {
-        struct stat sb;
-        if (stat(root->full_path, &sb) == 0) {
-            visited_insert(&visited, sb.st_dev, sb.st_ino);
-        }
-    }
-
     /* Scan root directory first (single-threaded) */
     aura_options_t opts;
     aura_options_init(&opts);
@@ -700,7 +694,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    if (scan_directory(root, engine, config, 0, NULL) != 0) {
+    if (scan_directory(root, engine, config, 0, &visited) != 0) {
         aura_destroy(engine);
         visited_destroy(&visited);
         return -1;
@@ -1069,11 +1063,14 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
     if (!stack) return;
     size_t sp = 0;
 
-    stack[sp++] = (print_frame_t){ .node = root,
-                                   .prefix = strdup(prefix ? prefix : ""),
-                                   .is_last = is_last,
-                                   .depth = depth,
-                                   .child_idx = -1 };
+    char *root_prefix = strdup(prefix ? prefix : "");
+    if (!root_prefix) {
+        free(stack);
+        return;
+    }
+    stack[sp++] = (print_frame_t){
+        .node = root, .prefix = root_prefix, .is_last = is_last, .depth = depth, .child_idx = -1
+    };
 
     while (sp > 0) {
         print_frame_t *frame = &stack[sp - 1];
