@@ -609,6 +609,21 @@ static bool wq_push(work_queue_t *wq, tree_node_t *node) {
     return true;
 }
 
+/* Batch-push a pre-built linked list. Takes ownership of the chain.
+   Returns the number of items successfully enqueued. */
+static size_t wq_push_batch(work_queue_t *wq, work_item_t *head, work_item_t *tail, size_t count) {
+    if (!head || count == 0) return 0;
+    tail->next = NULL;
+
+    pthread_mutex_lock(&wq->lock);
+    if (wq->tail) wq->tail->next = head;
+    else wq->head = head;
+    wq->tail = tail;
+    pthread_cond_broadcast(&wq->cond);
+    pthread_mutex_unlock(&wq->lock);
+    return count;
+}
+
 static tree_node_t *wq_pop(work_queue_t *wq) {
     pthread_mutex_lock(&wq->lock);
     while (!wq->head && !wq->done && !g_interrupted) {
@@ -683,16 +698,29 @@ static void *worker_fn(void *arg) {
 
         (void)scan_directory(node, engine, wctx->config, node->depth, wctx->wq->visited);
 
-        /* Enqueue child directories for scanning */
+        /* Enqueue child directories for scanning — build a batch outside
+           the lock, then splice it in with a single lock acquisition. */
+        work_item_t *batch_head = NULL, *batch_tail = NULL;
+        size_t batch_count = 0;
         for (size_t i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir) {
-                atomic_fetch_add(&wctx->wq->pending, 1);
-                if (!wq_push(wctx->wq, node->children[i])) {
-                    atomic_fetch_sub(&wctx->wq->pending, 1);
+                work_item_t *item = malloc(sizeof(*item));
+                if (!item) {
                     fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
                             node->children[i]->full_path);
+                    continue;
                 }
+                item->node = node->children[i];
+                item->next = NULL;
+                if (batch_tail) batch_tail->next = item;
+                else batch_head = item;
+                batch_tail = item;
+                batch_count++;
             }
+        }
+        if (batch_count > 0) {
+            atomic_fetch_add(&wctx->wq->pending, (int)batch_count);
+            wq_push_batch(wctx->wq, batch_head, batch_tail, batch_count);
         }
 
         /* Decrement pending; if zero, signal done */
