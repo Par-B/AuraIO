@@ -44,6 +44,7 @@
 
 #define MAX_WORKERS 8
 #define STATX_BATCH 64
+#define DIRS_PER_BATCH 4
 #define AURA_STATX_MASK                                                                       \
     (AURA_STATX_MODE | AURA_STATX_SIZE | AURA_STATX_MTIME | AURA_STATX_UID | AURA_STATX_GID | \
      AURA_STATX_NLINK | AURA_STATX_INO)
@@ -691,11 +692,59 @@ static tree_node_t *wq_pop(work_queue_t *wq) {
     return node;
 }
 
+/* Pop up to max_count items in one lock acquisition.  Returns the number of
+   items actually popped.  Items are written into the caller-provided array. */
+static size_t wq_pop_batch(work_queue_t *wq, tree_node_t **out, size_t max_count) {
+    pthread_mutex_lock(&wq->lock);
+    while (!wq->head && !wq->done && !g_interrupted) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        ts.tv_nsec += 50 * 1000000; /* 50ms */
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        pthread_cond_timedwait(&wq->cond, &wq->lock, &ts);
+    }
+    size_t n = 0;
+    while (n < max_count && wq->head) {
+        work_item_t *item = wq->head;
+        wq->head = item->next;
+        out[n++] = item->node;
+        /* Return item to freelist (lock-free since we hold wq->lock and
+           wip_free takes its own lock — just call it) */
+        wip_free(&wq->pool, item);
+    }
+    if (!wq->head) wq->tail = NULL;
+    pthread_mutex_unlock(&wq->lock);
+    return n;
+}
+
 static void wq_signal_done(work_queue_t *wq) {
     pthread_mutex_lock(&wq->lock);
     wq->done = true;
     pthread_cond_broadcast(&wq->cond);
     pthread_mutex_unlock(&wq->lock);
+}
+
+// ============================================================================
+// Async openat completion context
+// ============================================================================
+
+typedef struct {
+    atomic_size_t remaining;
+} open_batch_t;
+
+typedef struct {
+    int fd; /* result fd or negative errno */
+    open_batch_t *batch;
+} open_ctx_t;
+
+static void on_openat_complete(aura_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    open_ctx_t *ctx = (open_ctx_t *)user_data;
+    ctx->fd = (int)result;
+    atomic_fetch_sub(&ctx->batch->remaining, 1);
 }
 
 // ============================================================================
@@ -707,6 +756,157 @@ typedef struct {
     const config_t *config;
     int worker_id;
 } worker_ctx_t;
+
+/* Process a batch of directories: async open → readdir → batched statx → cleanup.
+   Processes up to DIRS_PER_BATCH directories per iteration. */
+static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *engine,
+                              const config_t *config, visited_set_t *visited) {
+    /* --- Phase 1: Async open all directories via aura_openat --- */
+    open_batch_t obatch;
+    open_ctx_t octxs[DIRS_PER_BATCH];
+    atomic_store(&obatch.remaining, 0);
+
+    for (size_t i = 0; i < ndirs; i++) {
+        /* Depth check */
+        if (config->max_depth >= 0 && dirs[i]->depth >= config->max_depth) {
+            octxs[i].fd = -1;
+            continue;
+        }
+
+        /* Cycle detection */
+        if (visited) {
+            dev_t dev = makedev(dirs[i]->st.stx_dev_major, dirs[i]->st.stx_dev_minor);
+            if (!visited_insert(visited, dev, dirs[i]->st.stx_ino)) {
+                octxs[i].fd = -1;
+                continue;
+            }
+        }
+
+        octxs[i].fd = -1;
+        octxs[i].batch = &obatch;
+        atomic_fetch_add(&obatch.remaining, 1);
+
+        aura_request_t *req = aura_openat(engine, AT_FDCWD, dirs[i]->full_path,
+                                          O_RDONLY | O_DIRECTORY, 0, on_openat_complete, &octxs[i]);
+        if (!req) {
+            atomic_fetch_sub(&obatch.remaining, 1);
+            /* Fallback: synchronous open */
+            int fd = open(dirs[i]->full_path, O_RDONLY | O_DIRECTORY);
+            octxs[i].fd = fd >= 0 ? fd : -1;
+        }
+    }
+
+    /* Drain openat completions */
+    while (atomic_load(&obatch.remaining) > 0) {
+        if (aura_poll(engine) == 0) {
+            aura_wait(engine, 1);
+        }
+    }
+
+    /* --- Phase 2: readdir on each opened fd --- */
+    DIR *dir_handles[DIRS_PER_BATCH] = { NULL };
+    size_t total_children = 0;
+
+    for (size_t i = 0; i < ndirs; i++) {
+        if (octxs[i].fd < 0) continue;
+
+        DIR *d = fdopendir(octxs[i].fd);
+        if (!d) {
+            fprintf(stderr, "atree: cannot fdopendir '%s': %s\n", dirs[i]->full_path,
+                    strerror(errno));
+            close(octxs[i].fd);
+            octxs[i].fd = -1;
+            continue;
+        }
+        dir_handles[i] = d;
+
+        struct dirent *ent;
+        errno = 0;
+        while ((ent = readdir(d)) != NULL) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+            if (!config->show_hidden && ent->d_name[0] == '.') continue;
+            if (config->dirs_only && ent->d_type != DT_DIR && ent->d_type != DT_UNKNOWN) continue;
+
+            char path[PATH_MAX];
+            int plen = snprintf(path, sizeof(path), "%s/%s", dirs[i]->full_path, ent->d_name);
+            if (plen < 0 || (size_t)plen >= sizeof(path)) continue;
+
+            tree_node_t *child = node_create(ent->d_name, path);
+            if (!child) continue;
+            child->depth = dirs[i]->depth + 1;
+            if (ent->d_type == DT_DIR) child->is_dir = true;
+
+            if (!node_add_child(dirs[i], child)) {
+                node_free(child);
+                continue;
+            }
+            errno = 0;
+        }
+        if (errno != 0) {
+            fprintf(stderr, "atree: error reading '%s': %s\n", dirs[i]->full_path, strerror(errno));
+        }
+        total_children += dirs[i]->num_children;
+    }
+
+    /* --- Phase 3: Batched statx across ALL children of all directories --- */
+    if (total_children > 0) {
+        statx_batch_t *batch = malloc(sizeof(*batch) + total_children * sizeof(statx_ctx_t));
+        if (batch) {
+            statx_ctx_t *ctxs = (statx_ctx_t *)(batch + 1);
+            atomic_store(&batch->remaining, total_children);
+            size_t ci = 0;
+
+            for (size_t i = 0; i < ndirs; i++) {
+                for (size_t j = 0; j < dirs[i]->num_children; j++) {
+                    tree_node_t *child = dirs[i]->children[j];
+                    ctxs[ci].node = child;
+                    ctxs[ci].batch = batch;
+
+                    aura_request_t *req =
+                        aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW,
+                                   AURA_STATX_MASK, &child->st, on_statx_complete, &ctxs[ci]);
+                    if (!req) {
+                        atomic_fetch_sub(&batch->remaining, 1);
+                        struct statx stx;
+                        if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW,
+                                  KERNEL_STATX_MASK, &stx) == 0) {
+                            child->st = stx;
+                            child->is_dir = S_ISDIR(stx.stx_mode);
+                        }
+                    }
+                    ci++;
+                }
+            }
+
+            /* Drain statx completions */
+            while (atomic_load(&batch->remaining) > 0) {
+                if (aura_poll(engine) == 0) {
+                    aura_wait(engine, 1);
+                }
+            }
+            free(batch);
+        }
+    }
+
+    /* --- Phase 4: Cleanup --- */
+    for (size_t i = 0; i < ndirs; i++) {
+        if (dir_handles[i]) closedir(dir_handles[i]); /* closes fd too */
+
+        /* Prune non-directories when dirs_only is set */
+        if (config->dirs_only) {
+            size_t dst = 0;
+            for (size_t j = 0; j < dirs[i]->num_children; j++) {
+                tree_node_t *c = dirs[i]->children[j];
+                if (c->is_dir) {
+                    dirs[i]->children[dst++] = c;
+                } else {
+                    node_free(c);
+                }
+            }
+            dirs[i]->num_children = dst;
+        }
+    }
+}
 
 static void *worker_fn(void *arg) {
     worker_ctx_t *wctx = (worker_ctx_t *)arg;
@@ -733,39 +933,44 @@ static void *worker_fn(void *arg) {
     }
 
     while (!g_interrupted) {
-        tree_node_t *node = wq_pop(wctx->wq);
-        if (!node) break;
+        tree_node_t *batch[DIRS_PER_BATCH];
+        size_t ndirs = wq_pop_batch(wctx->wq, batch, DIRS_PER_BATCH);
+        if (ndirs == 0) break;
 
-        (void)scan_directory(node, engine, wctx->config, node->depth, wctx->wq->visited);
+        process_dir_batch(batch, ndirs, engine, wctx->config, wctx->wq->visited);
 
-        /* Enqueue child directories for scanning — build a batch outside
+        /* Enqueue child directories for scanning — build a list outside
            the lock, then splice it in with a single lock acquisition. */
-        work_item_t *batch_head = NULL, *batch_tail = NULL;
-        size_t batch_count = 0;
-        for (size_t i = 0; i < node->num_children; i++) {
-            if (node->children[i]->is_dir) {
-                work_item_t *item = wip_alloc(&wctx->wq->pool);
-                if (!item) {
-                    fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
-                            node->children[i]->full_path);
-                    continue;
+        work_item_t *list_head = NULL, *list_tail = NULL;
+        size_t list_count = 0;
+        for (size_t d = 0; d < ndirs; d++) {
+            for (size_t i = 0; i < batch[d]->num_children; i++) {
+                if (batch[d]->children[i]->is_dir) {
+                    work_item_t *item = wip_alloc(&wctx->wq->pool);
+                    if (!item) {
+                        fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
+                                batch[d]->children[i]->full_path);
+                        continue;
+                    }
+                    item->node = batch[d]->children[i];
+                    item->next = NULL;
+                    if (list_tail) list_tail->next = item;
+                    else list_head = item;
+                    list_tail = item;
+                    list_count++;
                 }
-                item->node = node->children[i];
-                item->next = NULL;
-                if (batch_tail) batch_tail->next = item;
-                else batch_head = item;
-                batch_tail = item;
-                batch_count++;
             }
         }
-        if (batch_count > 0) {
-            atomic_fetch_add(&wctx->wq->pending, (int)batch_count);
-            wq_push_batch(wctx->wq, batch_head, batch_tail, batch_count);
+        if (list_count > 0) {
+            atomic_fetch_add(&wctx->wq->pending, (int)list_count);
+            wq_push_batch(wctx->wq, list_head, list_tail, list_count);
         }
 
-        /* Decrement pending; if zero, signal done */
-        if (atomic_fetch_sub(&wctx->wq->pending, 1) == 1) {
-            wq_signal_done(wctx->wq);
+        /* Decrement pending for all dirs in this batch; if zero, signal done */
+        for (size_t d = 0; d < ndirs; d++) {
+            if (atomic_fetch_sub(&wctx->wq->pending, 1) == 1) {
+                wq_signal_done(wctx->wq);
+            }
         }
     }
 
