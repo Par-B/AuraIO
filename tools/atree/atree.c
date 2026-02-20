@@ -1524,7 +1524,6 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
         size_t ulen = strlen(uname);
         size_t glen = strlen(gname);
         p = buf_append(buf, p, uname, ulen);
-        /* Pad to 8 chars */
         if (ulen < 8) {
             memset(buf + p, ' ', 8 - ulen);
             p += 8 - ulen;
@@ -1536,71 +1535,38 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             p += 8 - glen;
         }
         p = buf_append(buf, p, "  ", 2);
+    }
 
-        if (node->is_dir) {
-            char sz[32];
-            format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
-            int64_t fc = node->total_files;
-            int64_t dircnt = node->total_dirs;
-            buf[p++] = '[';
-            p += (size_t)fmt_i64(buf + p, fc);
-            p = buf_append(buf, p, " file", 5);
-            if (fc != 1) buf[p++] = 's';
-            if (dircnt > 0) {
-                p = buf_append(buf, p, ", ", 2);
-                p += (size_t)fmt_i64(buf + p, dircnt);
-                p = buf_append(buf, p, " dir", 4);
-                if (dircnt != 1) buf[p++] = 's';
-            }
+    if (node->is_dir) {
+        char sz[32];
+        format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
+        int64_t fc = node->total_files;
+        int64_t dircnt = node->total_dirs;
+        buf[p++] = '[';
+        p += (size_t)fmt_i64(buf + p, fc);
+        p = buf_append(buf, p, " file", 5);
+        if (fc != 1) buf[p++] = 's';
+        if (dircnt > 0) {
             p = buf_append(buf, p, ", ", 2);
-            p = buf_appends(buf, p, sz);
-            buf[p++] = ']';
-        } else {
-            char sz[32], date[16];
-            format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
-            format_date(date, sizeof(date), &node->st.stx_mtime, dc);
-            size_t szlen = strlen(sz);
-            /* Right-align size to 7 chars */
-            if (szlen < 7) {
-                memset(buf + p, ' ', 7 - szlen);
-                p += 7 - szlen;
-            }
-            p = buf_append(buf, p, sz, szlen);
-            p = buf_append(buf, p, "  ", 2);
-            p = buf_appends(buf, p, date);
+            p += (size_t)fmt_i64(buf + p, dircnt);
+            p = buf_append(buf, p, " dir", 4);
+            if (dircnt != 1) buf[p++] = 's';
         }
+        p = buf_append(buf, p, ", ", 2);
+        p = buf_appends(buf, p, sz);
+        buf[p++] = ']';
     } else {
-        if (node->is_dir) {
-            char sz[32];
-            format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
-            int64_t fc = node->total_files;
-            int64_t dircnt = node->total_dirs;
-            buf[p++] = '[';
-            p += (size_t)fmt_i64(buf + p, fc);
-            p = buf_append(buf, p, " file", 5);
-            if (fc != 1) buf[p++] = 's';
-            if (dircnt > 0) {
-                p = buf_append(buf, p, ", ", 2);
-                p += (size_t)fmt_i64(buf + p, dircnt);
-                p = buf_append(buf, p, " dir", 4);
-                if (dircnt != 1) buf[p++] = 's';
-            }
-            p = buf_append(buf, p, ", ", 2);
-            p = buf_appends(buf, p, sz);
-            buf[p++] = ']';
-        } else {
-            char sz[32], date[16];
-            format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
-            format_date(date, sizeof(date), &node->st.stx_mtime, dc);
-            size_t szlen = strlen(sz);
-            if (szlen < 7) {
-                memset(buf + p, ' ', 7 - szlen);
-                p += 7 - szlen;
-            }
-            p = buf_append(buf, p, sz, szlen);
-            p = buf_append(buf, p, "  ", 2);
-            p = buf_appends(buf, p, date);
+        char sz[32], date[16];
+        format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
+        format_date(date, sizeof(date), &node->st.stx_mtime, dc);
+        size_t szlen = strlen(sz);
+        if (szlen < 7) {
+            memset(buf + p, ' ', 7 - szlen);
+            p += 7 - szlen;
         }
+        p = buf_append(buf, p, sz, szlen);
+        p = buf_append(buf, p, "  ", 2);
+        p = buf_appends(buf, p, date);
     }
 
     buf[p++] = '\n';
