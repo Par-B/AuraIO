@@ -155,9 +155,6 @@ impl Histogram {
     /// Number of histogram buckets
     pub const BUCKET_COUNT: usize = aura_sys::AURA_HISTOGRAM_BUCKETS as usize;
 
-    /// Bucket width in microseconds
-    pub const BUCKET_WIDTH_US: i32 = aura_sys::AURA_HISTOGRAM_BUCKET_WIDTH_US as i32;
-
     /// Create a new histogram snapshot (internal use)
     pub(crate) fn new(inner: aura_sys::aura_histogram_t) -> Self {
         Self { inner }
@@ -187,15 +184,23 @@ impl Histogram {
         self.inner.max_tracked_us
     }
 
-    /// Bucket width (microseconds)
-    pub fn bucket_width_us(&self) -> i32 {
-        self.inner.bucket_width_us
+    /// Get upper bound of bucket (microseconds) via C FFI
+    pub fn bucket_upper_bound_us(&self, idx: usize) -> i32 {
+        if idx < Self::BUCKET_COUNT {
+            unsafe { aura_sys::aura_histogram_bucket_upper_bound_us(&self.inner, idx as i32) }
+        } else {
+            0
+        }
     }
 
     /// Get lower bound of bucket (microseconds)
     pub fn bucket_lower_us(&self, idx: usize) -> i32 {
         if idx < Self::BUCKET_COUNT {
-            (idx as i32) * self.inner.bucket_width_us
+            if idx == 0 {
+                0
+            } else {
+                unsafe { aura_sys::aura_histogram_bucket_upper_bound_us(&self.inner, (idx - 1) as i32) }
+            }
         } else {
             0
         }
@@ -204,7 +209,7 @@ impl Histogram {
     /// Get upper bound of bucket (microseconds)
     pub fn bucket_upper_us(&self, idx: usize) -> i32 {
         if idx < Self::BUCKET_COUNT {
-            ((idx as i32) + 1) * self.inner.bucket_width_us
+            unsafe { aura_sys::aura_histogram_bucket_upper_bound_us(&self.inner, idx as i32) }
         } else {
             0
         }

@@ -125,59 +125,20 @@ fn main() -> Result<()> {
             if hist.total_count() > 0 {
                 println!("\nLatency Histogram (Ring 0):");
                 println!("  Total samples: {}", hist.total_count());
-                println!("  Bucket width:  {} μs", hist.bucket_width_us());
                 println!("  Max tracked:   {} μs", hist.max_tracked_us());
 
-                // Calculate percentiles from histogram
-                let mut cumulative: u32 = 0;
-                let p50_threshold = hist.total_count() / 2;
-                let p90_threshold = (hist.total_count() * 90) / 100;
-                let p99_threshold = (hist.total_count() * 99) / 100;
-                let p999_threshold = (hist.total_count() * 999) / 1000;
-                let mut p50 = -1i32;
-                let mut p90 = -1i32;
-                let mut p99 = -1i32;
-                let mut p999 = -1i32;
-
-                for i in 0..aura::Histogram::BUCKET_COUNT {
-                    cumulative += hist.bucket(i);
-                    if p50 == -1 && cumulative >= p50_threshold {
-                        p50 = i as i32;
-                    }
-                    if p90 == -1 && cumulative >= p90_threshold {
-                        p90 = i as i32;
-                    }
-                    if p99 == -1 && cumulative >= p99_threshold {
-                        p99 = i as i32;
-                    }
-                    if p999 == -1 && cumulative >= p999_threshold {
-                        p999 = i as i32;
-                    }
+                // Compute percentiles using the public API
+                if let Some(p50) = hist.percentile(50.0) {
+                    println!("  P50 latency:   {:.2} ms", p50);
                 }
-
-                if p50 >= 0 {
-                    println!(
-                        "  P50 latency:   {:.2} ms",
-                        (p50 * hist.bucket_width_us()) as f64 / 1000.0
-                    );
+                if let Some(p90) = hist.percentile(90.0) {
+                    println!("  P90 latency:   {:.2} ms", p90);
                 }
-                if p90 >= 0 {
-                    println!(
-                        "  P90 latency:   {:.2} ms",
-                        (p90 * hist.bucket_width_us()) as f64 / 1000.0
-                    );
+                if let Some(p99) = hist.percentile(99.0) {
+                    println!("  P99 latency:   {:.2} ms", p99);
                 }
-                if p99 >= 0 {
-                    println!(
-                        "  P99 latency:   {:.2} ms",
-                        (p99 * hist.bucket_width_us()) as f64 / 1000.0
-                    );
-                }
-                if p999 >= 0 {
-                    println!(
-                        "  P99.9 latency: {:.2} ms",
-                        (p999 * hist.bucket_width_us()) as f64 / 1000.0
-                    );
+                if let Some(p999) = hist.percentile(99.9) {
+                    println!("  P99.9 latency: {:.2} ms", p999);
                 }
                 if hist.overflow() > 0 {
                     println!(

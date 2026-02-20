@@ -88,34 +88,37 @@ AIMD phases (via `aura_phase_name()`):
 aura_histogram_t hist;
 aura_get_histogram(engine, ring_idx, &hist, sizeof(hist));
 
-// 200 buckets x 50us = 0-10ms range
+// Recommended: use aura_histogram_percentile() for accurate results
+double p50 = aura_histogram_percentile(&hist, 50.0);
+double p99 = aura_histogram_percentile(&hist, 99.0);
+double p999 = aura_histogram_percentile(&hist, 99.9);
+printf("  P50: %.2f ms, P99: %.2f ms, P99.9: %.2f ms\n", p50, p99, p999);
+
+// Optional: iterate buckets for detailed histogram view (advanced use)
 for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
     if (hist.buckets[b] > 0) {
-        printf("  %d-%d us: %u ops\n",
-               b * hist.bucket_width_us,
-               (b + 1) * hist.bucket_width_us,
-               hist.buckets[b]);
+        int upper = aura_histogram_bucket_upper_bound_us(&hist, b);
+        int lower = upper - hist.tier_width_us[hist.tier_count - 1];  // approx for display
+        printf("  0-%d us: %u ops\n", upper, hist.buckets[b]);
     }
 }
 printf("  >%d us (overflow): %u ops\n", hist.max_tracked_us, hist.overflow);
 printf("  total: %u ops\n", hist.total_count);
-
-// Compute a specific percentile from the histogram
-double p99 = aura_histogram_percentile(&hist, 99.0);
-printf("  P99: %.2f ms\n", p99);
 ```
 
-#### `aura_histogram_percentile()`
+#### `aura_histogram_percentile()` -- Recommended Percentile API
 
 ```c
 double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
 ```
 
-Returns the estimated latency in **milliseconds** for the given percentile (0-100). Returns -1.0 if the histogram is empty or the percentile is out of range.
+Returns the estimated latency in **milliseconds** for the given percentile (0-100). This is the **preferred API** for computing percentiles from histograms. Returns -1.0 if the histogram is empty or the percentile is out of range.
 
 The histogram is an **approximate snapshot of the active window** — AuraIO double-buffers histograms internally and swaps them periodically. Because the snapshot is read from a concurrently-written histogram, individual bucket values are atomic but `total_count` may differ slightly from the sum of all buckets + overflow. For monitoring purposes this is negligible.
 
 When adaptive tuning is disabled (`disable_adaptive = true`), the histogram is not periodically reset and accumulates data indefinitely.
+
+**Histogram Coverage:** 0–100 milliseconds in 4 tiers (10 µs, 50 µs, 250 µs, 1 ms bucket widths). Operations exceeding 100 ms are counted in `overflow`.
 
 ### Buffer Pool Stats
 
@@ -158,10 +161,17 @@ for (int i = 0; i < engine.ring_count(); i++) {
               << " depth=" << rs.in_flight_limit() << "\n";
 
     auto hist = engine.get_histogram(i);
-    for (int b = 0; b < aura::Histogram::bucket_count; b++) {
+
+    // Recommended: use percentile() for accurate latency metrics
+    auto p50 = hist.percentile(50.0);
+    auto p99 = hist.percentile(99.0);
+    std::cout << "  P50: " << p50.value_or(-1.0) << "ms, "
+              << "P99: " << p99.value_or(-1.0) << "ms\n";
+
+    // Optional: iterate buckets for detailed histogram (advanced use)
+    for (int b = 0; b < aura::Histogram::bucket_count && b < 20; b++) {
         if (hist.bucket(b) > 0)
-            std::cout << "  " << hist.bucket_lower_us(b) << "-"
-                      << hist.bucket_upper_us(b) << "us: "
+            std::cout << "    0-" << hist.bucket_upper_us(b) << "us: "
                       << hist.bucket(b) << "\n";
     }
 }
@@ -350,7 +360,7 @@ aura_ring_in_flight / aura_ring_in_flight_limit
 |-----------|------|------|-------|
 | `aura_get_stats()` | ~1-2 us | Per-ring mutex (iterated) | Aggregates across all rings |
 | `aura_get_ring_stats()` | ~50-100 ns | Single ring mutex | One lock/unlock pair |
-| `aura_get_histogram()` | ~200-500 ns | Single ring mutex | Copies 200 x 4-byte buckets under lock |
+| `aura_get_histogram()` | ~200-500 ns | Single ring mutex | Copies 320 x 4-byte buckets under lock |
 | `aura_get_buffer_stats()` | ~10-30 ns | None (lockless) | Atomic reads only |
 | `aura_phase_name()` | ~5 ns | None | Pure lookup |
 
@@ -383,7 +393,7 @@ Buffer pool stats are fully lockless — they read atomics that are updated duri
 The latency histogram uses a **double-buffer swap** strategy. The AIMD controller periodically swaps the active and inactive histogram windows. `aura_get_histogram()` copies the *active* window, so:
 
 - You always get the most recent complete measurement window
-- The copy is ~800 bytes (200 buckets x 4 bytes) and takes ~200-500 ns under lock
+- The copy is ~1,280 bytes (320 buckets x 4 bytes) and takes ~200-500 ns under lock
 - The swap itself is a single pointer exchange and does not affect I/O
 
 ---

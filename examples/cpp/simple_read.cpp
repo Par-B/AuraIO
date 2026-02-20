@@ -110,38 +110,19 @@ int main(int argc, char **argv) {
             if (hist.total_count() > 0) {
                 std::cout << "\nLatency Histogram (Ring 0):\n";
                 std::cout << "  Total samples: " << hist.total_count() << "\n";
-                std::cout << "  Bucket width:  " << aura::Histogram::bucket_width_us << " μs\n";
                 std::cout << "  Max tracked:   " << hist.max_tracked_us() << " μs\n";
 
-                // Calculate percentiles from histogram
-                uint32_t cumulative = 0;
-                uint32_t p50_threshold = hist.total_count() / 2;
-                uint32_t p90_threshold = (hist.total_count() * 90) / 100;
-                uint32_t p99_threshold = (hist.total_count() * 99) / 100;
-                uint32_t p999_threshold = (hist.total_count() * 999) / 1000;
-                int p50 = -1, p90 = -1, p99 = -1, p999 = -1;
-
-                for (int i = 0; i < aura::Histogram::bucket_count; i++) {
-                    cumulative += hist.bucket(i);
-                    if (p50 == -1 && cumulative >= p50_threshold) p50 = i;
-                    if (p90 == -1 && cumulative >= p90_threshold) p90 = i;
-                    if (p99 == -1 && cumulative >= p99_threshold) p99 = i;
-                    if (p999 == -1 && cumulative >= p999_threshold) p999 = i;
-                }
+                // Compute percentiles using the public API
+                double p50 = hist.percentile(50.0);
+                double p90 = hist.percentile(90.0);
+                double p99 = hist.percentile(99.0);
+                double p999 = hist.percentile(99.9);
 
                 std::cout << std::fixed << std::setprecision(2);
-                if (p50 >= 0)
-                    std::cout << "  P50 latency:   "
-                              << (p50 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
-                if (p90 >= 0)
-                    std::cout << "  P90 latency:   "
-                              << (p90 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
-                if (p99 >= 0)
-                    std::cout << "  P99 latency:   "
-                              << (p99 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
-                if (p999 >= 0)
-                    std::cout << "  P99.9 latency: "
-                              << (p999 * aura::Histogram::bucket_width_us) / 1000.0 << " ms\n";
+                if (p50 >= 0) std::cout << "  P50 latency:   " << p50 << " ms\n";
+                if (p90 >= 0) std::cout << "  P90 latency:   " << p90 << " ms\n";
+                if (p99 >= 0) std::cout << "  P99 latency:   " << p99 << " ms\n";
+                if (p999 >= 0) std::cout << "  P99.9 latency: " << p999 << " ms\n";
                 if (hist.overflow() > 0) {
                     std::cout << "  Overflow:      " << hist.overflow() << " samples (> "
                               << hist.max_tracked_us() << " μs)\n";

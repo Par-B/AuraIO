@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_engine.c
  * @brief Unit tests for AIMD adaptive controller
@@ -19,12 +18,13 @@
 static int test_count = 0;
 
 #define TEST(name) static void test_##name(void)
-#define RUN_TEST(name) do { \
-    printf("  %-40s", #name); \
-    test_##name(); \
-    printf(" OK\n"); \
-    test_count++; \
-} while(0)
+#define RUN_TEST(name)            \
+    do {                          \
+        printf("  %-40s", #name); \
+        test_##name();            \
+        printf(" OK\n");          \
+        test_count++;             \
+    } while (0)
 
 /* ============================================================================
  * Histogram Tests
@@ -35,11 +35,11 @@ TEST(histogram_basic) {
     adaptive_hist_reset(&hist);
 
     assert(hist.total_count == 0);
-    assert(adaptive_hist_p99(&hist) < 0);  /* No data */
+    assert(adaptive_hist_p99(&hist) < 0); /* No data */
 
     /* Record some values */
     for (int i = 0; i < 100; i++) {
-        adaptive_hist_record(&hist, 100);  /* 100us */
+        adaptive_hist_record(&hist, 100); /* 100us */
     }
 
     assert(hist.total_count == 100);
@@ -51,17 +51,17 @@ TEST(histogram_overflow) {
     adaptive_histogram_t hist;
     adaptive_hist_reset(&hist);
 
-    /* Record values above max tracked (10ms = 10000us) */
+    /* Record values above max tracked (100ms = 100000us) */
     for (int i = 0; i < 100; i++) {
-        adaptive_hist_record(&hist, 15000);  /* 15ms - overflow */
+        adaptive_hist_record(&hist, 150000); /* 150ms - overflow */
     }
 
     assert(hist.overflow == 100);
     assert(hist.total_count == 100);
 
-    /* P99 should be at max */
+    /* P99 should be at 2x max = 200ms */
     double p99 = adaptive_hist_p99(&hist);
-    assert(p99 >= 10.0);  /* >= 10ms */
+    assert(p99 >= 100.0); /* >= 100ms */
 }
 
 TEST(histogram_distribution) {
@@ -70,15 +70,15 @@ TEST(histogram_distribution) {
 
     /* Record 99 fast values and 1 slow value */
     for (int i = 0; i < 99; i++) {
-        adaptive_hist_record(&hist, 50);   /* 50us - fast */
+        adaptive_hist_record(&hist, 50); /* 50us - fast */
     }
-    adaptive_hist_record(&hist, 5000);     /* 5ms - slow */
+    adaptive_hist_record(&hist, 5000); /* 5ms - slow */
 
     assert(hist.total_count == 100);
 
     /* P99 should be the slow value (~5ms) */
     double p99 = adaptive_hist_p99(&hist);
-    assert(p99 >= 4.0 && p99 <= 6.0);  /* ~5ms */
+    assert(p99 >= 4.0 && p99 <= 6.0); /* ~5ms */
 }
 
 /* ============================================================================
@@ -135,7 +135,7 @@ TEST(controller_record_completion) {
 
     /* Record some completions */
     for (int i = 0; i < 100; i++) {
-        adaptive_record_completion(&ctrl, 100000, 4096);  /* 100us, 4KB */
+        adaptive_record_completion(&ctrl, 100000, 4096); /* 100us, 4KB */
     }
 
     adaptive_histogram_t *hist = adaptive_hist_active(&ctrl.hist_pair);
@@ -293,15 +293,15 @@ TEST(low_iops_p99_validity_threshold) {
 
     /* With < 20 samples, latency_rising should NOT trigger backoff */
     for (int i = 0; i < 10; i++) {
-        adaptive_record_completion(&ctrl, 50000000, 4096);  /* 50ms - very slow */
+        adaptive_record_completion(&ctrl, 50000000, 4096); /* 50ms - very slow */
     }
 
     /* Simulate time passing minimum window */
-    ctrl.sample_start_ns -= 200 * 1000000LL;  /* 200ms ago */
+    ctrl.sample_start_ns -= 200 * 1000000LL; /* 200ms ago */
 
     /* Setup: in PROBING phase with low baseline */
     ctrl.phase = ADAPTIVE_PHASE_PROBING;
-    ctrl.baseline_p99_ms = 1.0;  /* 1ms baseline */
+    ctrl.baseline_p99_ms = 1.0; /* 1ms baseline */
     ctrl.baseline_count = 10;
 
     adaptive_tick(&ctrl);
@@ -329,20 +329,20 @@ TEST(histogram_swap) {
 
     /* Record some values to histogram 0 */
     for (int i = 0; i < 50; i++) {
-        adaptive_hist_record(hist0, 100);  /* 100us */
+        adaptive_hist_record(hist0, 100); /* 100us */
     }
     assert(hist0->total_count == 50);
 
     /* Swap - should return pointer to old histogram (index 0) */
     adaptive_histogram_t *old = adaptive_hist_swap(&pair);
     assert(old == &pair.histograms[0]);
-    assert(old->total_count == 50);  /* Still has data for reading */
+    assert(old->total_count == 50); /* Still has data for reading */
 
     /* Active is now histogram 1 */
     assert(pair.active_index == 1);
     adaptive_histogram_t *hist1 = adaptive_hist_active(&pair);
     assert(hist1 == &pair.histograms[1]);
-    assert(hist1->total_count == 0);  /* Fresh histogram */
+    assert(hist1->total_count == 0); /* Fresh histogram */
 
     /* Record to new active histogram */
     for (int i = 0; i < 30; i++) {
@@ -376,7 +376,7 @@ static void *record_thread_func(void *arg) {
 
     while (atomic_load(&concurrent_running) && count < CONCURRENT_RECORDS) {
         adaptive_histogram_t *hist = adaptive_hist_active(concurrent_pair);
-        adaptive_hist_record(hist, (count % 200) * 50);  /* 0-10000us */
+        adaptive_hist_record(hist, (count % 200) * 50); /* 0-10000us */
         count++;
     }
 
@@ -395,7 +395,7 @@ static void *swap_thread_func(void *arg) {
         swaps++;
 
         /* Small delay to let recorders work */
-        struct timespec ts = {0, 1000000};  /* 1ms */
+        struct timespec ts = { 0, 1000000 }; /* 1ms */
         nanosleep(&ts, NULL);
     }
 

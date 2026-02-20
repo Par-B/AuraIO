@@ -299,7 +299,7 @@ _Static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size chan
  * Latency histogram snapshot
  *
  * An approximate snapshot of the active latency histogram for a ring.
- * Tracks latencies from 0 to max_tracked_us in bucket_width_us increments.
+ * Tracks latencies from 0 to max_tracked_us using tiered bucket widths.
  * Operations exceeding max_tracked_us are counted in overflow.
  *
  * Because the snapshot is read from a concurrently-written histogram,
@@ -313,22 +313,26 @@ _Static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size chan
  *
  * Retrieved via aura_get_histogram().
  */
-#define AURA_HISTOGRAM_BUCKETS 200
-#define AURA_HISTOGRAM_BUCKET_WIDTH_US 50
+#define AURA_HISTOGRAM_BUCKETS 320
+#define AURA_HISTOGRAM_TIER_COUNT 4
+#define AURA_HISTOGRAM_MAX_US 100000
 
 typedef struct {
     uint32_t buckets[AURA_HISTOGRAM_BUCKETS]; /**< Latency frequency buckets */
     uint32_t overflow;                        /**< Count of operations exceeding max_tracked_us */
     uint32_t total_count;                     /**< Total samples in this snapshot */
-    int bucket_width_us;                      /**< Width of each bucket in microseconds */
     int max_tracked_us;                       /**< Maximum tracked latency in microseconds */
-    uint32_t _reserved[2];                    /**< Reserved for future use; must be zero */
+    int tier_count;                           /**< Number of tiers (always 4) */
+    int tier_start_us[AURA_HISTOGRAM_TIER_COUNT];    /**< Start of each tier (µs) */
+    int tier_width_us[AURA_HISTOGRAM_TIER_COUNT];    /**< Bucket width per tier (µs) */
+    int tier_base_bucket[AURA_HISTOGRAM_TIER_COUNT]; /**< First bucket index per tier */
+    uint32_t _reserved[2];                           /**< Reserved for future use; must be zero */
 } aura_histogram_t;
 
 #ifdef __cplusplus
-static_assert(sizeof(aura_histogram_t) == 824, "aura_histogram_t ABI size changed");
+static_assert(sizeof(aura_histogram_t) == 1352, "aura_histogram_t ABI size changed");
 #else
-_Static_assert(sizeof(aura_histogram_t) == 824, "aura_histogram_t ABI size changed");
+_Static_assert(sizeof(aura_histogram_t) == 1352, "aura_histogram_t ABI size changed");
 #endif
 
 /**
@@ -1471,6 +1475,19 @@ AURA_API bool aura_in_callback_context(void);
  *         or -1.0 if histogram is empty or percentile is out of range
  */
 AURA_API double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
+
+/**
+ * Get the upper bound of a histogram bucket in microseconds
+ *
+ * Uses the tier metadata in the histogram to compute the upper bound
+ * for the given bucket index. Needed by Prometheus/OTel integrations
+ * that must emit per-bucket boundary values.
+ *
+ * @param hist   Histogram snapshot (must have tier metadata populated)
+ * @param bucket Bucket index (0 to AURA_HISTOGRAM_BUCKETS-1)
+ * @return Upper bound in microseconds, or 0 if bucket is out of range
+ */
+AURA_API int aura_histogram_bucket_upper_bound_us(const aura_histogram_t *hist, int bucket);
 
 /* ============================================================================
  * Logging (Optional)

@@ -146,33 +146,18 @@ int main(int argc, char **argv) {
         if (aura_get_histogram(engine, 0, &hist, sizeof(hist)) == 0 && hist.total_count > 0) {
             printf("\nLatency Histogram (Ring 0):\n");
             printf("  Total samples: %u\n", hist.total_count);
-            printf("  Bucket width:  %d μs\n", hist.bucket_width_us);
             printf("  Max tracked:   %d μs\n", hist.max_tracked_us);
 
-            /* Calculate percentiles from histogram */
-            uint32_t cumulative = 0;
-            uint32_t p50_threshold = hist.total_count / 2;
-            uint32_t p90_threshold = (hist.total_count * 90) / 100;
-            uint32_t p99_threshold = (hist.total_count * 99) / 100;
-            uint32_t p999_threshold = (hist.total_count * 999) / 1000;
-            int p50 = -1, p90 = -1, p99 = -1, p999 = -1;
+            /* Compute percentiles using the public API */
+            double p50 = aura_histogram_percentile(&hist, 50.0);
+            double p90 = aura_histogram_percentile(&hist, 90.0);
+            double p99 = aura_histogram_percentile(&hist, 99.0);
+            double p999 = aura_histogram_percentile(&hist, 99.9);
 
-            for (int i = 0; i < AURA_HISTOGRAM_BUCKETS; i++) {
-                cumulative += hist.buckets[i];
-                if (p50 == -1 && cumulative >= p50_threshold) p50 = i;
-                if (p90 == -1 && cumulative >= p90_threshold) p90 = i;
-                if (p99 == -1 && cumulative >= p99_threshold) p99 = i;
-                if (p999 == -1 && cumulative >= p999_threshold) p999 = i;
-            }
-
-            if (p50 >= 0)
-                printf("  P50 latency:   %.2f ms\n", (p50 * hist.bucket_width_us) / 1000.0);
-            if (p90 >= 0)
-                printf("  P90 latency:   %.2f ms\n", (p90 * hist.bucket_width_us) / 1000.0);
-            if (p99 >= 0)
-                printf("  P99 latency:   %.2f ms\n", (p99 * hist.bucket_width_us) / 1000.0);
-            if (p999 >= 0)
-                printf("  P99.9 latency: %.2f ms\n", (p999 * hist.bucket_width_us) / 1000.0);
+            if (p50 >= 0) printf("  P50 latency:   %.2f ms\n", p50);
+            if (p90 >= 0) printf("  P90 latency:   %.2f ms\n", p90);
+            if (p99 >= 0) printf("  P99 latency:   %.2f ms\n", p99);
+            if (p999 >= 0) printf("  P99.9 latency: %.2f ms\n", p999);
             if (hist.overflow > 0) {
                 printf("  Overflow:      %u samples (> %d μs)\n", hist.overflow,
                        hist.max_tracked_us);

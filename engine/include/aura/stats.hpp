@@ -122,7 +122,6 @@ class RingStats {
 class Histogram {
   public:
     static constexpr int bucket_count = AURA_HISTOGRAM_BUCKETS;
-    static constexpr int bucket_width_us = AURA_HISTOGRAM_BUCKET_WIDTH_US;
 
     /**
      * Get sample count for a specific bucket
@@ -139,11 +138,23 @@ class Histogram {
 
     [[nodiscard]] int bucket_lower_us(int idx) const noexcept {
         if (idx < 0 || idx >= bucket_count) return 0;
-        return idx * hist_.bucket_width_us;
+        // Find which tier this bucket belongs to
+        for (int i = 0; i < hist_.tier_count; i++) {
+            int next_tier_base = (i + 1 < hist_.tier_count) ? hist_.tier_base_bucket[i + 1] : bucket_count;
+            if (idx >= hist_.tier_base_bucket[i] && idx < next_tier_base) {
+                int bucket_in_tier = idx - hist_.tier_base_bucket[i];
+                return hist_.tier_start_us[i] + bucket_in_tier * hist_.tier_width_us[i];
+            }
+        }
+        return 0;
     }
+
     [[nodiscard]] int bucket_upper_us(int idx) const noexcept {
-        if (idx < 0 || idx >= bucket_count) return 0;
-        return (idx + 1) * hist_.bucket_width_us;
+        return aura_histogram_bucket_upper_bound_us(&hist_, idx);
+    }
+
+    [[nodiscard]] int bucket_upper_bound_us(int idx) const noexcept {
+        return aura_histogram_bucket_upper_bound_us(&hist_, idx);
     }
 
     /**

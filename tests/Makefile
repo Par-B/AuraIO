@@ -11,7 +11,7 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../engine/lib'
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
 
-TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage test_metadata_ops test_spill_stress
+TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage test_metadata_ops test_spill_stress test_histogram
 CPP_TESTS = test_cpp
 
 .PHONY: all build-tests
@@ -65,6 +65,12 @@ test_coverage: test_coverage.c ../engine/lib/libaura.a
 
 test_metadata_ops: test_metadata_ops.c ../engine/lib/libaura.a
 	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
+
+test_histogram: test_histogram.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
+
+bench_histogram: bench_histogram.c ../engine/lib/libaura.a
+	$(CC) $(CFLAGS) -O2 $< -o $@ ../engine/lib/libaura.a $(LDFLAGS) $(RPATH)
 
 # ============================================================================
 # C++ Tests
@@ -235,7 +241,7 @@ valgrind-quick: $(TESTS)
 # ============================================================================
 # ThreadSanitizer tests (requires rebuild with TSAN)
 # ============================================================================
-TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan test_concurrency_stress_tsan test_otel_tsan test_coverage_tsan test_spill_stress_tsan
+TSAN_TESTS = test_engine_tsan test_buffer_tsan test_ring_tsan test_stats_tsan test_ring_select_tsan test_concurrency_stress_tsan test_otel_tsan test_coverage_tsan test_spill_stress_tsan test_histogram_tsan
 
 tsan: $(TSAN_TESTS)
 	@echo "Running ThreadSanitizer tests..."
@@ -298,10 +304,13 @@ test_coverage_tsan: test_coverage.c ../engine/lib/libaura_tsan.a
 test_spill_stress_tsan: test_spill_stress.c ../engine/lib/libaura_tsan.a
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
 
+test_histogram_tsan: test_histogram.c ../engine/lib/libaura_tsan.a
+	$(CC) $(CFLAGS) $(TSAN_FLAGS) $< -o $@ ../engine/lib/libaura_tsan.a -luring -lpthread
+
 # ============================================================================
 # AddressSanitizer tests (requires rebuild with ASAN)
 # ============================================================================
-ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan test_concurrency_stress_asan test_otel_asan test_coverage_asan test_spill_stress_asan
+ASAN_TESTS = test_engine_asan test_buffer_asan test_ring_asan test_stats_asan test_ring_select_asan test_concurrency_stress_asan test_otel_asan test_coverage_asan test_spill_stress_asan test_histogram_asan
 
 asan: $(ASAN_TESTS)
 	@echo "Running AddressSanitizer tests..."
@@ -340,8 +349,11 @@ test_coverage_asan: test_coverage.c ../engine/lib/libaura_asan.a
 test_spill_stress_asan: test_spill_stress.c ../engine/lib/libaura_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
+test_histogram_asan: test_histogram.c ../engine/lib/libaura_asan.a
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
+
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value bench_histogram $(TSAN_TESTS) $(ASAN_TESTS)
 
 # ============================================================================
 # Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)

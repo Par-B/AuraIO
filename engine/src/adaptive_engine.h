@@ -53,14 +53,12 @@ static inline double atomic_load_double(const _Atomic uint64_t *a, memory_order 
  *
  * Key design decisions:
  *
- * 1. 10ms Latency Guard (LATENCY_MAX_US, ADAPTIVE_DEFAULT_LATENCY_GUARD):
- *    Any I/O operation taking longer than 10ms indicates either a heavily
- *    saturated device or a failing storage system. Modern NVMe SSDs complete
- *    random reads in 50-100µs; even QD256 should stay under 5ms. If your
- *    workload consistently sees >10ms latencies, either the device is
- *    fundamentally too slow for performance-critical work, or something is
- *    wrong (thermal throttling, firmware bugs, etc.). The library backs off
- *    aggressively when hitting this ceiling.
+ * 1. 50ms Latency Guard (ADAPTIVE_DEFAULT_LATENCY_GUARD):
+ *    The default guard is 50ms to accommodate NFS and network storage where
+ *    latencies routinely exceed 10ms. For NVMe SSDs (50-200µs typical), the
+ *    dynamic guard (baseline_p99 * LATENCY_GUARD_MULT) converges to a much
+ *    lower threshold automatically. The histogram tracks up to 100ms across
+ *    4 tiers with variable bucket widths for both NVMe and NFS workloads.
  *
  * 2. 20% Multiplicative Decrease (ADAPTIVE_AIMD_DECREASE = 0.80):
  *    Standard AIMD uses 50% decrease (TCP Reno). We use a gentler 20% cut
@@ -150,13 +148,11 @@ _Static_assert(ADAPTIVE_MAX_SAMPLE_WINDOW_MS >= ADAPTIVE_MIN_SAMPLE_WINDOW_MS,
 
 /** Default latency guard in milliseconds. Hard ceiling on acceptable P99.
  *
- *  Rationale: No modern storage device should take >10ms for an I/O operation
- *  under normal conditions. NVMe SSDs: 50-200µs typical, <5ms at saturation.
- *  SATA SSDs: 100-500µs typical, <8ms at saturation. If operations consistently
- *  exceed 10ms, the device is either unsuitable for performance-critical
- *  workloads or experiencing problems. Users of AuraIO expect performance;
- *  this guard triggers aggressive backoff to prevent latency blowup. */
-#define ADAPTIVE_DEFAULT_LATENCY_GUARD 10.0
+ *  50ms covers NFS/network storage where latencies routinely exceed 10ms.
+ *  NVMe SSDs (50-200µs typical) will converge to a much lower dynamic guard
+ *  via the baseline_p99 * LATENCY_GUARD_MULT mechanism. This default only
+ *  applies before baseline is established. */
+#define ADAPTIVE_DEFAULT_LATENCY_GUARD 50.0
 
 /** Settling phase duration in ticks. After backoff, wait 10 ticks (100ms)
  *  for metrics to stabilize before resuming PROBING. */
@@ -173,23 +169,100 @@ _Static_assert(ADAPTIVE_MAX_SAMPLE_WINDOW_MS >= ADAPTIVE_MIN_SAMPLE_WINDOW_MS,
 
 /* Histogram configuration:
  *
- * The histogram tracks latencies from 0 to 10ms in 50µs buckets (200 buckets).
- * This provides sufficient resolution for P99 calculation while keeping the
- * histogram compact. Operations exceeding 10ms go into the overflow bucket
- * and are counted against the latency guard.
+ * Tiered histogram covering 0-100ms with variable bucket widths:
+ *   Tier 0: 0-1ms    @ 10µs  (100 buckets)  — NVMe-class latencies
+ *   Tier 1: 1-5ms    @ 50µs  (80 buckets)   — SSD saturation
+ *   Tier 2: 5-20ms   @ 250µs (60 buckets)   — HDD / slow SSD
+ *   Tier 3: 20-100ms @ 1ms   (80 buckets)   — NFS / network storage
+ *
+ * Total: 320 buckets (~1.3KB per histogram).
+ * Operations exceeding 100ms go into the overflow bucket.
  */
 
-/** Latency bucket width in microseconds. 50µs granularity is sufficient for
- *  P99 calculation and matches NVMe command timing precision. */
-#define LATENCY_BUCKET_WIDTH_US 50
+/** Number of tiers in the latency histogram. */
+#define LATENCY_TIER_COUNT 4
 
-/** Maximum tracked latency in microseconds. Operations taking longer than
- *  10ms are counted in overflow and trigger latency guard. See rationale
- *  for ADAPTIVE_DEFAULT_LATENCY_GUARD above. */
-#define LATENCY_MAX_US 10000
+/** Total number of histogram buckets across all tiers. */
+#define LATENCY_TIERED_BUCKET_COUNT 320
 
-/** Number of histogram buckets. Derived from max latency and bucket width. */
-#define LATENCY_BUCKET_COUNT (LATENCY_MAX_US / LATENCY_BUCKET_WIDTH_US)
+/** Maximum tracked latency in microseconds (100ms). */
+#define LATENCY_TIERED_MAX_US 100000
+
+/* Legacy aliases used by some internal code */
+#define LATENCY_BUCKET_COUNT LATENCY_TIERED_BUCKET_COUNT
+#define LATENCY_MAX_US LATENCY_TIERED_MAX_US
+
+/**
+ * Tier descriptor: defines a contiguous range of histogram buckets
+ * with uniform width within the tier.
+ */
+typedef struct {
+    int start_us;     /**< Lower bound of tier in microseconds */
+    int width_us;     /**< Bucket width within this tier */
+    int bucket_count; /**< Number of buckets in this tier */
+    int base_bucket;  /**< Index of first bucket in this tier */
+} latency_tier_t;
+
+/** Tier definitions (compile-time constant). */
+static const latency_tier_t LATENCY_TIERS[LATENCY_TIER_COUNT] = {
+    {.start_us = 0, .width_us = 10, .bucket_count = 100, .base_bucket = 0},
+    {.start_us = 1000, .width_us = 50, .bucket_count = 80, .base_bucket = 100},
+    {.start_us = 5000, .width_us = 250, .bucket_count = 60, .base_bucket = 180},
+    {.start_us = 20000, .width_us = 1000, .bucket_count = 80, .base_bucket = 240},
+};
+
+/**
+ * Map a latency in microseconds to a histogram bucket index.
+ *
+ * Returns -1 if the latency exceeds the maximum tracked range (overflow).
+ * Negative latencies are clamped to 0.
+ */
+static inline int latency_us_to_bucket(int64_t latency_us) {
+    if (latency_us < 0) latency_us = 0;
+    /* Reverse-scan tiers (most NVMe ops land in tier 0, but checking
+     * from high to low lets us use a single comparison per tier). */
+    for (int t = LATENCY_TIER_COUNT - 1; t >= 0; t--) {
+        const latency_tier_t *tier = &LATENCY_TIERS[t];
+        if (latency_us >= tier->start_us) {
+            int offset = (int)(latency_us - tier->start_us) / tier->width_us;
+            if (offset >= tier->bucket_count)
+                return -1; /* overflow (only possible for last tier) */
+            return tier->base_bucket + offset;
+        }
+    }
+    return 0; /* should not reach here */
+}
+
+/**
+ * Map a histogram bucket index back to the bucket midpoint in microseconds.
+ *
+ * Used for P99 reverse mapping: the midpoint is the best single-value
+ * estimate of the latencies that fell into this bucket.
+ */
+static inline double bucket_to_midpoint_us(int bucket) {
+    for (int t = LATENCY_TIER_COUNT - 1; t >= 0; t--) {
+        const latency_tier_t *tier = &LATENCY_TIERS[t];
+        if (bucket >= tier->base_bucket) {
+            int offset = bucket - tier->base_bucket;
+            return tier->start_us + (offset + 0.5) * tier->width_us;
+        }
+    }
+    return 0.0;
+}
+
+/**
+ * Get the upper bound of a histogram bucket in microseconds.
+ */
+static inline int bucket_upper_bound_us(int bucket) {
+    for (int t = LATENCY_TIER_COUNT - 1; t >= 0; t--) {
+        const latency_tier_t *tier = &LATENCY_TIERS[t];
+        if (bucket >= tier->base_bucket) {
+            int offset = bucket - tier->base_bucket;
+            return tier->start_us + (offset + 1) * tier->width_us;
+        }
+    }
+    return 0;
+}
 
 /* ============================================================================
  * Types

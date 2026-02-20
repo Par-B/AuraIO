@@ -203,13 +203,11 @@ void adaptive_hist_reset(adaptive_histogram_t *hist) {
 }
 
 void adaptive_hist_record(adaptive_histogram_t *hist, int64_t latency_us) {
-    if (latency_us < 0) latency_us = 0;
-
-    int64_t bucket64 = latency_us / LATENCY_BUCKET_WIDTH_US;
-    if (bucket64 >= LATENCY_BUCKET_COUNT) {
+    int bucket = latency_us_to_bucket(latency_us);
+    if (bucket < 0) {
         atomic_fetch_add_explicit(&hist->overflow, 1, memory_order_relaxed);
     } else {
-        atomic_fetch_add_explicit(&hist->buckets[(int)bucket64], 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&hist->buckets[bucket], 1, memory_order_relaxed);
     }
     /* Use release ordering on total_count so that a reader who does an
      * acquire load of total_count is guaranteed to see all preceding bucket
@@ -242,18 +240,17 @@ double adaptive_hist_p99(adaptive_histogram_t *hist) {
      * Use uint64_t accumulator to prevent overflow at extreme IOPS. */
     uint64_t count = atomic_load_explicit(&hist->overflow, memory_order_relaxed);
     if (count >= target) {
-        /* P99 is in overflow bucket (> 10ms).  Return 2x the max tracked
+        /* P99 is in overflow bucket (> 100ms).  Return 2x the max tracked
          * latency so it always exceeds any plausible guard threshold,
-         * triggering backoff even when baseline_p99 * guard_mult > 10ms. */
-        return (double)LATENCY_MAX_US * 2.0 / 1000.0;
+         * triggering backoff. */
+        return (double)LATENCY_TIERED_MAX_US * 2.0 / 1000.0;
     }
 
     for (int i = LATENCY_BUCKET_COUNT - 1; i >= 0; i--) {
         count += atomic_load_explicit(&hist->buckets[i], memory_order_relaxed);
         if (count >= target) {
             /* P99 is in this bucket - return bucket midpoint in ms */
-            double bucket_mid_us = (i + 0.5) * LATENCY_BUCKET_WIDTH_US;
-            return bucket_mid_us / 1000.0;
+            return bucket_to_midpoint_us(i) / 1000.0;
         }
     }
 

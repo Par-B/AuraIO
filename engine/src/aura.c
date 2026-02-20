@@ -2277,8 +2277,8 @@ int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stat
 /* Verify public and internal histogram constants stay in sync */
 _Static_assert(AURA_HISTOGRAM_BUCKETS == LATENCY_BUCKET_COUNT,
                "Public AURA_HISTOGRAM_BUCKETS must match internal LATENCY_BUCKET_COUNT");
-_Static_assert(AURA_HISTOGRAM_BUCKET_WIDTH_US == LATENCY_BUCKET_WIDTH_US,
-               "Public AURA_HISTOGRAM_BUCKET_WIDTH_US must match internal LATENCY_BUCKET_WIDTH_US");
+_Static_assert(AURA_HISTOGRAM_TIER_COUNT == LATENCY_TIER_COUNT,
+               "Public AURA_HISTOGRAM_TIER_COUNT must match internal LATENCY_TIER_COUNT");
 
 /* Verify public phase constants match internal enum */
 _Static_assert(AURA_PHASE_BASELINE == ADAPTIVE_PHASE_BASELINE,
@@ -2368,8 +2368,13 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
     tmp.overflow = atomic_load_explicit(&active->overflow, memory_order_relaxed);
     uint64_t total = atomic_load_explicit(&active->total_count, memory_order_relaxed);
     tmp.total_count = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
-    tmp.bucket_width_us = LATENCY_BUCKET_WIDTH_US;
-    tmp.max_tracked_us = LATENCY_MAX_US;
+    tmp.max_tracked_us = LATENCY_TIERED_MAX_US;
+    tmp.tier_count = LATENCY_TIER_COUNT;
+    for (int t = 0; t < LATENCY_TIER_COUNT; t++) {
+        tmp.tier_start_us[t] = LATENCY_TIERS[t].start_us;
+        tmp.tier_width_us[t] = LATENCY_TIERS[t].width_us;
+        tmp.tier_base_bucket[t] = LATENCY_TIERS[t].base_bucket;
+    }
 
     ring_unlock(ring);
 
@@ -2452,13 +2457,32 @@ double aura_histogram_percentile(const aura_histogram_t *hist, double percentile
     for (int i = AURA_HISTOGRAM_BUCKETS - 1; i >= 0; i--) {
         count += hist->buckets[i];
         if (count >= target) {
-            /* Return bucket midpoint in milliseconds (consistent with internal p99
-             * and with all other latency fields in the API which use ms). */
-            double bucket_mid_us = (i + 0.5) * hist->bucket_width_us;
-            return bucket_mid_us / 1000.0;
+            /* Return bucket midpoint in ms using tier metadata for reverse mapping */
+            double mid_us = 0.0;
+            for (int t = hist->tier_count - 1; t >= 0; t--) {
+                if (i >= hist->tier_base_bucket[t]) {
+                    int offset = i - hist->tier_base_bucket[t];
+                    mid_us = hist->tier_start_us[t] + (offset + 0.5) * hist->tier_width_us[t];
+                    break;
+                }
+            }
+            return mid_us / 1000.0;
         }
     }
 
     /* Bucket sum didn't reach target — likely a snapshot inconsistency */
     return -1.0;
+}
+
+int aura_histogram_bucket_upper_bound_us(const aura_histogram_t *hist, int bucket) {
+    if (!hist || bucket < 0 || bucket >= AURA_HISTOGRAM_BUCKETS) {
+        return 0;
+    }
+    for (int t = hist->tier_count - 1; t >= 0; t--) {
+        if (bucket >= hist->tier_base_bucket[t]) {
+            int offset = bucket - hist->tier_base_bucket[t];
+            return hist->tier_start_us[t] + (offset + 1) * hist->tier_width_us[t];
+        }
+    }
+    return 0;
 }

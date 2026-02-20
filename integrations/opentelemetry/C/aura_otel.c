@@ -285,11 +285,15 @@ int aura_metrics_otel(aura_engine_t *engine, char *buf, size_t buf_size) {
             for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
                 uint64_t c = hist.buckets[b];
                 total_count += c;
-                double midpoint_s = ((double)b + 0.5) * hist.bucket_width_us / 1e6;
+                double upper_us = aura_histogram_bucket_upper_bound_us(&hist, b);
+                double width_us =
+                    (b > 0) ? upper_us - aura_histogram_bucket_upper_bound_us(&hist, b - 1)
+                            : upper_us;
+                double midpoint_s = (upper_us - width_us * 0.5) / 1e6;
                 sum_estimate += c * midpoint_s;
                 if (c > 0) {
-                    double lo = (double)b * hist.bucket_width_us / 1e6;
-                    double hi = (double)(b + 1) * hist.bucket_width_us / 1e6;
+                    double lo = (upper_us - width_us) / 1e6;
+                    double hi = upper_us / 1e6;
                     if (min_val < 0.0) min_val = lo;
                     max_val = hi;
                 }
@@ -313,7 +317,7 @@ int aura_metrics_otel(aura_engine_t *engine, char *buf, size_t buf_size) {
             OTEL_APPEND("\"explicitBounds\":[");
             for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
                 if (b > 0) OTEL_APPEND(",");
-                OTEL_APPEND("%.6f", (double)(b + 1) * hist.bucket_width_us / 1e6);
+                OTEL_APPEND("%.6f", aura_histogram_bucket_upper_bound_us(&hist, b) / 1e6);
             }
             OTEL_APPEND("],");
 
@@ -343,7 +347,7 @@ overflow:
     free(rs);
     errno = ENOBUFS;
     {
-        size_t estimate = written * 2 + 8192;
+        size_t estimate = written * 2 + 16384;
         return estimate > (size_t)INT_MAX ? INT_MIN : -(int)estimate;
     }
 }

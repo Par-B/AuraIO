@@ -197,12 +197,16 @@ int aura_metrics_prometheus(aura_engine_t *engine, char *buf, size_t buf_size) {
             for (int b = 0; b < AURA_HISTOGRAM_BUCKETS; b++) {
                 cumulative += hist.buckets[b];
                 /* Estimate sum using bucket midpoint */
-                double midpoint_s = ((double)b + 0.5) * hist.bucket_width_us / 1e6;
+                double upper_us = aura_histogram_bucket_upper_bound_us(&hist, b);
+                double width_us =
+                    (b > 0) ? upper_us - aura_histogram_bucket_upper_bound_us(&hist, b - 1)
+                            : upper_us;
+                double midpoint_s = (upper_us - width_us * 0.5) / 1e6;
                 sum_estimate += hist.buckets[b] * midpoint_s;
 
                 /* Only emit non-zero cumulative buckets to keep output compact */
                 if (cumulative > 0) {
-                    double le = (double)(b + 1) * hist.bucket_width_us / 1e6;
+                    double le = aura_histogram_bucket_upper_bound_us(&hist, b) / 1e6;
                     PROM_APPEND("aura_latency_seconds_bucket{ring=\"%d\",le=\"%.6f\"} %" PRIu64
                                 "\n",
                                 i, le, cumulative);

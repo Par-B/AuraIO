@@ -202,8 +202,8 @@ TEST(histogram_basic) {
     int rc = aura_get_histogram(engine, 0, &hist, sizeof(hist));
     assert(rc == 0);
 
-    assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
-    assert(hist.max_tracked_us == 10000);
+    assert(hist.tier_count == AURA_HISTOGRAM_TIER_COUNT);
+    assert(hist.max_tracked_us == 100000);
 
     aura_destroy(engine);
 }
@@ -214,7 +214,7 @@ TEST(histogram_null_engine) {
     int rc = aura_get_histogram(NULL, 0, &hist, sizeof(hist));
     assert(rc == -1);
     /* Struct should be unchanged when engine is NULL */
-    assert(hist.bucket_width_us == (int)0xFFFFFFFF);
+    assert(hist.tier_count == (int)0xFFFFFFFF);
 }
 
 TEST(histogram_null_output) {
@@ -238,18 +238,18 @@ TEST(histogram_out_of_range) {
     /* Negative index */
     int rc = aura_get_histogram(engine, -1, &hist, sizeof(hist));
     assert(rc == -1);
-    assert(hist.bucket_width_us == 0);
+    assert(hist.tier_count == 0);
     assert(hist.total_count == 0);
 
     /* One past end */
     rc = aura_get_histogram(engine, 1, &hist, sizeof(hist));
     assert(rc == -1);
-    assert(hist.bucket_width_us == 0);
+    assert(hist.tier_count == 0);
 
     /* Far out of range */
     rc = aura_get_histogram(engine, 999, &hist, sizeof(hist));
     assert(rc == -1);
-    assert(hist.bucket_width_us == 0);
+    assert(hist.tier_count == 0);
     assert(hist.total_count == 0);
 
     aura_destroy(engine);
@@ -469,8 +469,8 @@ TEST(histogram_after_io) {
     aura_histogram_t hist;
     aura_get_histogram(engine, 0, &hist, sizeof(hist));
 
-    assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
-    assert(hist.max_tracked_us == 10000);
+    assert(hist.tier_count == AURA_HISTOGRAM_TIER_COUNT);
+    assert(hist.max_tracked_us == 100000);
 
     /* With 16 ops, at least some samples should have been recorded.
      * The sampling rate is every 8th op, so we expect >= 1 sample. */
@@ -949,7 +949,7 @@ static void *stats_reader_thread(void *arg) {
 
             aura_histogram_t hist;
             aura_get_histogram(ctx->engine, i, &hist, sizeof(hist));
-            assert(hist.bucket_width_us == AURA_HISTOGRAM_BUCKET_WIDTH_US);
+            assert(hist.tier_count == AURA_HISTOGRAM_TIER_COUNT);
         }
 
         aura_buffer_stats_t bs;

@@ -308,13 +308,18 @@ typedef enum {
 
 An approximate snapshot of the active histogram window. Because the snapshot is read from a concurrently-written histogram, individual bucket values are atomic but `total_count` may differ slightly from the sum of buckets + overflow. When adaptive tuning is disabled (`disable_adaptive = true`), the histogram accumulates data indefinitely instead of being periodically reset.
 
+The histogram uses a tiered bucket layout to provide fine-grained resolution at low latencies while covering a wide range (0–100 ms). Use `aura_histogram_percentile()` for accurate percentile computation or `aura_histogram_bucket_upper_bound_us()` for bucket bounds.
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `buckets[200]` | `uint32_t[]` | Latency frequency buckets |
+| `buckets[320]` | `uint32_t[]` | Latency frequency buckets across 4 tiers |
 | `overflow` | `uint32_t` | Count of operations exceeding `max_tracked_us` |
 | `total_count` | `uint32_t` | Total samples in this snapshot |
-| `bucket_width_us` | `int` | Width of each bucket in microseconds |
-| `max_tracked_us` | `int` | Maximum tracked latency in microseconds |
+| `tier_count` | `int` | Number of tiers (4) |
+| `tier_start_us[4]` | `int` | Start latency of each tier in microseconds |
+| `tier_width_us[4]` | `int` | Bucket width for each tier in microseconds |
+| `tier_base_bucket[4]` | `int` | Starting bucket index for each tier |
+| `max_tracked_us` | `int` | Maximum tracked latency in microseconds (100,000 µs) |
 
 #### `aura_buffer_stats_t` -- Buffer Pool Stats
 
@@ -353,10 +358,17 @@ Used in `aura_ring_stats_t.aimd_phase`:
 
 | Macro | Value | Description |
 |-------|-------|-------------|
-| `AURA_HISTOGRAM_BUCKETS` | 200 | Number of histogram buckets |
-| `AURA_HISTOGRAM_BUCKET_WIDTH_US` | 50 | Bucket width in microseconds |
+| `AURA_HISTOGRAM_BUCKETS` | 320 | Total number of histogram buckets |
+| `AURA_HISTOGRAM_TIER_COUNT` | 4 | Number of tiers in the histogram |
+| `AURA_HISTOGRAM_MAX_US` | 100000 | Maximum tracked latency (100 ms) |
 
-Histogram range: 0 to 10,000 us (10 ms). Operations exceeding 10 ms are counted in `overflow`.
+**Tiered Layout:** The histogram covers 0–100 ms in 4 tiers with increasing bucket widths:
+- Tier 0: 0–1,250 µs, 10 µs width (125 buckets)
+- Tier 1: 1,250–6,250 µs, 50 µs width (100 buckets)
+- Tier 2: 6,250–31,250 µs, 250 µs width (100 buckets)
+- Tier 3: 31,250–100,000 µs, 1,000 µs width (69 buckets)
+
+Operations exceeding 100 ms are counted in `overflow`.
 
 ---
 
@@ -1125,7 +1137,7 @@ Check if the current thread is inside a completion callback. Useful for librarie
 double aura_histogram_percentile(const aura_histogram_t *hist, double percentile);
 ```
 
-Compute a latency percentile from a histogram snapshot. The histogram must have been obtained via `aura_get_histogram()`.
+Compute a latency percentile from a histogram snapshot. The histogram must have been obtained via `aura_get_histogram()`. **This is the preferred API for percentile computation.**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1133,6 +1145,23 @@ Compute a latency percentile from a histogram snapshot. The histogram must have 
 | `percentile` | `double` | Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99) |
 
 **Returns:** Latency in milliseconds, or -1.0 if histogram is empty or percentile is out of range.
+
+---
+
+##### `aura_histogram_bucket_upper_bound_us`
+
+```c
+int aura_histogram_bucket_upper_bound_us(const aura_histogram_t *hist, int bucket);
+```
+
+Get the upper bound latency in microseconds for a histogram bucket. Useful for manual bucket iteration or advanced integration scenarios.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `hist` | `const aura_histogram_t *` | Histogram snapshot |
+| `bucket` | `int` | Bucket index (0 to `AURA_HISTOGRAM_BUCKETS - 1`) |
+
+**Returns:** Upper bound in microseconds, or 0 if bucket index is out of range.
 
 ---
 
@@ -1509,8 +1538,7 @@ All defined in `<aura/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 
 | Constant | Value |
 |----------|-------|
-| `Histogram::bucket_count` | 200 |
-| `Histogram::bucket_width_us` | 50 |
+| `Histogram::bucket_count` | 320 |
 
 **Methods:**
 
@@ -1519,11 +1547,13 @@ All defined in `<aura/stats.hpp>`. All getters are `[[nodiscard]] noexcept`.
 | `bucket(int idx)` | `uint32_t` | Count at bucket index (0 for out-of-range) |
 | `overflow()` | `uint32_t` | Count exceeding max tracked latency |
 | `total_count()` | `uint32_t` | Total samples |
-| `max_tracked_us()` | `int` | Maximum tracked latency (us) |
+| `max_tracked_us()` | `int` | Maximum tracked latency (us, 100,000) |
 | `bucket_lower_us(int idx)` | `int` | Lower bound of bucket (us). 0 for out-of-range |
 | `bucket_upper_us(int idx)` | `int` | Upper bound of bucket (us). 0 for out-of-range |
-| `percentile(double pct)` | `double` | Compute percentile (0.0-100.0). Returns latency in ms, or -1.0 if empty/out-of-range |
+| `percentile(double pct)` | `double` | Compute percentile (0.0-100.0). **Preferred API.** Returns latency in ms, or -1.0 if empty/out-of-range |
 | `c_histogram()` | `const aura_histogram_t&` | Full C struct |
+
+**Notes:** The histogram uses a tiered bucket layout for fine-grained resolution at low latencies. Prefer `percentile()` for accurate percentile computation. Manual bucket iteration is supported for advanced integration scenarios.
 
 #### `aura::BufferStats`
 
@@ -1864,18 +1894,19 @@ Per-ring statistics snapshot. `Clone + Debug`.
 
 #### `aura::Histogram`
 
-Latency histogram snapshot. `Clone + Debug`.
+Latency histogram snapshot. `Clone + Debug`. Uses a tiered bucket layout for efficient fine-grained resolution.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `bucket(usize)` | `u32` | Count at bucket index |
 | `overflow()` | `u32` | Count exceeding max tracked latency |
 | `total_count()` | `u32` | Total samples |
-| `max_tracked_us()` | `i32` | Maximum tracked latency (us) |
-| `bucket_width_us()` | `i32` | Bucket width (us) |
+| `max_tracked_us()` | `i32` | Maximum tracked latency (100,000 µs / 100 ms) |
 | `bucket_lower_us(usize)` | `i32` | Lower bound of bucket (us) |
 | `bucket_upper_us(usize)` | `i32` | Upper bound of bucket (us) |
-| `percentile(f64)` | `Option<f64>` | Compute percentile (0.0-100.0). Returns `Some(latency_ms)` or `None` if empty/out-of-range |
+| `percentile(f64)` | `Option<f64>` | Compute percentile (0.0-100.0). **Preferred API.** Returns `Some(latency_ms)` or `None` if empty/out-of-range |
+
+**Notes:** Manual bucket iteration is supported for advanced integration scenarios. Prefer `percentile()` for accurate percentile computation.
 
 #### `aura::BufferStats`
 
