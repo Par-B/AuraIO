@@ -118,19 +118,20 @@ typedef struct {
     ino_t ino;
 } devino_t;
 
-typedef struct visited_entry {
-    devino_t key;
-    bool occupied;
-} visited_entry_t;
+/* Lock-free visited set using atomic CAS.
+   Each bucket stores an atomically-swapped 64-bit tag encoding dev+ino.
+   Tag 0 = empty.  We use a large, pre-allocated table to avoid rehashing. */
 
 typedef struct {
-    visited_entry_t *buckets;
+    atomic_uint_fast64_t *buckets; /* 0 = empty, non-zero = occupied tag */
+    devino_t *keys; /* parallel array storing actual dev/ino */
     size_t cap; /* always a power of 2 */
-    size_t count;
-    pthread_mutex_t lock;
+    atomic_size_t count;
 } visited_set_t;
 
-#define VISITED_INIT_CAP 64
+/* Pre-allocate for up to ~700k directories (1M * 70% load).
+   Each entry is 8 + 16 = 24 bytes, so 1M entries ≈ 24 MB. */
+#define VISITED_INIT_CAP (1 << 20) /* 1M buckets */
 #define VISITED_LOAD_MAX 70 /* percent */
 
 static uint64_t visited_hash(dev_t dev, ino_t ino) {
@@ -143,87 +144,73 @@ static uint64_t visited_hash(dev_t dev, ino_t ino) {
     return h;
 }
 
+/* Generate a non-zero tag from dev/ino for CAS.  If hash happens to be 0,
+   flip a bit so we never store the "empty" sentinel. */
+static uint64_t visited_tag(dev_t dev, ino_t ino) {
+    uint64_t h = visited_hash(dev, ino);
+    return h ? h : 1;
+}
+
 static bool visited_init(visited_set_t *vs) {
     vs->cap = VISITED_INIT_CAP;
-    vs->count = 0;
+    atomic_store(&vs->count, 0);
     vs->buckets = calloc(vs->cap, sizeof(*vs->buckets));
-    if (!vs->buckets) {
+    vs->keys = calloc(vs->cap, sizeof(*vs->keys));
+    if (!vs->buckets || !vs->keys) {
+        free(vs->buckets);
+        free(vs->keys);
         vs->cap = 0;
         return false;
     }
-    pthread_mutex_init(&vs->lock, NULL);
     return true;
 }
 
 static void visited_destroy(visited_set_t *vs) {
     free(vs->buckets);
-    pthread_mutex_destroy(&vs->lock);
+    free(vs->keys);
 }
 
-static bool visited_probe(visited_entry_t *buckets, size_t cap, dev_t dev, ino_t ino,
-                          size_t *out_idx) {
-    size_t mask = cap - 1;
-    size_t idx = (size_t)visited_hash(dev, ino) & mask;
-    for (size_t i = 0; i < cap; i++) {
-        if (!buckets[idx].occupied) {
-            *out_idx = idx;
-            return false; /* empty slot */
-        }
-        if (buckets[idx].key.dev == dev && buckets[idx].key.ino == ino) {
-            *out_idx = idx;
-            return true; /* found */
-        }
-        idx = (idx + 1) & mask;
-    }
-    /* Table completely full — should never happen due to load factor check */
-    *out_idx = (size_t)visited_hash(dev, ino) & mask;
-    return false;
-}
-
-static bool visited_grow(visited_set_t *vs) {
-    size_t newcap = vs->cap * 2;
-    visited_entry_t *newbuckets = calloc(newcap, sizeof(*newbuckets));
-    if (!newbuckets) return false;
-    for (size_t i = 0; i < vs->cap; i++) {
-        if (vs->buckets[i].occupied) {
-            size_t idx;
-            visited_probe(newbuckets, newcap, vs->buckets[i].key.dev, vs->buckets[i].key.ino, &idx);
-            newbuckets[idx] = vs->buckets[i];
-        }
-    }
-    free(vs->buckets);
-    vs->buckets = newbuckets;
-    vs->cap = newcap;
-    return true;
-}
-
-/* Returns true if newly inserted, false if already present. */
+/* Returns true if newly inserted, false if already present or table full. */
 static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
-    pthread_mutex_lock(&vs->lock);
-    if (!vs->buckets) {
-        pthread_mutex_unlock(&vs->lock);
+    if (!vs->buckets) return false;
+
+    /* Check load factor */
+    size_t cnt = atomic_load_explicit(&vs->count, memory_order_relaxed);
+    if (cnt * 100 / vs->cap >= VISITED_LOAD_MAX) {
+        fprintf(stderr, "atree: warning: visited set full, skipping subtree\n");
         return false;
     }
-    size_t idx;
-    if (visited_probe(vs->buckets, vs->cap, dev, ino, &idx)) {
-        pthread_mutex_unlock(&vs->lock);
-        return false; /* already present */
-    }
-    /* Grow if load factor exceeded */
-    if (vs->count * 100 / vs->cap >= VISITED_LOAD_MAX) {
-        if (!visited_grow(vs)) {
-            pthread_mutex_unlock(&vs->lock);
-            fprintf(stderr, "atree: warning: visited set OOM, skipping subtree\n");
-            return false; /* treat as visited on OOM */
+
+    uint64_t tag = visited_tag(dev, ino);
+    size_t mask = vs->cap - 1;
+    size_t idx = (size_t)visited_hash(dev, ino) & mask;
+
+    for (size_t i = 0; i < vs->cap; i++) {
+        uint64_t cur = atomic_load_explicit(&vs->buckets[idx], memory_order_acquire);
+
+        if (cur == 0) {
+            /* Empty slot — try to claim it */
+            uint64_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(&vs->buckets[idx], &expected, tag,
+                                                        memory_order_acq_rel,
+                                                        memory_order_acquire)) {
+                /* Won the slot — store the full key */
+                vs->keys[idx] = (devino_t){ .dev = dev, .ino = ino };
+                atomic_fetch_add_explicit(&vs->count, 1, memory_order_relaxed);
+                return true; /* newly inserted */
+            }
+            /* Lost the race — re-read cur from expected */
+            cur = expected;
         }
-        /* Re-probe after grow */
-        visited_probe(vs->buckets, vs->cap, dev, ino, &idx);
+
+        /* Slot is occupied — check if it's our key */
+        if (cur == tag && vs->keys[idx].dev == dev && vs->keys[idx].ino == ino) {
+            return false; /* already present */
+        }
+
+        idx = (idx + 1) & mask;
     }
-    vs->buckets[idx].key = (devino_t){ .dev = dev, .ino = ino };
-    vs->buckets[idx].occupied = true;
-    vs->count++;
-    pthread_mutex_unlock(&vs->lock);
-    return true;
+    return false; /* table full */
 }
 
 // ============================================================================
@@ -263,6 +250,25 @@ static work_item_t *wip_alloc(work_item_pool_t *pool) {
     pthread_mutex_unlock(&pool->lock);
     if (!item) item = malloc(sizeof(*item));
     return item;
+}
+
+/* Bulk-steal up to max_count items from the shared pool in one lock acquisition.
+   Returns a linked list of items (via ->next), or NULL if pool is empty.
+   Sets *out_count to the number of items returned. */
+static work_item_t *wip_alloc_bulk(work_item_pool_t *pool, int max_count, int *out_count) {
+    pthread_mutex_lock(&pool->lock);
+    work_item_t *head = NULL;
+    int n = 0;
+    while (n < max_count && pool->free_list) {
+        work_item_t *item = pool->free_list;
+        pool->free_list = item->next;
+        item->next = head;
+        head = item;
+        n++;
+    }
+    pthread_mutex_unlock(&pool->lock);
+    *out_count = n;
+    return head;
 }
 
 static void wip_free(work_item_pool_t *pool, work_item_t *item) {
@@ -663,6 +669,21 @@ static void on_openat_complete(aura_request_t *req, ssize_t result, void *user_d
 }
 
 // ============================================================================
+// Async close completion context
+// ============================================================================
+
+typedef struct {
+    atomic_size_t remaining;
+} close_batch_t;
+
+static void on_close_complete(aura_request_t *req, ssize_t result, void *user_data) {
+    (void)req;
+    (void)result;
+    close_batch_t *batch = (close_batch_t *)user_data;
+    atomic_fetch_sub(&batch->remaining, 1);
+}
+
+// ============================================================================
 // Worker thread
 // ============================================================================
 
@@ -681,7 +702,17 @@ static work_item_t *local_alloc(local_freelist_t *lfl, work_item_pool_t *shared)
         lfl->count--;
         return item;
     }
-    return wip_alloc(shared);
+    /* Bulk-steal from shared pool to refill local freelist */
+    int stolen = 0;
+    work_item_t *batch = wip_alloc_bulk(shared, LOCAL_FREELIST_MAX / 2, &stolen);
+    if (batch) {
+        /* Return first item, put rest on local freelist */
+        work_item_t *item = batch;
+        lfl->head = item->next;
+        lfl->count = stolen - 1;
+        return item;
+    }
+    return malloc(sizeof(work_item_t));
 }
 
 static void local_freelist_drain(local_freelist_t *lfl, work_item_pool_t *shared) {
@@ -837,9 +868,18 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
         }
     }
 
-    /* --- Phase 4: Cleanup — close fds and prune non-directories --- */
+    /* --- Phase 4: Cleanup — async close fds and prune non-directories --- */
+    close_batch_t cbatch;
+    atomic_store(&cbatch.remaining, 0);
     for (size_t i = 0; i < ndirs; i++) {
-        if (octxs[i].fd >= 0) close(octxs[i].fd);
+        if (octxs[i].fd >= 0) {
+            atomic_fetch_add(&cbatch.remaining, 1);
+            aura_request_t *req = aura_close(engine, octxs[i].fd, on_close_complete, &cbatch);
+            if (!req) {
+                atomic_fetch_sub(&cbatch.remaining, 1);
+                close(octxs[i].fd); /* sync fallback */
+            }
+        }
 
         if (config->dirs_only) {
             size_t dst = 0;
@@ -852,6 +892,13 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
                 }
             }
             dirs[i]->num_children = dst;
+        }
+    }
+
+    /* Drain async close completions */
+    while (atomic_load(&cbatch.remaining) > 0) {
+        if (aura_poll(engine) == 0) {
+            aura_wait(engine, 1);
         }
     }
 }
