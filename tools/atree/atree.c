@@ -680,7 +680,9 @@ static size_t wq_push_batch(work_queue_t *wq, work_item_t *head, work_item_t *ta
     if (wq->tail) wq->tail->next = head;
     else wq->head = head;
     wq->tail = tail;
-    pthread_cond_broadcast(&wq->cond);
+    /* Wake one worker for a single item, all workers for a real batch */
+    if (count == 1) pthread_cond_signal(&wq->cond);
+    else pthread_cond_broadcast(&wq->cond);
     pthread_mutex_unlock(&wq->lock);
     return count;
 }
