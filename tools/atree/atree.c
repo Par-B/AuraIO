@@ -429,7 +429,11 @@ static int fmt_size_human(char *buf, uint64_t bytes, uint64_t unit, char suffix)
 }
 
 static void format_size(char *buf, size_t bufsz, uint64_t bytes, bool raw) {
-    (void)bufsz;
+    /* Max output: 20-digit integer + ".XS" + NUL = 24 bytes */
+    if (bufsz < 24) {
+        buf[0] = '\0';
+        return;
+    }
     if (raw) {
         int n = fmt_i64(buf, (int64_t)bytes);
         buf[n] = '\0';
@@ -483,18 +487,20 @@ typedef struct {
 static void format_date(char *buf, size_t bufsz, const struct statx_timestamp *ts,
                         date_cache_t *dc) {
     time_t t = (time_t)ts->tv_sec;
-    time_t day = t - (t % 86400); /* truncate to day */
-    if (dc->valid && dc->cached_day == day) {
-        memcpy(buf, dc->cached_str, 11);
-        return;
-    }
     struct tm tm;
     if (!localtime_r(&t, &tm)) {
         snprintf(buf, bufsz, "----/--/--");
         return;
     }
+    /* Cache key uses local date (y/m/d) to avoid timezone mismatches
+       when the UTC day boundary differs from the local one. */
+    time_t local_day = (time_t)tm.tm_year * 400 + tm.tm_yday;
+    if (dc->valid && dc->cached_day == local_day) {
+        memcpy(buf, dc->cached_str, 11);
+        return;
+    }
     strftime(buf, bufsz, "%Y-%m-%d", &tm);
-    dc->cached_day = day;
+    dc->cached_day = local_day;
     memcpy(dc->cached_str, buf, 11);
     dc->valid = true;
 }
