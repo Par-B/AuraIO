@@ -1422,6 +1422,7 @@ typedef struct {
     int depth;
     ssize_t child_idx; /* next visible child to process; -1 = node not yet printed */
     size_t prefix_pos; /* position in prefix buffer when this frame was pushed */
+    size_t last_visible_child; /* index of last visible child (precomputed) */
 } print_frame_t;
 
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
@@ -1448,7 +1449,7 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             continue;
         }
 
-        /* First visit: print the node itself */
+        /* First visit: print the node itself and precompute last visible child */
         if (frame->child_idx == -1) {
             /* Ensure prefix is null-terminated at this frame's position */
             if (line_buf_ensure(&pb, frame->prefix_pos + 1)) {
@@ -1457,6 +1458,14 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             emit_node(node, config, cs, pb.buf, frame->is_last, frame->depth, file_count, dir_count,
                       uid_cache, gid_cache, &lb);
             frame->child_idx = 0;
+            /* Find last visible child index once (avoids O(n²) forward scan) */
+            frame->last_visible_child = 0;
+            for (size_t k = node->num_children; k > 0; k--) {
+                if (!config->dirs_only || node->children[k - 1]->is_dir) {
+                    frame->last_visible_child = k - 1;
+                    break;
+                }
+            }
         }
 
         /* If not a dir or at max_depth, we're done */
@@ -1479,14 +1488,8 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
 
         frame->child_idx = (ssize_t)(ci + 1);
 
-        /* Determine if this child is the last visible one */
-        bool child_is_last = true;
-        for (size_t j = ci + 1; j < node->num_children; j++) {
-            if (!config->dirs_only || node->children[j]->is_dir) {
-                child_is_last = false;
-                break;
-            }
-        }
+        /* O(1) check using precomputed last visible child index */
+        bool child_is_last = (ci >= frame->last_visible_child);
 
         /* Incrementally extend prefix for the child: append this frame's
            connector segment (space or │) at frame->prefix_pos.
