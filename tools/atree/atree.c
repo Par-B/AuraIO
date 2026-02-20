@@ -188,6 +188,7 @@ static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
     if (vs->count * 100 / vs->cap >= VISITED_LOAD_MAX) {
         if (!visited_grow(vs)) {
             pthread_mutex_unlock(&vs->lock);
+            fprintf(stderr, "atree: warning: visited set OOM, skipping subtree\n");
             return false; /* treat as visited on OOM */
         }
         /* Re-probe after grow */
@@ -553,6 +554,22 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
     }
 
     free(batch);
+
+    /* When dirs_only is set, DT_UNKNOWN entries were kept for statx.  Now that
+       statx has resolved their types, prune any that turned out non-directory. */
+    if (config->dirs_only) {
+        size_t dst = 0;
+        for (size_t i = 0; i < dir_node->num_children; i++) {
+            tree_node_t *c = dir_node->children[i];
+            if (c->is_dir) {
+                dir_node->children[dst++] = c;
+            } else {
+                node_free(c);
+            }
+        }
+        dir_node->num_children = dst;
+    }
+
     return g_interrupted ? -1 : 0;
 }
 
