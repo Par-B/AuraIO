@@ -349,16 +349,16 @@ static void format_date(char *buf, size_t bufsz, const struct statx_timestamp *t
 // ============================================================================
 
 static tree_node_t *node_create(const char *name, const char *full_path) {
-    tree_node_t *n = calloc(1, sizeof(*n));
+    size_t name_len = strlen(name);
+    size_t path_len = strlen(full_path);
+    tree_node_t *n = calloc(1, sizeof(*n) + name_len + 1 + path_len + 1);
     if (!n) return NULL;
-    n->name = strdup(name);
-    n->full_path = strdup(full_path);
-    if (!n->name || !n->full_path) {
-        free(n->name);
-        free(n->full_path);
-        free(n);
-        return NULL;
-    }
+    char *buf = (char *)(n + 1);
+    memcpy(buf, name, name_len + 1);
+    n->name = buf;
+    buf += name_len + 1;
+    memcpy(buf, full_path, path_len + 1);
+    n->full_path = buf;
     return n;
 }
 
@@ -381,8 +381,6 @@ static void node_free_recursive(tree_node_t *n, int depth) {
     }
     /* Children beyond depth 1000 leak to avoid stack overflow */
     free(n->children);
-    free(n->name);
-    free(n->full_path);
     free(n);
 }
 
@@ -422,8 +420,6 @@ static void node_free(tree_node_t *n) {
         } else {
             sp--;
             free(cur->children);
-            free(cur->name);
-            free(cur->full_path);
             free(cur);
         }
     }
