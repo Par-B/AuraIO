@@ -44,9 +44,14 @@
 
 #define MAX_WORKERS 8
 #define STATX_BATCH 64
-#define STATX_MASK                                                                            \
+#define AURA_STATX_MASK                                                                       \
     (AURA_STATX_MODE | AURA_STATX_SIZE | AURA_STATX_MTIME | AURA_STATX_UID | AURA_STATX_GID | \
      AURA_STATX_NLINK | AURA_STATX_INO)
+
+/* Kernel statx mask for synchronous fallback — uses kernel constants directly
+   rather than AURA_STATX_* to avoid any potential value mismatch. */
+#define KERNEL_STATX_MASK \
+    (STATX_MODE | STATX_SIZE | STATX_MTIME | STATX_UID | STATX_GID | STATX_NLINK | STATX_INO)
 
 // ============================================================================
 // Configuration
@@ -218,11 +223,11 @@ typedef struct {
 // Global state
 // ============================================================================
 
-static atomic_int g_interrupted = 0;
+static volatile sig_atomic_t g_interrupted = 0;
 
 static void sigint_handler(int sig) {
     (void)sig;
-    atomic_store(&g_interrupted, 1);
+    g_interrupted = 1;
 }
 
 // ============================================================================
@@ -478,6 +483,11 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
         if (!config->show_hidden && ent->d_name[0] == '.') continue;
 
+        /* When showing directories only, skip entries that dirent reports as
+           non-directories.  DT_UNKNOWN means the filesystem didn't provide a
+           type (e.g. XFS, some network FS), so we must keep those for statx. */
+        if (config->dirs_only && ent->d_type != DT_DIR && ent->d_type != DT_UNKNOWN) continue;
+
         char path[PATH_MAX];
         int plen = snprintf(path, sizeof(path), "%s/%s", dir_node->full_path, ent->d_name);
         if (plen < 0 || (size_t)plen >= sizeof(path)) continue; /* path too long */
@@ -486,7 +496,6 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         if (!child) continue;
         child->depth = depth + 1;
 
-        /* Quick type hint from dirent to avoid statx for dirs_only filtering later */
         if (ent->d_type == DT_DIR) child->is_dir = true;
 
         if (!node_add_child(dir_node, child)) {
@@ -520,14 +529,15 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         ctx->batch = batch;
 
         aura_request_t *req =
-            aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW, STATX_MASK,
-                       &child->st, on_statx_complete, ctx);
+            aura_statx(engine, AT_FDCWD, child->full_path, AURA_AT_SYMLINK_NOFOLLOW,
+                       AURA_STATX_MASK, &child->st, on_statx_complete, ctx);
         if (!req) {
             free(ctx);
             atomic_fetch_sub(&batch->remaining, 1);
             /* Fallback: synchronous statx */
             struct statx stx;
-            if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW, STATX_MASK, &stx) == 0) {
+            if (statx(AT_FDCWD, child->full_path, AT_SYMLINK_NOFOLLOW, KERNEL_STATX_MASK, &stx) ==
+                0) {
                 child->st = stx;
                 child->is_dir = S_ISDIR(stx.stx_mode);
             }
@@ -543,7 +553,7 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
     }
 
     free(batch);
-    return atomic_load(&g_interrupted) ? -1 : 0;
+    return g_interrupted ? -1 : 0;
 }
 
 // ============================================================================
@@ -590,7 +600,7 @@ static bool wq_push(work_queue_t *wq, tree_node_t *node) {
 
 static tree_node_t *wq_pop(work_queue_t *wq) {
     pthread_mutex_lock(&wq->lock);
-    while (!wq->head && !wq->done && !atomic_load(&g_interrupted)) {
+    while (!wq->head && !wq->done && !g_interrupted) {
         /* Use a short timeout so we can poll g_interrupted periodically */
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -646,7 +656,7 @@ static void *worker_fn(void *arg) {
         fprintf(stderr, "atree: worker %d: failed to create engine: %s\n", wctx->worker_id,
                 strerror(errno));
         /* Drain queue to avoid hanging — decrement pending for each item */
-        while (!atomic_load(&g_interrupted)) {
+        while (!g_interrupted) {
             tree_node_t *node = wq_pop(wctx->wq);
             if (!node) break;
             if (atomic_fetch_sub(&wctx->wq->pending, 1) == 1) {
@@ -656,7 +666,7 @@ static void *worker_fn(void *arg) {
         return NULL;
     }
 
-    while (!atomic_load(&g_interrupted)) {
+    while (!g_interrupted) {
         tree_node_t *node = wq_pop(wctx->wq);
         if (!node) break;
 
@@ -771,6 +781,13 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
             num_workers = i;
             break;
         }
+    }
+
+    if (num_workers == 0) {
+        fprintf(stderr, "atree: failed to start any worker threads\n");
+        wq_destroy(&wq);
+        visited_destroy(&visited);
+        return -1;
     }
 
     for (int i = 0; i < num_workers; i++) {
@@ -1278,7 +1295,9 @@ int main(int argc, char **argv) {
 
     /* Stat the root */
     struct statx root_st;
-    if (statx(AT_FDCWD, config.root_path, 0, STATX_MASK, &root_st) != 0) {
+    /* Root stat follows symlinks (consistent with tree(1) behavior), but child
+       entries use AT_SYMLINK_NOFOLLOW so symlink targets are displayed as links. */
+    if (statx(AT_FDCWD, config.root_path, 0, KERNEL_STATX_MASK, &root_st) != 0) {
         fprintf(stderr, "atree: cannot stat '%s': %s\n", config.root_path, strerror(errno));
         return 1;
     }
@@ -1300,7 +1319,7 @@ int main(int argc, char **argv) {
 
     if (scan_tree(root, &config) != 0) {
         node_free(root);
-        if (atomic_load(&g_interrupted)) {
+        if (g_interrupted) {
             fprintf(stderr, "\natree: interrupted\n");
             return 130;
         }
