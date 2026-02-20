@@ -34,6 +34,7 @@
 #include <sched.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 #include <aura.h>
 
@@ -45,7 +46,7 @@
 #define STATX_BATCH 64
 #define STATX_MASK                                                                            \
     (AURA_STATX_MODE | AURA_STATX_SIZE | AURA_STATX_MTIME | AURA_STATX_UID | AURA_STATX_GID | \
-     AURA_STATX_NLINK)
+     AURA_STATX_NLINK | AURA_STATX_INO)
 
 // ============================================================================
 // Configuration
@@ -455,13 +456,12 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
     /* Skip scanning beyond max_depth — no children to enumerate */
     if (config->max_depth >= 0 && depth >= config->max_depth) return 0;
 
-    /* Cycle detection: skip directories we've already visited (symlink loops) */
+    /* Cycle detection: skip directories we've already visited (symlink loops).
+       Use dev/ino from the statx result to avoid a redundant stat() syscall. */
     if (visited) {
-        struct stat sb;
-        if (stat(dir_node->full_path, &sb) == 0) {
-            if (!visited_insert(visited, sb.st_dev, sb.st_ino)) {
-                return 0; /* already visited */
-            }
+        dev_t dev = makedev(dir_node->st.stx_dev_major, dir_node->st.stx_dev_minor);
+        if (!visited_insert(visited, dev, dir_node->st.stx_ino)) {
+            return 0; /* already visited */
         }
     }
 
@@ -645,6 +645,14 @@ static void *worker_fn(void *arg) {
     if (!engine) {
         fprintf(stderr, "atree: worker %d: failed to create engine: %s\n", wctx->worker_id,
                 strerror(errno));
+        /* Drain queue to avoid hanging — decrement pending for each item */
+        while (!atomic_load(&g_interrupted)) {
+            tree_node_t *node = wq_pop(wctx->wq);
+            if (!node) break;
+            if (atomic_fetch_sub(&wctx->wq->pending, 1) == 1) {
+                wq_signal_done(wctx->wq);
+            }
+        }
         return NULL;
     }
 
@@ -786,7 +794,10 @@ typedef struct {
 static void aggregate(tree_node_t *root) {
     size_t cap = 256;
     agg_frame_t *stack = malloc(cap * sizeof(*stack));
-    if (!stack) return;
+    if (!stack) {
+        fprintf(stderr, "atree: warning: aggregate failed: out of memory\n");
+        return;
+    }
     size_t sp = 0;
     stack[sp++] = (agg_frame_t){ .node = root, .child_idx = -1 };
 
@@ -1277,12 +1288,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Build tree — resolve display name to canonical path */
+    /* Build tree — resolve to canonical path for both display and I/O */
     char resolved[PATH_MAX];
     const char *display_name = config.root_path;
     if (realpath(config.root_path, resolved)) display_name = resolved;
 
-    tree_node_t *root = node_create(display_name, config.root_path);
+    tree_node_t *root = node_create(display_name, display_name);
     if (!root) return 1;
     root->st = root_st;
     root->is_dir = true;

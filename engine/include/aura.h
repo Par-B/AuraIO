@@ -464,6 +464,7 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 #define AURA_STATX_ATIME 0x20U   /**< Request stx_atime */
 #define AURA_STATX_MTIME 0x40U   /**< Request stx_mtime */
 #define AURA_STATX_CTIME 0x80U   /**< Request stx_ctime */
+#define AURA_STATX_INO 0x100U    /**< Request stx_ino */
 #define AURA_STATX_SIZE 0x200U   /**< Request stx_size */
 #define AURA_STATX_BLOCKS 0x400U /**< Request stx_blocks */
 #define AURA_STATX_ALL 0xFFFU    /**< Request all basic fields */
