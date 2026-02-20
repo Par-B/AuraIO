@@ -425,8 +425,7 @@ static void node_free(tree_node_t *n) {
 // ============================================================================
 
 typedef struct {
-    atomic_int remaining;
-    atomic_bool abandoned; /* set by caller when bailing on interruption */
+    atomic_size_t remaining;
 } statx_batch_t;
 
 typedef struct {
@@ -440,13 +439,7 @@ static void on_statx_complete(aura_request_t *req, ssize_t result, void *user_da
     if (result == 0) {
         ctx->node->is_dir = S_ISDIR(ctx->node->st.stx_mode);
     }
-    /* If we're the last completion and the caller abandoned us,
-       free the shared batch struct. */
-    if (atomic_fetch_sub(&ctx->batch->remaining, 1) == 1) {
-        if (atomic_load(&ctx->batch->abandoned)) {
-            free(ctx->batch);
-        }
-    }
+    atomic_fetch_sub(&ctx->batch->remaining, 1);
     free(ctx);
 }
 
@@ -477,6 +470,7 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
 
     /* First pass: read all entries and create child nodes */
     struct dirent *ent;
+    errno = 0;
     while ((ent = readdir(d)) != NULL) {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
         if (!config->show_hidden && ent->d_name[0] == '.') continue;
@@ -496,6 +490,10 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
             node_free(child);
             continue;
         }
+        errno = 0;
+    }
+    if (errno != 0) {
+        fprintf(stderr, "atree: error reading '%s': %s\n", dir_node->full_path, strerror(errno));
     }
     closedir(d);
 
@@ -505,8 +503,7 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
        outlive this function if we bail out of the drain loop early. */
     statx_batch_t *batch = malloc(sizeof(*batch));
     if (!batch) return -1;
-    atomic_store(&batch->remaining, (int)dir_node->num_children);
-    atomic_store(&batch->abandoned, false);
+    atomic_store(&batch->remaining, dir_node->num_children);
 
     for (size_t i = 0; i < dir_node->num_children; i++) {
         tree_node_t *child = dir_node->children[i];
@@ -534,21 +531,14 @@ static int scan_directory(tree_node_t *dir_node, aura_engine_t *engine, const co
         }
     }
 
-    /* Drain async completions. On interruption, mark the batch as abandoned
-       so the last in-flight callback frees it, and bail out immediately. */
+    /* Drain async completions. On interruption, we still must wait for all
+       in-flight completions before freeing the batch to avoid use-after-free. */
     while (atomic_load(&batch->remaining) > 0) {
-        if (atomic_load(&g_interrupted)) {
-            atomic_store(&batch->abandoned, true);
-            /* Re-check: if all completions finished before we set abandoned,
-               no callback will free the batch — we must do it ourselves. */
-            if (atomic_load(&batch->remaining) == 0) free(batch);
-            return -1;
-        }
         aura_wait(engine, 100);
     }
 
     free(batch);
-    return 0;
+    return atomic_load(&g_interrupted) ? -1 : 0;
 }
 
 // ============================================================================
@@ -563,6 +553,13 @@ static void wq_init(work_queue_t *wq) {
 }
 
 static void wq_destroy(work_queue_t *wq) {
+    /* Drain any remaining items (e.g., on interruption) */
+    work_item_t *item = wq->head;
+    while (item) {
+        work_item_t *next = item->next;
+        free(item);
+        item = next;
+    }
     pthread_mutex_destroy(&wq->lock);
     pthread_cond_destroy(&wq->cond);
 }
@@ -703,7 +700,11 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
-    scan_directory(root, engine, config, 0, NULL);
+    if (scan_directory(root, engine, config, 0, NULL) != 0) {
+        aura_destroy(engine);
+        visited_destroy(&visited);
+        return -1;
+    }
     aura_destroy(engine);
 
     /* Count child directories to decide on parallelism */
@@ -953,8 +954,8 @@ static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
 #define LONG_COL 40
 
 static void emit_node(const tree_node_t *node, const config_t *config, const color_scheme_t *cs,
-                      const char *prefix, bool is_last, int depth, int *file_count, int *dir_count,
-                      id_cache_t *uid_cache, id_cache_t *gid_cache) {
+                      const char *prefix, bool is_last, int depth, int64_t *file_count,
+                      int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
     if (config->dirs_only && !node->is_dir) return;
 
     /* Build the tree connector + name part using dynamic buffer */
@@ -1061,8 +1062,8 @@ typedef struct {
 } print_frame_t;
 
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
-                       const char *prefix, bool is_last, int depth, int *file_count, int *dir_count,
-                       id_cache_t *uid_cache, id_cache_t *gid_cache) {
+                       const char *prefix, bool is_last, int depth, int64_t *file_count,
+                       int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
@@ -1247,6 +1248,9 @@ int main(int argc, char **argv) {
     config_t config;
     if (parse_args(argc, argv, &config) != 0) return 1;
 
+    /* Ignore SIGPIPE for pipe-friendly behavior (e.g., atree | head) */
+    signal(SIGPIPE, SIG_IGN);
+
     /* Install SIGINT handler */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -1304,16 +1308,16 @@ int main(int argc, char **argv) {
     color_scheme_t cs;
     color_init(&cs, config.use_color);
 
-    int file_count = 0, dir_count = 0;
+    int64_t file_count = 0, dir_count = 0;
     id_cache_t uid_cache = { 0 }, gid_cache = { 0 };
     print_node(root, &config, &cs, "", true, 0, &file_count, &dir_count, &uid_cache, &gid_cache);
 
     char total_sz[32];
     format_size(total_sz, sizeof(total_sz), root->total_size, config.raw_bytes);
 
-    printf("\n%d file%s, %d director%s, %s total  (scanned in %.3fs)\n", file_count,
-           file_count == 1 ? "" : "s", dir_count + 1, dir_count == 0 ? "y" : "ies", total_sz,
-           elapsed);
+    printf("\n%" PRId64 " file%s, %" PRId64 " director%s, %s total  (scanned in %.3fs)\n",
+           file_count, file_count == 1 ? "" : "s", dir_count + 1, dir_count == 0 ? "y" : "ies",
+           total_sz, elapsed);
 
     node_free(root);
     return 0;
