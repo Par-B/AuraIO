@@ -778,9 +778,17 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
     /* --- Phase 2: getdents64 on each opened fd (faster than readdir) --- */
     size_t total_children = 0;
     char dents_buf[GETDENTS_BUFSZ];
+    char path_buf[PATH_MAX]; /* reused across all dirents */
 
     for (size_t i = 0; i < ndirs; i++) {
         if (octxs[i].fd < 0) continue;
+
+        /* Pre-fill directory prefix: "full_path/" */
+        size_t dir_len = strlen(dirs[i]->full_path);
+        if (dir_len + 2 >= PATH_MAX) continue; /* dir path itself too long */
+        memcpy(path_buf, dirs[i]->full_path, dir_len);
+        path_buf[dir_len] = '/';
+        size_t base = dir_len + 1;
 
         for (;;) {
             long nread = sys_getdents64(octxs[i].fd, dents_buf, sizeof(dents_buf));
@@ -803,11 +811,12 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
                 }
                 if (config->dirs_only && de->d_type != DT_DIR && de->d_type != DT_UNKNOWN) continue;
 
-                char path[PATH_MAX];
-                int plen = snprintf(path, sizeof(path), "%s/%s", dirs[i]->full_path, de->d_name);
-                if (plen < 0 || (size_t)plen >= sizeof(path)) continue;
+                /* Append filename to pre-filled directory prefix */
+                size_t name_len = strlen(de->d_name);
+                if (base + name_len >= PATH_MAX) continue;
+                memcpy(path_buf + base, de->d_name, name_len + 1);
 
-                tree_node_t *child = node_create(de->d_name, path);
+                tree_node_t *child = node_create(de->d_name, path_buf);
                 if (!child) continue;
                 child->depth = dirs[i]->depth + 1;
                 if (de->d_type == DT_DIR) child->is_dir = true;
