@@ -62,8 +62,9 @@ static inline long sys_getdents64(int fd, void *buf, size_t count) {
 // ============================================================================
 
 #define MAX_WORKERS 8
-#define STATX_BATCH 64
-#define DIRS_PER_BATCH 4
+#define STATX_BATCH_DEFAULT 64
+#define STATX_BATCH_MAX 512
+#define DIRS_PER_BATCH 8
 #define AURA_STATX_MASK                                                                       \
     (AURA_STATX_MODE | AURA_STATX_SIZE | AURA_STATX_MTIME | AURA_STATX_UID | AURA_STATX_GID | \
      AURA_STATX_NLINK | AURA_STATX_INO)
@@ -770,6 +771,33 @@ static void on_openat_complete(aura_request_t *req, ssize_t result, void *user_d
 // Worker thread
 // ============================================================================
 
+/* Per-worker freelist to avoid shared pool lock contention */
+#define LOCAL_FREELIST_MAX 32
+
+typedef struct {
+    work_item_t *head;
+    int count;
+} local_freelist_t;
+
+static work_item_t *local_alloc(local_freelist_t *lfl, work_item_pool_t *shared) {
+    if (lfl->head) {
+        work_item_t *item = lfl->head;
+        lfl->head = item->next;
+        lfl->count--;
+        return item;
+    }
+    return wip_alloc(shared);
+}
+
+static void local_freelist_drain(local_freelist_t *lfl, work_item_pool_t *shared) {
+    while (lfl->head) {
+        work_item_t *next = lfl->head->next;
+        wip_free(shared, lfl->head);
+        lfl->head = next;
+    }
+    lfl->count = 0;
+}
+
 typedef struct {
     work_queue_t *wq;
     const config_t *config;
@@ -934,9 +962,11 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
 static void *worker_fn(void *arg) {
     worker_ctx_t *wctx = (worker_ctx_t *)arg;
 
+    /* Use a deeper queue; aura autotuning will find the optimal in-flight.
+       Start with a generous queue_depth and let AIMD settle. */
     aura_options_t opts;
     aura_options_init(&opts);
-    opts.queue_depth = STATX_BATCH * 2;
+    opts.queue_depth = STATX_BATCH_MAX * 2;
     opts.single_thread = true;
     opts.ring_count = 1;
 
@@ -944,7 +974,6 @@ static void *worker_fn(void *arg) {
     if (!engine) {
         fprintf(stderr, "atree: worker %d: failed to create engine: %s\n", wctx->worker_id,
                 strerror(errno));
-        /* Drain queue to avoid hanging — decrement pending for each item */
         while (!g_interrupted) {
             tree_node_t *node = wq_pop(wctx->wq);
             if (!node) break;
@@ -955,6 +984,8 @@ static void *worker_fn(void *arg) {
         return NULL;
     }
 
+    local_freelist_t lfl = { .head = NULL, .count = 0 };
+
     while (!g_interrupted) {
         tree_node_t *batch[DIRS_PER_BATCH];
         size_t ndirs = wq_pop_batch(wctx->wq, batch, DIRS_PER_BATCH);
@@ -962,14 +993,14 @@ static void *worker_fn(void *arg) {
 
         process_dir_batch(batch, ndirs, engine, wctx->config, wctx->wq->visited);
 
-        /* Enqueue child directories for scanning — build a list outside
-           the lock, then splice it in with a single lock acquisition. */
+        /* Enqueue child directories — use per-worker freelist to avoid
+           contention on the shared pool lock. */
         work_item_t *list_head = NULL, *list_tail = NULL;
         size_t list_count = 0;
         for (size_t d = 0; d < ndirs; d++) {
             for (size_t i = 0; i < batch[d]->num_children; i++) {
                 if (batch[d]->children[i]->is_dir) {
-                    work_item_t *item = wip_alloc(&wctx->wq->pool);
+                    work_item_t *item = local_alloc(&lfl, &wctx->wq->pool);
                     if (!item) {
                         fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
                                 batch[d]->children[i]->full_path);
@@ -989,7 +1020,6 @@ static void *worker_fn(void *arg) {
             wq_push_batch(wctx->wq, list_head, list_tail, list_count);
         }
 
-        /* Decrement pending for all dirs in this batch; if zero, signal done */
         for (size_t d = 0; d < ndirs; d++) {
             if (atomic_fetch_sub(&wctx->wq->pending, 1) == 1) {
                 wq_signal_done(wctx->wq);
@@ -997,6 +1027,7 @@ static void *worker_fn(void *arg) {
         }
     }
 
+    local_freelist_drain(&lfl, &wctx->wq->pool);
     aura_destroy(engine);
     return NULL;
 }
@@ -1015,7 +1046,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     /* Scan root directory first (single-threaded) */
     aura_options_t opts;
     aura_options_init(&opts);
-    opts.queue_depth = STATX_BATCH * 2;
+    opts.queue_depth = STATX_BATCH_DEFAULT * 2;
     opts.single_thread = true;
     opts.ring_count = 1;
 
