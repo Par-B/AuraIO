@@ -210,6 +210,43 @@ typedef struct work_item {
     struct work_item *next;
 } work_item_t;
 
+/* Simple freelist allocator for work_item_t to avoid per-item malloc */
+typedef struct {
+    work_item_t *free_list;
+    pthread_mutex_t lock;
+} work_item_pool_t;
+
+static void wip_init(work_item_pool_t *pool) {
+    pool->free_list = NULL;
+    pthread_mutex_init(&pool->lock, NULL);
+}
+
+static void wip_destroy(work_item_pool_t *pool) {
+    work_item_t *item = pool->free_list;
+    while (item) {
+        work_item_t *next = item->next;
+        free(item);
+        item = next;
+    }
+    pthread_mutex_destroy(&pool->lock);
+}
+
+static work_item_t *wip_alloc(work_item_pool_t *pool) {
+    pthread_mutex_lock(&pool->lock);
+    work_item_t *item = pool->free_list;
+    if (item) pool->free_list = item->next;
+    pthread_mutex_unlock(&pool->lock);
+    if (!item) item = malloc(sizeof(*item));
+    return item;
+}
+
+static void wip_free(work_item_pool_t *pool, work_item_t *item) {
+    pthread_mutex_lock(&pool->lock);
+    item->next = pool->free_list;
+    pool->free_list = item;
+    pthread_mutex_unlock(&pool->lock);
+}
+
 typedef struct {
     work_item_t *head;
     work_item_t *tail;
@@ -218,6 +255,7 @@ typedef struct {
     pthread_cond_t cond;
     bool done;
     visited_set_t *visited;
+    work_item_pool_t pool;
 } work_queue_t;
 
 // ============================================================================
@@ -580,6 +618,7 @@ static void wq_init(work_queue_t *wq) {
     pthread_cond_init(&wq->cond, &cattr);
     pthread_condattr_destroy(&cattr);
     atomic_store(&wq->pending, 0);
+    wip_init(&wq->pool);
 }
 
 static void wq_destroy(work_queue_t *wq) {
@@ -592,10 +631,11 @@ static void wq_destroy(work_queue_t *wq) {
     }
     pthread_mutex_destroy(&wq->lock);
     pthread_cond_destroy(&wq->cond);
+    wip_destroy(&wq->pool);
 }
 
 static bool wq_push(work_queue_t *wq, tree_node_t *node) {
-    work_item_t *item = malloc(sizeof(*item));
+    work_item_t *item = wip_alloc(&wq->pool);
     if (!item) return false;
     item->node = node;
     item->next = NULL;
@@ -647,7 +687,7 @@ static tree_node_t *wq_pop(work_queue_t *wq) {
     pthread_mutex_unlock(&wq->lock);
 
     tree_node_t *node = item->node;
-    free(item);
+    wip_free(&wq->pool, item);
     return node;
 }
 
@@ -704,7 +744,7 @@ static void *worker_fn(void *arg) {
         size_t batch_count = 0;
         for (size_t i = 0; i < node->num_children; i++) {
             if (node->children[i]->is_dir) {
-                work_item_t *item = malloc(sizeof(*item));
+                work_item_t *item = wip_alloc(&wctx->wq->pool);
                 if (!item) {
                     fprintf(stderr, "atree: warning: skipping '%s': out of memory\n",
                             node->children[i]->full_path);
@@ -1129,61 +1169,94 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     int pad = target_col - visible_len;
     if (pad < 2) pad = 2;
 
-    printf("%s", line);
-    for (int i = 0; i < pad; i++) putchar(' ');
-    printf("%s\n", stats);
+    fputs(line, stdout);
+    /* Pad with spaces using a static buffer to avoid per-char putchar */
+    {
+        static const char spaces[] = "                                                  ";
+        int rem = pad;
+        while (rem > 0) {
+            int chunk = rem < (int)sizeof(spaces) - 1 ? rem : (int)sizeof(spaces) - 1;
+            fwrite(spaces, 1, (size_t)chunk, stdout);
+            rem -= chunk;
+        }
+    }
+    fputs(stats, stdout);
+    fputc('\n', stdout);
 
     if (node->is_dir && depth > 0) (*dir_count)++;
     else if (!node->is_dir) (*file_count)++;
 }
 
-/* Iterative pre-order tree printer to avoid stack overflow on deep trees. */
+/* Iterative pre-order tree printer to avoid stack overflow on deep trees.
+   Instead of heap-allocating a prefix string per frame, we maintain a stack of
+   is_last booleans and build the prefix on-the-fly into a reusable buffer. */
 typedef struct {
     const tree_node_t *node;
-    char *prefix; /* heap-allocated prefix for children */
     bool is_last;
     int depth;
     ssize_t child_idx; /* next visible child to process; -1 = node not yet printed */
 } print_frame_t;
 
+/* Build prefix string from the is_last history in the stack.
+   For depth d, we look at frames 1..d-1 (frame 0 is root, no prefix). */
+static void build_prefix(const print_frame_t *stack, size_t sp, int depth, line_buf_t *pb) {
+    /* Each level adds at most 6 bytes (UTF-8 "│   " = 6 bytes, "    " = 4 bytes) */
+    size_t needed = (size_t)depth * 7 + 1;
+    if (!line_buf_ensure(pb, needed)) {
+        pb->buf[0] = '\0';
+        return;
+    }
+    char *p = pb->buf;
+    /* Walk the stack to find ancestor frames. Stack layout: frame at index i
+       corresponds to depth frame->depth. We need frames at depth 1..depth-1. */
+    /* Build a simpler approach: iterate the stack and pick frames depth 1..depth-1 */
+    for (size_t i = 0; i < sp; i++) {
+        if (stack[i].depth >= 1 && stack[i].depth < depth) {
+            if (stack[i].is_last) {
+                memcpy(p, "    ", 4);
+                p += 4;
+            } else {
+                memcpy(p, "\xe2\x94\x82   ", 6);
+                p += 6;
+            }
+        }
+    }
+    *p = '\0';
+}
+
 static void print_node(const tree_node_t *root, const config_t *config, const color_scheme_t *cs,
                        const char *prefix, bool is_last, int depth, int64_t *file_count,
                        int64_t *dir_count, id_cache_t *uid_cache, id_cache_t *gid_cache) {
+    (void)prefix; /* no longer used — prefix computed from stack */
     line_buf_t lb = { 0 };
+    line_buf_t pb = { 0 }; /* prefix buffer */
     size_t cap = 256;
     print_frame_t *stack = malloc(cap * sizeof(*stack));
     if (!stack) return;
     size_t sp = 0;
 
-    char *root_prefix = strdup(prefix ? prefix : "");
-    if (!root_prefix) {
-        free(stack);
-        return;
-    }
-    stack[sp++] = (print_frame_t){
-        .node = root, .prefix = root_prefix, .is_last = is_last, .depth = depth, .child_idx = -1
-    };
+    stack[sp++] =
+        (print_frame_t){ .node = root, .is_last = is_last, .depth = depth, .child_idx = -1 };
 
     while (sp > 0) {
         print_frame_t *frame = &stack[sp - 1];
         const tree_node_t *node = frame->node;
 
         if (config->max_depth >= 0 && frame->depth > config->max_depth) {
-            free(frame->prefix);
             sp--;
             continue;
         }
 
         /* First visit: print the node itself */
         if (frame->child_idx == -1) {
-            emit_node(node, config, cs, frame->prefix, frame->is_last, frame->depth, file_count,
-                      dir_count, uid_cache, gid_cache, &lb);
+            build_prefix(stack, sp, frame->depth, &pb);
+            emit_node(node, config, cs, pb.buf, frame->is_last, frame->depth, file_count, dir_count,
+                      uid_cache, gid_cache, &lb);
             frame->child_idx = 0;
         }
 
         /* If not a dir or at max_depth, we're done */
         if (!node->is_dir || (config->max_depth >= 0 && frame->depth >= config->max_depth)) {
-            free(frame->prefix);
             sp--;
             continue;
         }
@@ -1196,8 +1269,6 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
         }
 
         if (ci >= node->num_children) {
-            /* No more children */
-            free(frame->prefix);
             sp--;
             continue;
         }
@@ -1213,43 +1284,27 @@ static void print_node(const tree_node_t *root, const config_t *config, const co
             }
         }
 
-        /* Build child prefix */
-        char *child_prefix;
-        if (frame->depth == 0) {
-            child_prefix = strdup("");
-        } else {
-            const char *ext = frame->is_last ? "    " : "\xe2\x94\x82   ";
-            size_t plen = strlen(frame->prefix) + strlen(ext) + 1;
-            child_prefix = malloc(plen);
-            if (child_prefix) snprintf(child_prefix, plen, "%s%s", frame->prefix, ext);
-        }
-
-        if (!child_prefix) continue;
-
         /* Push child frame */
         if (sp >= cap) {
             cap *= 2;
             print_frame_t *tmp = realloc(stack, cap * sizeof(*tmp));
             if (!tmp) {
-                /* Can't grow stack; free leaked prefixes and bail */
-                free(child_prefix);
-                for (size_t k = 0; k < sp; k++) {
-                    free(stack[k].prefix);
-                }
                 free(stack);
+                free(lb.buf);
+                free(pb.buf);
                 return;
             }
             stack = tmp;
             frame = &stack[sp - 1];
         }
         stack[sp++] = (print_frame_t){ .node = node->children[ci],
-                                       .prefix = child_prefix,
                                        .is_last = child_is_last,
                                        .depth = frame->depth + 1,
                                        .child_idx = -1 };
     }
     free(stack);
     free(lb.buf);
+    free(pb.buf);
 }
 
 // ============================================================================
@@ -1337,6 +1392,10 @@ static int parse_args(int argc, char **argv, config_t *config) {
 int main(int argc, char **argv) {
     config_t config;
     if (parse_args(argc, argv, &config) != 0) return 1;
+
+    /* Use large output buffer to reduce write syscalls */
+    static char stdout_buf[65536];
+    setvbuf(stdout, stdout_buf, _IOFBF, sizeof(stdout_buf));
 
     /* Ignore SIGPIPE for pipe-friendly behavior (e.g., atree | head) */
     signal(SIGPIPE, SIG_IGN);
