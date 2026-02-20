@@ -143,11 +143,14 @@ static uint64_t visited_hash(dev_t dev, ino_t ino) {
     return h;
 }
 
-/* Generate a non-zero tag from dev/ino for CAS.  If hash happens to be 0,
-   flip a bit so we never store the "empty" sentinel. */
+/* Sentinel: slot claimed but key not yet written. */
+#define VISITED_PENDING 1ULL
+
+/* Generate a tag from dev/ino for CAS.  Must never be 0 (empty) or
+   VISITED_PENDING (in-progress sentinel). */
 static uint64_t visited_tag(dev_t dev, ino_t ino) {
     uint64_t h = visited_hash(dev, ino);
-    return h ? h : 1;
+    return (h <= VISITED_PENDING) ? h + 2 : h;
 }
 
 static bool visited_init(visited_set_t *vs) {
@@ -188,18 +191,26 @@ static bool visited_insert(visited_set_t *vs, dev_t dev, ino_t ino) {
         uint64_t cur = atomic_load_explicit(&vs->buckets[idx], memory_order_acquire);
 
         if (cur == 0) {
-            /* Empty slot — try to claim it */
+            /* Empty slot — claim with PENDING sentinel, write key, then
+               publish real tag.  Readers skip PENDING slots (probe forward),
+               so the key is always visible before the real tag. */
             uint64_t expected = 0;
-            if (atomic_compare_exchange_strong_explicit(&vs->buckets[idx], &expected, tag,
-                                                        memory_order_acq_rel,
+            if (atomic_compare_exchange_strong_explicit(&vs->buckets[idx], &expected,
+                                                        VISITED_PENDING, memory_order_acq_rel,
                                                         memory_order_acquire)) {
-                /* Won the slot — store the full key */
                 vs->keys[idx] = (devino_t){ .dev = dev, .ino = ino };
+                atomic_store_explicit(&vs->buckets[idx], tag, memory_order_release);
                 atomic_fetch_add_explicit(&vs->count, 1, memory_order_relaxed);
                 return true; /* newly inserted */
             }
             /* Lost the race — re-read cur from expected */
             cur = expected;
+        }
+
+        /* Slot is PENDING (key being written) — skip and probe forward */
+        if (cur == VISITED_PENDING) {
+            idx = (idx + 1) & mask;
+            continue;
         }
 
         /* Slot is occupied — check if it's our key */
@@ -1335,10 +1346,11 @@ static const char *id_cache_lookup_uid(id_cache_t *cache, uint32_t uid) {
         }
         if (e->id == uid) return e->name;
     }
-    /* Cache full — fall through to uncached lookup */
-    static char fallback[32];
-    snprintf(fallback, sizeof(fallback), "%u", uid);
-    return fallback;
+    /* Cache full — fall through to uncached lookup.
+       Separate buffer from gid fallback to avoid aliasing. */
+    static char uid_fallback[32];
+    snprintf(uid_fallback, sizeof(uid_fallback), "%u", uid);
+    return uid_fallback;
 }
 
 static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
@@ -1358,9 +1370,9 @@ static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
         }
         if (e->id == gid) return e->name;
     }
-    static char fallback[32];
-    snprintf(fallback, sizeof(fallback), "%u", gid);
-    return fallback;
+    static char gid_fallback[32];
+    snprintf(gid_fallback, sizeof(gid_fallback), "%u", gid);
+    return gid_fallback;
 }
 
 /* Column widths for alignment */
@@ -1428,8 +1440,8 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
        into lb using direct memcpy, avoiding snprintf in the hot path. */
     size_t prefix_len = prefix ? strlen(prefix) : 0;
     size_t name_len = strlen(node->name);
-    /* Generous worst-case: prefix + connector + color + name + padding + stats + \n */
-    size_t needed = prefix_len + name_len + 512;
+    /* Worst-case: prefix + connector + color + name + padding + stats + error string + \n */
+    size_t needed = prefix_len + name_len + 512 + 256;
     if (!line_buf_ensure(lb, needed)) return;
     char *buf = lb->buf;
     size_t p = 0;
