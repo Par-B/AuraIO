@@ -1276,6 +1276,40 @@ static const char *id_cache_lookup_gid(id_cache_t *cache, uint32_t gid) {
 #define NAME_COL 36
 #define LONG_COL 40
 
+/* Fast integer-to-string for emit_node (avoids snprintf overhead).
+   Writes digits into buf and returns number of characters written. */
+static int fmt_i64(char *buf, int64_t val) {
+    if (val == 0) {
+        buf[0] = '0';
+        return 1;
+    }
+    char tmp[20];
+    int n = 0;
+    bool neg = val < 0;
+    uint64_t uv = neg ? (uint64_t)(-(val + 1)) + 1 : (uint64_t)val;
+    while (uv > 0) {
+        tmp[n++] = '0' + (char)(uv % 10);
+        uv /= 10;
+    }
+    int len = 0;
+    if (neg) buf[len++] = '-';
+    for (int i = n - 1; i >= 0; i--) buf[len++] = tmp[i];
+    return len;
+}
+
+/* Append a string to buf at *pos, return new pos */
+static inline size_t buf_append(char *buf, size_t pos, const char *s, size_t len) {
+    memcpy(buf + pos, s, len);
+    return pos + len;
+}
+
+/* Append a C string (strlen computed) */
+static inline size_t buf_appends(char *buf, size_t pos, const char *s) {
+    size_t len = strlen(s);
+    memcpy(buf + pos, s, len);
+    return pos + len;
+}
+
 /* Reusable line buffer for emit_node to avoid per-node malloc */
 typedef struct {
     char *buf;
@@ -1299,46 +1333,58 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
                       line_buf_t *lb) {
     if (config->dirs_only && !node->is_dir) return;
 
-    /* Build the tree connector + name part using reusable buffer */
+    /* Build the entire output line (tree prefix + name + padding + stats + \n)
+       into lb using direct memcpy, avoiding snprintf in the hot path. */
     size_t prefix_len = prefix ? strlen(prefix) : 0;
     size_t name_len = strlen(node->name);
-    /* Worst case: prefix + connector(10) + color(16) + name + "/" + reset(8) + NUL */
-    size_t line_sz = prefix_len + name_len + 64;
-    if (!line_buf_ensure(lb, line_sz)) return;
-    char *line = lb->buf;
+    /* Generous worst-case: prefix + connector + color + name + padding + stats + \n */
+    size_t needed = prefix_len + name_len + 512;
+    if (!line_buf_ensure(lb, needed)) return;
+    char *buf = lb->buf;
+    size_t p = 0;
+
+    /* --- Part 1: tree connector + colored name --- */
+    const char *clr = color_for_node(cs, node);
+    size_t clr_len = strlen(clr);
+    const char *rst = cs->enabled ? cs->reset : "";
+    size_t rst_len = strlen(rst);
 
     if (depth == 0) {
-        const char *clr = color_for_node(cs, node);
-        const char *rst = cs->enabled ? cs->reset : "";
-        snprintf(line, line_sz, "%s%s/%s", clr, node->name, rst);
+        p = buf_append(buf, p, clr, clr_len);
+        p = buf_append(buf, p, node->name, name_len);
+        buf[p++] = '/';
+        p = buf_append(buf, p, rst, rst_len);
     } else {
-        const char *connector = is_last ? "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 "
-                                        : "\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 ";
-        const char *clr = color_for_node(cs, node);
-        const char *rst = cs->enabled ? cs->reset : "";
-        if (node->is_dir)
-            snprintf(line, line_sz, "%s%s%s%s/%s", prefix, connector, clr, node->name, rst);
-        else snprintf(line, line_sz, "%s%s%s%s%s", prefix, connector, clr, node->name, rst);
+        /* connector: └── or ├── (10 bytes each in UTF-8) */
+        static const char conn_last[] = "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 ";
+        static const char conn_mid[] = "\xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 ";
+        const char *conn = is_last ? conn_last : conn_mid;
+
+        p = buf_append(buf, p, prefix, prefix_len);
+        p = buf_append(buf, p, conn, 10);
+        p = buf_append(buf, p, clr, clr_len);
+        p = buf_append(buf, p, node->name, name_len);
+        if (node->is_dir) buf[p++] = '/';
+        p = buf_append(buf, p, rst, rst_len);
     }
 
-    /* Calculate visible length (without ANSI escapes) for padding */
-    int visible_len = 0;
-    if (depth == 0) {
-        visible_len = (int)name_len + 1;
-    } else {
-        visible_len = depth * 4 + (int)name_len + (node->is_dir ? 1 : 0);
-    }
+    /* --- Part 2: padding --- */
+    int visible_len =
+        (depth == 0) ? (int)name_len + 1 : depth * 4 + (int)name_len + (node->is_dir ? 1 : 0);
+    int target_col = config->long_format ? LONG_COL : NAME_COL;
+    int pad = target_col - visible_len;
+    if (pad < 2) pad = 2;
+    memset(buf + p, ' ', (size_t)pad);
+    p += (size_t)pad;
 
-    /* Right-aligned stats */
-    char stats[256];
-
+    /* --- Part 3: stats --- */
     if (node->stat_err) {
-        snprintf(stats, sizeof(stats), "[error: %s]", strerror(node->stat_err));
-        int target_col = config->long_format ? LONG_COL : NAME_COL;
-        int pad = target_col - visible_len;
-        if (pad < 2) pad = 2;
-        fputs(line, stdout);
-        fprintf(stdout, "%*s%s\n", pad, "", stats);
+        const char *errstr = strerror(node->stat_err);
+        p = buf_append(buf, p, "[error: ", 8);
+        p = buf_appends(buf, p, errstr);
+        buf[p++] = ']';
+        buf[p++] = '\n';
+        fwrite(buf, 1, p, stdout);
         if (!node->is_dir) (*file_count)++;
         return;
     }
@@ -1346,29 +1392,58 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
     if (config->long_format) {
         char mode_str[12];
         format_mode(mode_str, node->st.stx_mode);
+        p = buf_append(buf, p, mode_str, 10);
+        p = buf_append(buf, p, "  ", 2);
 
         const char *uname = id_cache_lookup_uid(uid_cache, node->st.stx_uid);
         const char *gname = id_cache_lookup_gid(gid_cache, node->st.stx_gid);
+        size_t ulen = strlen(uname);
+        size_t glen = strlen(gname);
+        p = buf_append(buf, p, uname, ulen);
+        /* Pad to 8 chars */
+        if (ulen < 8) {
+            memset(buf + p, ' ', 8 - ulen);
+            p += 8 - ulen;
+        }
+        buf[p++] = ' ';
+        p = buf_append(buf, p, gname, glen);
+        if (glen < 8) {
+            memset(buf + p, ' ', 8 - glen);
+            p += 8 - glen;
+        }
+        p = buf_append(buf, p, "  ", 2);
 
         if (node->is_dir) {
             char sz[32];
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
             int64_t fc = node->total_files;
             int64_t dc = node->total_dirs;
+            buf[p++] = '[';
+            p += (size_t)fmt_i64(buf + p, fc);
+            p = buf_append(buf, p, " file", 5);
+            if (fc != 1) buf[p++] = 's';
             if (dc > 0) {
-                snprintf(stats, sizeof(stats),
-                         "%s  %-8s %-8s  [%" PRId64 " file%s, %" PRId64 " dir%s, %s]", mode_str,
-                         uname, gname, fc, fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
-            } else {
-                snprintf(stats, sizeof(stats), "%s  %-8s %-8s  [%" PRId64 " file%s, %s]", mode_str,
-                         uname, gname, fc, fc == 1 ? "" : "s", sz);
+                p = buf_append(buf, p, ", ", 2);
+                p += (size_t)fmt_i64(buf + p, dc);
+                p = buf_append(buf, p, " dir", 4);
+                if (dc != 1) buf[p++] = 's';
             }
+            p = buf_append(buf, p, ", ", 2);
+            p = buf_appends(buf, p, sz);
+            buf[p++] = ']';
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
-            snprintf(stats, sizeof(stats), "%s  %-8s %-8s  %7s  %s", mode_str, uname, gname, sz,
-                     date);
+            size_t szlen = strlen(sz);
+            /* Right-align size to 7 chars */
+            if (szlen < 7) {
+                memset(buf + p, ' ', 7 - szlen);
+                p += 7 - szlen;
+            }
+            p = buf_append(buf, p, sz, szlen);
+            p = buf_append(buf, p, "  ", 2);
+            p = buf_appends(buf, p, date);
         }
     } else {
         if (node->is_dir) {
@@ -1376,38 +1451,36 @@ static void emit_node(const tree_node_t *node, const config_t *config, const col
             format_size(sz, sizeof(sz), node->total_size, config->raw_bytes);
             int64_t fc = node->total_files;
             int64_t dc = node->total_dirs;
+            buf[p++] = '[';
+            p += (size_t)fmt_i64(buf + p, fc);
+            p = buf_append(buf, p, " file", 5);
+            if (fc != 1) buf[p++] = 's';
             if (dc > 0) {
-                snprintf(stats, sizeof(stats), "[%" PRId64 " file%s, %" PRId64 " dir%s, %s]", fc,
-                         fc == 1 ? "" : "s", dc, dc == 1 ? "" : "s", sz);
-            } else {
-                snprintf(stats, sizeof(stats), "[%" PRId64 " file%s, %s]", fc, fc == 1 ? "" : "s",
-                         sz);
+                p = buf_append(buf, p, ", ", 2);
+                p += (size_t)fmt_i64(buf + p, dc);
+                p = buf_append(buf, p, " dir", 4);
+                if (dc != 1) buf[p++] = 's';
             }
+            p = buf_append(buf, p, ", ", 2);
+            p = buf_appends(buf, p, sz);
+            buf[p++] = ']';
         } else {
             char sz[32], date[16];
             format_size(sz, sizeof(sz), node->st.stx_size, config->raw_bytes);
             format_date(date, sizeof(date), &node->st.stx_mtime);
-            snprintf(stats, sizeof(stats), "%7s  %s", sz, date);
+            size_t szlen = strlen(sz);
+            if (szlen < 7) {
+                memset(buf + p, ' ', 7 - szlen);
+                p += 7 - szlen;
+            }
+            p = buf_append(buf, p, sz, szlen);
+            p = buf_append(buf, p, "  ", 2);
+            p = buf_appends(buf, p, date);
         }
     }
 
-    int target_col = config->long_format ? LONG_COL : NAME_COL;
-    int pad = target_col - visible_len;
-    if (pad < 2) pad = 2;
-
-    fputs(line, stdout);
-    /* Pad with spaces using a static buffer to avoid per-char putchar */
-    {
-        static const char spaces[] = "                                                  ";
-        int rem = pad;
-        while (rem > 0) {
-            int chunk = rem < (int)sizeof(spaces) - 1 ? rem : (int)sizeof(spaces) - 1;
-            fwrite(spaces, 1, (size_t)chunk, stdout);
-            rem -= chunk;
-        }
-    }
-    fputs(stats, stdout);
-    fputc('\n', stdout);
+    buf[p++] = '\n';
+    fwrite(buf, 1, p, stdout);
 
     if (node->is_dir && depth > 0) (*dir_count)++;
     else if (!node->is_dir) (*file_count)++;
