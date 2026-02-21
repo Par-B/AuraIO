@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_metadata_ops.c
  * @brief Tests for lifecycle metadata operations (openat, close, statx,
@@ -194,7 +193,13 @@ TEST(ftruncate_basic) {
 
     /* Truncate to 1024 */
     aura_request_t *req = aura_ftruncate(engine, fd, 1024, basic_cb, &st);
-    assert(req);
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(skipped: liburing too old) ");
+        close(fd);
+        aura_destroy(engine);
+        return;
+    }
     run_until_done(engine, &st);
 
     if (st.result == -EINVAL || st.result == -ENOSYS) {
