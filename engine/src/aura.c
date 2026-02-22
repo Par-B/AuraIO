@@ -311,12 +311,13 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
 
 /**
  * Drain eventfd to clear POLLIN state after completions.
- * Without this, epoll would immediately return again even though
- * we've processed all available CQEs.
- * Skip in single_thread mode: direct poll callers don't use epoll.
+ * Without this, poll/epoll would immediately return again even though
+ * we've processed all available CQEs.  Must be called in ALL modes
+ * because aura_wait() uses poll(eventfd) internally regardless of
+ * single_thread setting.
  */
 static inline void drain_eventfd(aura_engine_t *engine) {
-    if (!engine->rings[0].single_thread && engine->event_fd >= 0) {
+    if (engine->event_fd >= 0) {
         uint64_t eventfd_val;
         if (read(engine->event_fd, &eventfd_val, sizeof(eventfd_val)) < 0) {
             /* Intentionally ignored — EAGAIN expected if no data */
