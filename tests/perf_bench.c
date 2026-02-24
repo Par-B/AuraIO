@@ -32,6 +32,7 @@
 #include <sys/sysinfo.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/statvfs.h>
 
 // ============================================================================
 // Fast thread-local PRNG (xorshift64)
@@ -137,6 +138,23 @@ static int apples_mode = 0; // When set, force ring_count=1 for FIO-comparable r
 
 static int setup_test_files(void) {
     mkdir(test_dir, 0755);
+
+    // Check available disk space before creating test files
+    struct statvfs vfs;
+    if (statvfs(test_dir, &vfs) == 0) {
+        unsigned long long avail = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+        unsigned long long needed = (unsigned long long)NUM_FILES * FILE_SIZE;
+        if (avail < needed) {
+            fprintf(stderr,
+                    "ERROR: Not enough space in %s\n"
+                    "  Available: %llu MB\n"
+                    "  Required:  %llu MB (%d files x %llu MB)\n"
+                    "  Set AURA_BENCH_DIR to a directory with more space.\n",
+                    test_dir, avail / (1024 * 1024), needed / (1024 * 1024), NUM_FILES,
+                    (unsigned long long)(FILE_SIZE / (1024 * 1024)));
+            return -1;
+        }
+    }
 
     // Create random data buffer
     char *data = aligned_alloc(4096, 1024 * 1024);
