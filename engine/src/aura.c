@@ -40,7 +40,9 @@ _Static_assert(AURA_O_RDWR == O_RDWR, "AURA_O_RDWR mismatch");
 _Static_assert(AURA_O_CREAT == O_CREAT, "AURA_O_CREAT mismatch");
 _Static_assert(AURA_O_TRUNC == O_TRUNC, "AURA_O_TRUNC mismatch");
 _Static_assert(AURA_O_APPEND == O_APPEND, "AURA_O_APPEND mismatch");
+#ifdef O_DIRECT
 _Static_assert(AURA_O_DIRECT == O_DIRECT, "AURA_O_DIRECT mismatch");
+#endif
 
 /* ============================================================================
  * Configuration Constants

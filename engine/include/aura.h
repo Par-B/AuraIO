@@ -30,6 +30,7 @@
 #ifndef AURA_H
 #define AURA_H
 
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -478,7 +479,11 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 #define AURA_O_CREAT 0x0040   /**< Create file if it doesn't exist */
 #define AURA_O_TRUNC 0x0200   /**< Truncate file to zero length */
 #define AURA_O_APPEND 0x0400  /**< Append to end of file */
-#define AURA_O_DIRECT 0x10000 /**< Direct I/O (bypass page cache) */
+#ifdef O_DIRECT
+#define AURA_O_DIRECT O_DIRECT /**< Direct I/O (bypass page cache) */
+#else
+#define AURA_O_DIRECT 0 /**< O_DIRECT not available on this platform */
+#endif
 /**@}*/
 
 /* ============================================================================

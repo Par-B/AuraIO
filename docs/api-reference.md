@@ -220,7 +220,7 @@ Create with inline helpers -- do not construct manually:
 | `AURA_O_CREAT` | `0x0040` | Create file if it doesn't exist |
 | `AURA_O_TRUNC` | `0x0200` | Truncate file to zero length |
 | `AURA_O_APPEND` | `0x0400` | Append to end of file |
-| `AURA_O_DIRECT` | `0x10000` | Direct I/O (bypass page cache) |
+| `AURA_O_DIRECT` | `O_DIRECT` | Direct I/O (bypass page cache, derived from system header) |
 
 #### Log Levels (for `aura_set_log_handler` / `aura_log_emit`)
 
