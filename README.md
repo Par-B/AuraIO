@@ -341,7 +341,7 @@ make
 sudo make install
 ```
 
-**Linking:**
+**Linking (manual):**
 ```bash
 # C
 gcc myapp.c -laura -luring -lpthread -o myapp
@@ -349,6 +349,33 @@ gcc myapp.c -laura -luring -lpthread -o myapp
 # C++
 g++ -std=c++20 myapp.cpp -laura -luring -lpthread -o myapp
 ```
+
+### CMake
+
+**As a subdirectory** (git submodule or vendored copy):
+```cmake
+add_subdirectory(deps/auraio)
+target_link_libraries(myapp PRIVATE aura)
+```
+
+**Via FetchContent** (downloaded at configure time):
+```cmake
+include(FetchContent)
+FetchContent_Declare(aura
+    GIT_REPOSITORY https://github.com/Par-B/AuraIO.git
+    GIT_TAG        main
+)
+FetchContent_MakeAvailable(aura)
+target_link_libraries(myapp PRIVATE aura)
+```
+
+**Via find_package** (after `sudo make install`):
+```cmake
+find_package(aura REQUIRED)
+target_link_libraries(myapp PRIVATE aura::aura)
+```
+
+Headers and link flags propagate automatically in all three cases. The library builds as static by default; pass `-DBUILD_SHARED_LIBS=ON` for a shared library.
 
 ### Rust Crate
 
