@@ -65,6 +65,8 @@ MIN_CLANG_TIDY_VERSION="${AURA_MIN_CLANG_TIDY_VERSION:-14.0}"
 MIN_VALGRIND_VERSION="${AURA_MIN_VALGRIND_VERSION:-3.20.0}"
 TARGET_VALGRIND_VERSION="${AURA_VALGRIND_TARGET_VERSION:-3.26.0}"
 BUILD_VALGRIND_FROM_SOURCE="${AURA_BUILD_VALGRIND_FROM_SOURCE:-1}"
+MIN_LIBURING_VERSION="${AURA_MIN_LIBURING_VERSION:-2.7}"
+TARGET_LIBURING_VERSION="${AURA_LIBURING_TARGET_VERSION:-2.9}"
 
 echo "========================================"
 echo "AuraIO Dependency Installer"
@@ -108,14 +110,14 @@ BASE_PACKAGES=(
     bear
     bison
     flex
-    linux-perf
 )
 run_root apt-get update
 run_root apt-get install -y "${BASE_PACKAGES[@]}"
 
 echo "--- Installing kernel perf tools (best effort) ---"
-run_root apt-get install -y "linux-tools-$(uname -r)" || true
-run_root apt-get install -y linux-tools-common linux-tools-generic || true
+run_root apt-get install -y linux-perf 2>/dev/null || true
+run_root apt-get install -y "linux-tools-$(uname -r)" 2>/dev/null || true
+run_root apt-get install -y linux-tools-common linux-tools-generic 2>/dev/null || true
 
 if ! command -v rustup >/dev/null 2>&1; then
     echo "--- Installing rustup (non-interactive) ---"
@@ -176,6 +178,41 @@ elif version_lt "$VALGRIND_VER" "$MIN_VALGRIND_VERSION"; then
     else
         echo "[WARN] valgrind ${VALGRIND_VER} < ${MIN_VALGRIND_VERSION}; source build is disabled."
     fi
+fi
+
+current_liburing_version() {
+    if pkg-config --exists liburing 2>/dev/null; then
+        pkg-config --modversion liburing
+    elif [ -f /usr/local/include/liburing/io_uring_version.h ]; then
+        local major minor
+        major="$(grep '#define IO_URING_VERSION_MAJOR' /usr/local/include/liburing/io_uring_version.h | awk '{print $3}')"
+        minor="$(grep '#define IO_URING_VERSION_MINOR' /usr/local/include/liburing/io_uring_version.h | awk '{print $3}')"
+        echo "${major}.${minor}"
+    else
+        echo ""
+    fi
+}
+
+LIBURING_VER="$(current_liburing_version)"
+if [ -z "$LIBURING_VER" ]; then
+    echo "[WARN] liburing is not installed after apt install."
+elif version_lt "$LIBURING_VER" "$MIN_LIBURING_VERSION"; then
+    echo "--- Building liburing ${TARGET_LIBURING_VERSION} from source (current: ${LIBURING_VER}) ---"
+    TMP_DIR="/tmp/aura-liburing-build"
+    rm -rf "$TMP_DIR"
+    git clone --depth 1 --branch "liburing-${TARGET_LIBURING_VERSION}" \
+        https://github.com/axboe/liburing.git "$TMP_DIR"
+    cd "$TMP_DIR"
+    ./configure --prefix=/usr/local
+    make -j"$(nproc)"
+    run_root make install
+    run_root ldconfig
+    cd "$ROOT_DIR"
+    rm -rf "$TMP_DIR"
+    LIBURING_VER="$(current_liburing_version)"
+    echo "[OK] liburing upgraded to ${LIBURING_VER}"
+else
+    echo "[OK] liburing: ${LIBURING_VER} (min ${MIN_LIBURING_VERSION})"
 fi
 
 echo "--- Verifying minimum tool versions ---"

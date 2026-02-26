@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MIN_VALGRIND_VERSION="${AURA_MIN_VALGRIND_VERSION:-3.20.0}"
+MIN_LIBURING_VERSION="${AURA_MIN_LIBURING_VERSION:-2.7}"
 MIN_GCC_VERSION="${AURA_MIN_GCC_VERSION:-11.0}"
 MIN_GXX_VERSION="${AURA_MIN_GXX_VERSION:-11.0}"
 MIN_CLANG_VERSION="${AURA_MIN_CLANG_VERSION:-14.0}"
@@ -82,11 +83,22 @@ check_cmd cmake "cmake" || FAIL=1
 check_cmd pkg-config "pkg-config" || FAIL=1
 check_cmd python3 "python3" || FAIL=1
 
+LIBURING_VER=""
 if pkg-config --exists liburing 2>/dev/null; then
-    echo "  [OK] liburing ($(pkg-config --modversion liburing))"
-else
+    LIBURING_VER="$(pkg-config --modversion liburing)"
+elif [ -f /usr/local/include/liburing/io_uring_version.h ]; then
+    _major="$(grep '#define IO_URING_VERSION_MAJOR' /usr/local/include/liburing/io_uring_version.h | awk '{print $3}')"
+    _minor="$(grep '#define IO_URING_VERSION_MINOR' /usr/local/include/liburing/io_uring_version.h | awk '{print $3}')"
+    LIBURING_VER="${_major}.${_minor}"
+fi
+if [ -z "$LIBURING_VER" ]; then
     echo "  [FAIL] liburing"
     FAIL=1
+elif version_lt "$LIBURING_VER" "$MIN_LIBURING_VERSION"; then
+    echo "  [FAIL] liburing version ${LIBURING_VER} < ${MIN_LIBURING_VERSION} (run: make deps)"
+    FAIL=1
+else
+    echo "  [OK] liburing (${LIBURING_VER}, min ${MIN_LIBURING_VERSION})"
 fi
 
 if pkg-config --exists libcrypto 2>/dev/null; then
