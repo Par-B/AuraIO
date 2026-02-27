@@ -255,7 +255,8 @@ static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
  * - THREAD_LOCAL: Thread-local exclusive ring ownership
  */
 static ring_ctx_t *select_ring(aura_engine_t *engine) {
-    if (engine->ring_count == 1) return &engine->rings[0];
+    if (engine->ring_count == 1 && !engine->rings[0].needs_enable)
+        return &engine->rings[0];
 
     switch (engine->ring_select) {
     case AURA_SELECT_THREAD_LOCAL:
