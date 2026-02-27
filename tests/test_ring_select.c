@@ -179,6 +179,8 @@ static const char *mode_name(aura_ring_select_t mode) {
         return "CPU_LOCAL";
     case AURA_SELECT_ROUND_ROBIN:
         return "ROUND_ROBIN";
+    case AURA_SELECT_THREAD_LOCAL:
+        return "THREAD_LOCAL";
     default:
         return "UNKNOWN";
     }
@@ -341,7 +343,7 @@ int main(int argc, char *argv[]) {
     printf("  Fill phase: %d ops/thread (no polling), then 25ms tick wait\n", FILL_COUNT);
     printf("  Ops/thread: %d, Threads: %d (one per ring)\n", ops_per_thread, ring_count);
 
-    test_result_t results[3];
+    test_result_t results[4];
 
     printf("\n--- Running CPU_LOCAL ---");
     fflush(stdout);
@@ -355,8 +357,12 @@ int main(int argc, char *argv[]) {
     fflush(stdout);
     run_mode(AURA_SELECT_ADAPTIVE, ring_count, ops_per_thread, fd, &results[2]);
 
+    printf("\n--- Running THREAD_LOCAL ---");
+    fflush(stdout);
+    run_mode(AURA_SELECT_THREAD_LOCAL, ring_count, ops_per_thread, fd, &results[3]);
+
     printf("\n\n=== Results ===");
-    for (int i = 0; i < 3; i++) print_result(&results[i]);
+    for (int i = 0; i < 4; i++) print_result(&results[i]);
 
     printf("\n--- Checks ---\n\n");
     int passed = 0, failed = 0;
@@ -394,6 +400,27 @@ int main(int argc, char *argv[]) {
                results[2].rings_used);
     } else {
         printf("  [FAIL] ADAPTIVE: 0 spills with %d rings loaded\n", results[2].rings_used);
+        failed++;
+    }
+
+    /* THREAD_LOCAL checks */
+    if (results[3].spills == 0) {
+        printf("  [PASS] THREAD_LOCAL: 0 spills (expected)\n");
+        passed++;
+    } else {
+        printf("  [FAIL] THREAD_LOCAL: expected 0 spills, got %" PRIu64 "\n", results[3].spills);
+        failed++;
+    }
+
+    int64_t tl_total_ops = 0;
+    for (int i = 0; i < results[3].ring_count; i++) tl_total_ops += results[3].per_ring_ops[i];
+    int64_t tl_expected = (int64_t)ops_per_thread * results[3].thread_count;
+    if (tl_total_ops == tl_expected) {
+        printf("  [PASS] THREAD_LOCAL: all %" PRId64 " ops completed\n", tl_total_ops);
+        passed++;
+    } else {
+        printf("  [FAIL] THREAD_LOCAL: expected %" PRId64 " ops, got %" PRId64 "\n",
+               tl_expected, tl_total_ops);
         failed++;
     }
 

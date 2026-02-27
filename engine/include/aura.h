@@ -371,9 +371,17 @@ typedef enum {
                                      ring matching its current CPU (sched_getcpu).
                                      Best cache locality and NUMA friendliness.
                                      Single-threaded workloads use only one ring. */
-    AURA_SELECT_ROUND_ROBIN   /**< Atomic round-robin across all rings. Maximum
+    AURA_SELECT_ROUND_ROBIN,  /**< Atomic round-robin across all rings. Maximum
                                      single-thread scaling. Best for benchmarks or
                                      single-thread event loops. */
+    AURA_SELECT_THREAD_LOCAL  /**< Thread-local ring ownership. Each thread claims
+                                     a ring on first submission and reuses it exclusively.
+                                     Rings use SINGLE_ISSUER for kernel optimization.
+                                     Eliminates all mutex contention and eventfd overhead.
+                                     Best for fixed thread pools where each thread does
+                                     its own submit+poll (database backends, web servers).
+                                     Not suitable for dynamic thread pools or cross-thread
+                                     completion harvesting. */
 } aura_ring_select_t;
 
 /**

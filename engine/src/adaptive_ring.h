@@ -101,8 +101,10 @@ _Static_assert(sizeof(struct aura_request) == 128, "aura_request must be 128 byt
  * Ring initialization options
  */
 typedef struct {
-    bool enable_sqpoll; /**< Enable SQPOLL mode */
-    int sqpoll_idle_ms; /**< SQPOLL idle timeout (ms) */
+    bool enable_sqpoll;        /**< Enable SQPOLL mode */
+    int sqpoll_idle_ms;        /**< SQPOLL idle timeout (ms) */
+    bool enable_single_issuer; /**< Use SINGLE_ISSUER + R_DISABLED flags */
+    bool start_disabled;       /**< Start ring disabled (requires enable call) */
 } ring_options_t;
 
 /**
@@ -157,6 +159,11 @@ typedef struct {
     /* Single-thread fast path: skip mutexes when caller guarantees
      * single-thread access. Set during init, const after. */
     bool single_thread;
+
+    /* Thread-local ring ownership tracking */
+    _Atomic int owner_count;       /**< Number of threads that have claimed this ring */
+    bool single_issuer_enabled;    /**< SINGLE_ISSUER was successfully set */
+    bool needs_enable;             /**< Ring was created with R_DISABLED, needs ring_enable() */
 } ring_ctx_t;
 
 /**
@@ -390,6 +397,45 @@ struct io_uring_sqe *ring_get_last_sqe(void);
  * Clear the last submitted SQE pointer (thread-local).
  */
 void ring_clear_last_sqe(void);
+
+/**
+ * Enable a ring that was created with R_DISABLED.
+ * Must be called from the thread that will own the ring.
+ *
+ * @param ctx Ring context
+ * @return 0 on success, -1 on error
+ */
+int ring_enable(ring_ctx_t *ctx);
+
+/**
+ * Drain CQEs from a single-thread ring without locking.
+ * Processes completions inline (no batch staging, no cq_lock).
+ *
+ * @param ctx Ring context (must have single_thread == true)
+ * @return Number of completions processed
+ */
+int ring_drain_cqes_fast(ring_ctx_t *ctx);
+
+/* ============================================================================
+ * Inline Fast-Path Helpers
+ * ============================================================================ */
+
+/**
+ * Inline flush for single-thread rings.
+ * Skips lock, error logging, and partial-submit handling.
+ */
+static inline int ring_flush_fast(ring_ctx_t *ctx) {
+    int queued = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
+    if (queued == 0) return 0;
+    int submitted = io_uring_submit(&ctx->ring);
+    if (submitted > 0) {
+        int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
+        int sub = submitted < old ? submitted : old;
+        atomic_store_explicit(&ctx->queued_sqes, old - sub, memory_order_relaxed);
+        adaptive_record_submit(&ctx->adaptive, submitted);
+    }
+    return submitted;
+}
 
 static inline void ring_lock(ring_ctx_t *ctx) {
     if (!ctx->single_thread) pthread_mutex_lock(&ctx->lock);

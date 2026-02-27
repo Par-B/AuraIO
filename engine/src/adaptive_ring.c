@@ -118,9 +118,9 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
      * cooperatively rather than via task_work interrupts. Reduces latency
      * variance and context switches. Safe for multi-threaded usage.
      *
-     * Note: IORING_SETUP_SINGLE_ISSUER is NOT used because AuraIO allows
-     * any thread to submit to any ring (via select_ring() + per-ring mutex).
-     * SINGLE_ISSUER requires a single task per ring's entire lifetime. */
+     * Note: IORING_SETUP_SINGLE_ISSUER is only used in THREAD_LOCAL mode
+     * where each thread exclusively owns its ring. In other modes, any
+     * thread can submit to any ring via select_ring() + per-ring mutex. */
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
 
@@ -129,6 +129,8 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
 #endif
 
     bool try_sqpoll = options && options->enable_sqpoll;
+    bool try_single_issuer = options && options->enable_single_issuer;
+    bool try_disabled = options && options->start_disabled;
 
 /* Helper: apply SQPOLL params if requested */
 #define APPLY_SQPOLL_PARAMS(p)                                                                    \
@@ -139,18 +141,41 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         }                                                                                         \
     } while (0)
 
+/* Helper: apply SINGLE_ISSUER + R_DISABLED if requested */
+#define APPLY_SINGLE_ISSUER_PARAMS(p, si, rd)                                                     \
+    do {                                                                                          \
+        if (si) {                                                                                 \
+            (p)->flags |= IORING_SETUP_SINGLE_ISSUER;                                             \
+            if (rd) (p)->flags |= IORING_SETUP_R_DISABLED;                                        \
+        }                                                                                         \
+    } while (0)
+
     APPLY_SQPOLL_PARAMS(&params);
+    APPLY_SINGLE_ISSUER_PARAMS(&params, try_single_issuer, try_disabled);
 
     ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
 
     /* If init failed, retry without optional flags.
      * COOP_TASKRUN/SINGLE_ISSUER may not be supported on older kernels,
      * and SQPOLL requires root/CAP_SYS_NICE. */
+    bool got_single_issuer = false;
     if (ret < 0) {
+        /* Retry without SINGLE_ISSUER/R_DISABLED but keep COOP_TASKRUN */
         memset(&params, 0, sizeof(params));
+#ifdef IORING_SETUP_COOP_TASKRUN
+        params.flags |= IORING_SETUP_COOP_TASKRUN;
+#endif
         APPLY_SQPOLL_PARAMS(&params);
         ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
         ctx->sqpoll_enabled = try_sqpoll && (ret >= 0);
+
+        /* If still failed, retry without COOP_TASKRUN */
+        if (ret < 0) {
+            memset(&params, 0, sizeof(params));
+            APPLY_SQPOLL_PARAMS(&params);
+            ret = io_uring_queue_init_params(queue_depth, &ctx->ring, &params);
+            ctx->sqpoll_enabled = try_sqpoll && (ret >= 0);
+        }
 
         /* If SQPOLL also failed, try bare minimum */
         if (ret < 0 && try_sqpoll) {
@@ -160,8 +185,13 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
         }
     } else {
         ctx->sqpoll_enabled = try_sqpoll;
+        got_single_issuer = try_single_issuer;
     }
 #undef APPLY_SQPOLL_PARAMS
+#undef APPLY_SINGLE_ISSUER_PARAMS
+
+    ctx->single_issuer_enabled = got_single_issuer;
+    ctx->needs_enable = got_single_issuer && try_disabled;
 
     if (ret < 0) {
         errno = -ret;
@@ -231,9 +261,32 @@ bool ring_in_callback_context(void) {
     return callback_context_depth > 0;
 }
 
+int ring_enable(ring_ctx_t *ctx) {
+    if (!ctx || !ctx->ring_initialized) {
+        errno = EINVAL;
+        return (-1);
+    }
+    if (!ctx->needs_enable) {
+        return (0); /* Already enabled or not created with R_DISABLED */
+    }
+    int ret = io_uring_enable_rings(&ctx->ring);
+    if (ret < 0) {
+        errno = -ret;
+        return (-1);
+    }
+    ctx->needs_enable = false;
+    return (0);
+}
+
 void ring_destroy(ring_ctx_t *ctx) {
     if (!ctx) {
         return;
+    }
+
+    /* Enable disabled rings before destroying — io_uring_submit fails on
+     * disabled rings, and we need to flush/drain any pending SQEs. */
+    if (ctx->needs_enable) {
+        (void)ring_enable(ctx);
     }
 
     /* Reject new submissions before draining. */
@@ -854,10 +907,49 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
     return completed;
 }
 
+/**
+ * Fast CQE drain for single-thread rings.
+ *
+ * No cq_lock acquisition, no batch staging for retirement.
+ * Processes completions inline and retires directly under ring->lock
+ * (which is a no-op for single_thread rings).
+ */
+int ring_drain_cqes_fast(ring_ctx_t *ctx) {
+    int completed = 0;
+    struct io_uring_cqe *cqe;
+
+    while (io_uring_peek_cqe(&ctx->ring, &cqe) == 0) {
+        aura_request_t *req = io_uring_cqe_get_data(cqe);
+        ssize_t result = cqe->res;
+        io_uring_cqe_seen(&ctx->ring, cqe);
+
+        if (req) TSAN_ACQUIRE(req);
+
+        retire_entry_t retire = process_completion(ctx, req, result);
+
+        /* Inline retirement (no lock needed for single_thread) */
+        if (retire.op_idx >= 0) {
+            if (retire.op_type != AURA_OP_CANCEL) {
+                ctx->ops_completed++;
+                if (retire.result > 0 && op_is_data_transfer(retire.op_type)) {
+                    ctx->bytes_completed += retire.result;
+                }
+            }
+            ring_put_request(ctx, retire.op_idx);
+            atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_release);
+        }
+        completed++;
+    }
+
+    return completed;
+}
+
 int ring_poll(ring_ctx_t *ctx) {
     if (!ctx || !ctx->ring_initialized) {
         return (0);
     }
+
+    if (ctx->single_thread) return ring_drain_cqes_fast(ctx);
 
     return ring_drain_cqes(ctx);
 }

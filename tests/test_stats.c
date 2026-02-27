@@ -631,6 +631,50 @@ TEST(ring_select_enum_values) {
     assert(AURA_SELECT_ADAPTIVE == 0);
     assert(AURA_SELECT_CPU_LOCAL == 1);
     assert(AURA_SELECT_ROUND_ROBIN == 2);
+    assert(AURA_SELECT_THREAD_LOCAL == 3);
+}
+
+TEST(ring_select_thread_local) {
+    /* THREAD_LOCAL mode: single thread should own one ring exclusively */
+    io_setup();
+
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_count = 4;
+    opts.queue_depth = 64;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
+    opts.disable_adaptive = true;
+
+    aura_engine_t *engine = aura_create_with_options(&opts);
+    assert(engine != NULL);
+
+    /* Submit and complete several ops from one thread */
+    void *buf = aura_buffer_alloc(engine, 4096);
+    assert(buf != NULL);
+
+    for (int i = 0; i < 16; i++) {
+        callback_called = 0;
+        lseek(test_fd, 0, SEEK_SET);
+        aura_request_t *req =
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+        assert(req != NULL);
+        aura_wait(engine, 1000);
+        assert(callback_called == 1);
+    }
+
+    /* All ops should land on exactly one ring (the thread-local one) */
+    int rings_used = 0;
+    int actual_rings = aura_get_ring_count(engine);
+    for (int i = 0; i < actual_rings; i++) {
+        aura_ring_stats_t rs;
+        aura_get_ring_stats(engine, i, &rs, sizeof(rs));
+        if (rs.ops_completed > 0) rings_used++;
+    }
+    assert(rings_used == 1);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+    io_teardown();
 }
 
 /* ============================================================================
@@ -1061,6 +1105,7 @@ int main(void) {
     RUN_TEST(ring_select_enum_values);
     RUN_TEST(ring_select_round_robin);
     RUN_TEST(ring_select_cpu_local);
+    RUN_TEST(ring_select_thread_local);
 
     /* Ring selection validation */
     RUN_TEST(ring_select_invalid_mode);

@@ -110,6 +110,7 @@ struct aura_engine {
     bool adaptive_enabled; /**< Adaptive tuning enabled */
     bool sqpoll_enabled; /**< True if SQPOLL is active on any ring */
     int event_fd; /**< Unified eventfd for all rings */
+    bool eventfd_registered; /**< True if eventfd is registered with rings */
     size_t buffer_alignment; /**< Buffer alignment */
     pthread_t tick_thread; /**< Tick thread handle */
     _Atomic uint64_t adaptive_spills; /**< Count of ADAPTIVE ring spills */
@@ -152,6 +153,10 @@ static _Thread_local int tls_link_depth = 0;
  *  Used by aura_request_set_linked() to set tls_link_ring without
  *  needing the engine pointer. */
 static _Thread_local ring_ctx_t *tls_last_ring = NULL;
+
+/** Thread-local owned ring for THREAD_LOCAL mode.
+ *  Once claimed, a thread always submits to and polls from this ring. */
+static _Thread_local ring_ctx_t *tls_owned_ring = NULL;
 
 
 /**
@@ -205,17 +210,57 @@ static inline uint32_t xorshift_tls(void) {
 }
 
 /**
+ * Select a thread-local ring.
+ *
+ * On first call, atomically claims a ring index. If this thread is the sole
+ * owner, enables single_thread mode (no locks). If shared (more threads than
+ * rings), keeps mutexes active.
+ */
+static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
+    /* Validate tls_owned_ring belongs to this engine (handles stale TLS
+     * from a previously destroyed engine in the same thread). */
+    if (tls_owned_ring &&
+        tls_owned_ring >= engine->rings &&
+        tls_owned_ring < engine->rings + engine->ring_count) {
+        return tls_owned_ring;
+    }
+    tls_owned_ring = NULL;
+
+    unsigned idx = atomic_fetch_add_explicit(&engine->next_ring, 1, memory_order_relaxed);
+    ring_ctx_t *ring = &engine->rings[idx % engine->ring_count];
+
+    int prev = atomic_fetch_add_explicit(&ring->owner_count, 1, memory_order_acq_rel);
+    if (prev == 0) {
+        /* First (sole) owner — enable the ring and set single_thread */
+        if (ring->needs_enable) {
+            ring_enable(ring);
+        }
+        ring->single_thread = true;
+    } else {
+        /* Shared ring — keep mutexes, disable single_thread if it was set */
+        ring->single_thread = false;
+    }
+
+    tls_owned_ring = ring;
+    return ring;
+}
+
+/**
  * Select a ring for the next operation.
  *
  * Dispatches based on the configured ring_select mode:
  * - ADAPTIVE: CPU-local with two-gate spill + power-of-two target selection
  * - CPU_LOCAL: Always use CPU-local ring (original behavior)
  * - ROUND_ROBIN: Atomic round-robin across all rings
+ * - THREAD_LOCAL: Thread-local exclusive ring ownership
  */
 static ring_ctx_t *select_ring(aura_engine_t *engine) {
     if (engine->ring_count == 1) return &engine->rings[0];
 
     switch (engine->ring_select) {
+    case AURA_SELECT_THREAD_LOCAL:
+        return select_ring_thread_local(engine);
+
     case AURA_SELECT_ROUND_ROBIN: {
         unsigned idx = atomic_fetch_add_explicit(&engine->next_ring, 1, memory_order_relaxed);
         return &engine->rings[idx % engine->ring_count];
@@ -656,6 +701,33 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
     /* If we're in a link chain, pin to the same ring so the linked SQEs
      * share one submission queue. */
     ring_ctx_t *ring = tls_link_ring ? tls_link_ring : select_ring(engine);
+
+    /* Thread-local single-thread fast path: no lock, inline capacity check.
+     * select_ring_thread_local() has validated tls_owned_ring ownership. */
+    if (ring->single_thread && engine->ring_select == AURA_SELECT_THREAD_LOCAL &&
+        !tls_link_ring) {
+        if (!ring_can_submit(ring)) {
+            ring_flush_fast(ring);
+            ring_drain_cqes_fast(ring);
+            if (!ring_can_submit(ring)) {
+                errno = EAGAIN;
+                return ctx;
+            }
+        }
+
+        int op_idx;
+        aura_request_t *req = ring_get_request(ring, &op_idx);
+        if (!req) {
+            errno = ENOMEM;
+            return ctx;
+        }
+
+        ctx.ring = ring;
+        ctx.req = req;
+        ctx.op_idx = op_idx;
+        return ctx;
+    }
+
     ring_lock(ring);
 
     if (!ring_can_submit(ring)) {
@@ -706,6 +778,15 @@ static void submit_end(submit_ctx_t *ctx) {
         atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
     }
 
+    /* Thread-local single-thread fast path: no lock to release */
+    if (ctx->ring->single_thread && tls_link_ring == NULL) {
+        tls_last_ring = ctx->ring;
+        if (ring_should_flush(ctx->ring)) {
+            ring_flush_fast(ctx->ring);
+        }
+        return;
+    }
+
     /* Save the ring for aura_request_set_linked() to use. */
     tls_last_ring = ctx->ring;
 
@@ -745,7 +826,7 @@ static void submit_abort(submit_ctx_t *ctx) {
         tls_link_ring = NULL;
         tls_link_depth = 0;
     }
-    ring_unlock(ctx->ring);
+    ring_unlock(ctx->ring); /* No-op for single_thread rings */
 }
 
 /**
@@ -962,9 +1043,12 @@ static int init_engine_rings(aura_engine_t *engine, const aura_options_t *option
     }
 
     /* Prepare ring options */
+    bool thread_local_mode = (options->ring_select == AURA_SELECT_THREAD_LOCAL);
     ring_options_t ring_opts = { .enable_sqpoll = options->enable_sqpoll,
                                  .sqpoll_idle_ms =
-                                     options->sqpoll_idle_ms > 0 ? options->sqpoll_idle_ms : 1000 };
+                                     options->sqpoll_idle_ms > 0 ? options->sqpoll_idle_ms : 1000,
+                                 .enable_single_issuer = thread_local_mode,
+                                 .start_disabled = thread_local_mode };
 
     /* Initialize each ring */
     for (int i = 0; i < engine->ring_count; i++) {
@@ -1007,11 +1091,19 @@ static int init_engine_rings(aura_engine_t *engine, const aura_options_t *option
  */
 static int register_eventfd_with_rings(aura_engine_t *engine) {
     /* Create unified eventfd for event loop integration.
-     * This single fd is registered with all io_uring rings, so any ring
-     * completion will wake up the user's event loop (epoll/select/etc). */
+     * Always create the fd (for aura_get_poll_fd() compatibility),
+     * but only register with rings if not in THREAD_LOCAL mode. */
     engine->event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (engine->event_fd < 0) {
         return -1;
+    }
+
+    /* In THREAD_LOCAL mode, skip registration — threads poll their own rings
+     * directly without needing eventfd wakeups. Registration is deferred
+     * until aura_get_poll_fd() is called (lazy registration). */
+    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL) {
+        engine->eventfd_registered = false;
+        return 0;
     }
 
     /* Register eventfd with each ring */
@@ -1028,6 +1120,7 @@ static int register_eventfd_with_rings(aura_engine_t *engine) {
         }
     }
 
+    engine->eventfd_registered = true;
     return 0;
 }
 
@@ -1089,8 +1182,10 @@ aura_engine_t *aura_create_with_options(const aura_options_t *options) {
 
 cleanup_eventfd:
     if (engine->event_fd >= 0) {
-        for (int i = 0; i < engine->ring_count; i++) {
-            io_uring_unregister_eventfd(&engine->rings[i].ring);
+        if (engine->eventfd_registered) {
+            for (int i = 0; i < engine->ring_count; i++) {
+                io_uring_unregister_eventfd(&engine->rings[i].ring);
+            }
         }
         close(engine->event_fd);
     }
@@ -1169,8 +1264,10 @@ static void destroy_phase_4_cleanup_resources(aura_engine_t *engine) {
      * Closing first could cause kernel writes to a recycled fd number
      * if the OS reuses it before unregistration completes. */
     if (engine->event_fd >= 0) {
-        for (int i = 0; i < engine->ring_count; i++) {
-            io_uring_unregister_eventfd(&engine->rings[i].ring);
+        if (engine->eventfd_registered) {
+            for (int i = 0; i < engine->ring_count; i++) {
+                io_uring_unregister_eventfd(&engine->rings[i].ring);
+            }
         }
         close(engine->event_fd);
     }
@@ -1616,6 +1713,24 @@ int aura_get_poll_fd(const aura_engine_t *engine) {
         return (-1);
     }
 
+    /* Lazy registration: if eventfd exists but is not registered with rings
+     * (THREAD_LOCAL mode), register now so the caller's event loop works. */
+    if (engine->event_fd >= 0 && !engine->eventfd_registered) {
+        aura_engine_t *mutable_engine = (aura_engine_t *)engine;
+        for (int i = 0; i < engine->ring_count; i++) {
+            int ret = io_uring_register_eventfd(&mutable_engine->rings[i].ring, engine->event_fd);
+            if (ret != 0) {
+                /* Best-effort: unregister any that succeeded */
+                for (int j = 0; j < i; j++) {
+                    io_uring_unregister_eventfd(&mutable_engine->rings[j].ring);
+                }
+                errno = -ret;
+                return (-1);
+            }
+        }
+        mutable_engine->eventfd_registered = true;
+    }
+
     /* Return the unified eventfd that is registered with all io_uring rings.
      * When ANY ring completes an operation, this fd becomes readable.
      * This allows proper event loop integration in multi-core setups. */
@@ -1645,13 +1760,32 @@ int aura_poll(aura_engine_t *engine) {
         return (-1);
     }
 
+    /* Thread-local fast path: skip eventfd drain, skip two-pass loop.
+     * select_ring_thread_local validates ownership; if tls_owned_ring is stale
+     * it gets reassigned. After the first submit, tls_owned_ring is guaranteed
+     * valid for this engine. If no submit happened yet, we fall through. */
+    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring &&
+        tls_owned_ring >= engine->rings &&
+        tls_owned_ring < engine->rings + engine->ring_count) {
+        ring_ctx_t *ring = tls_owned_ring;
+        if (ring->single_thread) {
+            ring_flush_fast(ring);
+        } else {
+            ring_lock(ring);
+            flush_ring_checked(engine, ring);
+            ring_unlock(ring);
+        }
+        int n = ring_poll(ring);
+        return n > 0 ? n : 0;
+    }
+
     bool fatal_latched = (get_fatal_submit_errno(engine) != 0);
 
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
     }
 
-    drain_eventfd(engine);
+    if (engine->eventfd_registered) drain_eventfd(engine);
 
     int total = 0;
     int skipped = 0;
@@ -1706,13 +1840,31 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         return (-1);
     }
 
+    /* Thread-local fast path: flush, poll, and if needed block on own ring.
+     * Validate ownership with bounds check to handle stale TLS. */
+    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring &&
+        tls_owned_ring >= engine->rings &&
+        tls_owned_ring < engine->rings + engine->ring_count) {
+        ring_ctx_t *ring = tls_owned_ring;
+        if (ring->single_thread) {
+            ring_flush_fast(ring);
+        } else {
+            ring_lock(ring);
+            flush_ring_checked(engine, ring);
+            ring_unlock(ring);
+        }
+        int n = ring_poll(ring);
+        if (n > 0) return n;
+        return ring_wait(ring, timeout_ms);
+    }
+
     bool fatal_latched = (get_fatal_submit_errno(engine) != 0);
 
     if (maybe_finalize_deferred_unregistration(engine) != 0) {
         return (-1);
     }
 
-    drain_eventfd(engine);
+    if (engine->eventfd_registered) drain_eventfd(engine);
 
     /* Single-pass flush+poll: flush each ring and immediately poll it.
      * Returns as soon as any ring produces completions — remaining rings
