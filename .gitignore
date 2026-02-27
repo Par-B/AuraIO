@@ -29,6 +29,7 @@ tests/perf_regression
 tests/test_request_fd_fix
 tests/test_spill_stress
 tests/test_histogram
+tests/test_linked_ops
 tests/bench_histogram
 
 # Benchmark results (generated)
