@@ -1,6 +1,6 @@
 # AuraIO API Reference
 
-**Version 0.5.0**
+**Version 0.6.0**
 
 AuraIO is a self-tuning async I/O library for Linux built on io_uring. It provides three API surfaces: a C11 core library, C++20 bindings with RAII and coroutine support, and Rust bindings with safe and async wrappers.
 
@@ -164,6 +164,21 @@ Create with inline helpers -- do not construct manually:
 |------|-------------|
 | `AURA_FSYNC_DEFAULT` | Full fsync (metadata + data) |
 | `AURA_FSYNC_DATASYNC` | fdatasync (data only, skip metadata if possible) |
+
+### Submit Flags
+
+#### `aura_submit_flags_t` — Submit Flags
+
+```c
+typedef unsigned int aura_submit_flags_t;
+#define AURA_FIXED_FILE  (1u << 0)
+```
+
+Submit flags control I/O submission behavior. Pass `0` for default behavior (auto-detect registered files), or `AURA_FIXED_FILE` when passing a registered file index directly.
+
+| Flag | Value | Description |
+|------|-------|-------------|
+| `AURA_FIXED_FILE` | `1 << 0` | The `fd` argument is a registered file index, not a raw fd. Skips auto-detection and sets `IOSQE_FIXED_FILE` directly. |
 
 ### Flag Constants
 
@@ -456,6 +471,7 @@ Buffers must remain valid until the callback fires. The callback may be `NULL` f
 ```c
 aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf,
                            size_t len, off_t offset,
+                           aura_submit_flags_t flags,
                            aura_callback_t callback, void *user_data);
 ```
 
@@ -464,10 +480,11 @@ Submit an async read. Supports regular and registered buffers.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | Open file descriptor |
+| `fd` | `int` | Open file descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
 | `buf` | `aura_buf_t` | Buffer descriptor (use `aura_buf()` or `aura_buf_fixed()`) |
 | `len` | `size_t` | Bytes to read |
 | `offset` | `off_t` | File offset |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -480,6 +497,7 @@ Submit an async read. Supports regular and registered buffers.
 ```c
 aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf,
                             size_t len, off_t offset,
+                            aura_submit_flags_t flags,
                             aura_callback_t callback, void *user_data);
 ```
 
@@ -493,7 +511,8 @@ Submit an async write. Same parameters as `aura_read`.
 
 ```c
 aura_request_t *aura_fsync(aura_engine_t *engine, int fd,
-                            unsigned int flags,
+                            unsigned int fsync_flags,
+                            aura_submit_flags_t flags,
                             aura_callback_t callback, void *user_data);
 ```
 
@@ -502,8 +521,9 @@ Submit an async fsync. Pass `AURA_FSYNC_DEFAULT` for a full fsync (metadata + da
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | Open file descriptor |
-| `flags` | `unsigned int` | `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1) |
+| `fd` | `int` | Open file descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
+| `fsync_flags` | `unsigned int` | `AURA_FSYNC_DEFAULT` (0) or `AURA_FSYNC_DATASYNC` (1) |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -516,8 +536,8 @@ Submit an async fsync. Pass `AURA_FSYNC_DEFAULT` for a full fsync (metadata + da
 ```c
 aura_request_t *aura_readv(aura_engine_t *engine, int fd,
                             const struct iovec *iov, int iovcnt,
-                            off_t offset, aura_callback_t callback,
-                            void *user_data);
+                            off_t offset, aura_submit_flags_t flags,
+                            aura_callback_t callback, void *user_data);
 ```
 
 Submit an async scatter read into multiple buffers. The iovec array and all buffers must remain valid until the callback fires.
@@ -525,10 +545,11 @@ Submit an async scatter read into multiple buffers. The iovec array and all buff
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | Open file descriptor |
+| `fd` | `int` | Open file descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
 | `iov` | `const struct iovec *` | Array of iovec structures |
 | `iovcnt` | `int` | Number of elements in `iov` |
 | `offset` | `off_t` | File offset |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -541,8 +562,8 @@ Submit an async scatter read into multiple buffers. The iovec array and all buff
 ```c
 aura_request_t *aura_writev(aura_engine_t *engine, int fd,
                              const struct iovec *iov, int iovcnt,
-                             off_t offset, aura_callback_t callback,
-                             void *user_data);
+                             off_t offset, aura_submit_flags_t flags,
+                             aura_callback_t callback, void *user_data);
 ```
 
 Submit an async gather write from multiple buffers. Same parameters as `aura_readv`.
@@ -563,7 +584,8 @@ Minimum kernel versions: openat/close/statx/fallocate 5.6+, sync_file_range 5.2+
 
 ```c
 aura_request_t *aura_openat(aura_engine_t *engine, int dirfd,
-                             const char *pathname, int flags, mode_t mode,
+                             const char *pathname, int open_flags, mode_t mode,
+                             aura_submit_flags_t flags,
                              aura_callback_t callback, void *user_data);
 ```
 
@@ -574,8 +596,9 @@ Submit an async openat. The callback receives the new file descriptor as the res
 | `engine` | `aura_engine_t *` | Engine handle |
 | `dirfd` | `int` | Directory fd (`AT_FDCWD` for current directory) |
 | `pathname` | `const char *` | Path to file (relative to `dirfd`) |
-| `flags` | `int` | Open flags (`AURA_O_RDONLY`, `AURA_O_WRONLY`, `AURA_O_CREAT`, etc.) |
+| `open_flags` | `int` | Open flags (`AURA_O_RDONLY`, `AURA_O_WRONLY`, `AURA_O_CREAT`, etc.) |
 | `mode` | `mode_t` | File mode (used when `O_CREAT` is set) |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -587,6 +610,7 @@ Submit an async openat. The callback receives the new file descriptor as the res
 
 ```c
 aura_request_t *aura_close(aura_engine_t *engine, int fd,
+                            aura_submit_flags_t flags,
                             aura_callback_t callback, void *user_data);
 ```
 
@@ -595,7 +619,8 @@ Submit an async close. Callback receives 0 on success, negative errno on failure
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | File descriptor to close |
+| `fd` | `int` | File descriptor to close (or registered file index if `AURA_FIXED_FILE` is set) |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -607,8 +632,9 @@ Submit an async close. Callback receives 0 on success, negative errno on failure
 
 ```c
 aura_request_t *aura_statx(aura_engine_t *engine, int dirfd,
-                            const char *pathname, int flags,
+                            const char *pathname, int lookup_flags,
                             unsigned int mask, struct statx *statxbuf,
+                            aura_submit_flags_t flags,
                             aura_callback_t callback, void *user_data);
 ```
 
@@ -619,9 +645,10 @@ Submit an async statx. Retrieves file metadata into the caller-provided statx bu
 | `engine` | `aura_engine_t *` | Engine handle |
 | `dirfd` | `int` | Directory fd (`AT_FDCWD` for current directory) |
 | `pathname` | `const char *` | Path (relative to `dirfd`; `""` with `AURA_AT_EMPTY_PATH` for fd-based stat) |
-| `flags` | `int` | Lookup flags (`AURA_AT_EMPTY_PATH`, `AURA_AT_SYMLINK_NOFOLLOW`) |
+| `lookup_flags` | `int` | Lookup flags (`AURA_AT_EMPTY_PATH`, `AURA_AT_SYMLINK_NOFOLLOW`) |
 | `mask` | `unsigned int` | Requested fields (`AURA_STATX_SIZE`, `AURA_STATX_MTIME`, `AURA_STATX_ALL`, etc.) |
 | `statxbuf` | `struct statx *` | Output buffer -- kernel writes directly here |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -634,6 +661,7 @@ Submit an async statx. Retrieves file metadata into the caller-provided statx bu
 ```c
 aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode,
                                 off_t offset, off_t len,
+                                aura_submit_flags_t flags,
                                 aura_callback_t callback, void *user_data);
 ```
 
@@ -642,10 +670,11 @@ Submit an async fallocate. Preallocates or deallocates file space.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | File descriptor |
+| `fd` | `int` | File descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
 | `mode` | `int` | Allocation mode (`AURA_FALLOC_DEFAULT`, `AURA_FALLOC_KEEP_SIZE`, etc.) |
 | `offset` | `off_t` | Starting byte offset |
 | `len` | `off_t` | Length of region |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -657,8 +686,8 @@ Submit an async fallocate. Preallocates or deallocates file space.
 
 ```c
 aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd,
-                                off_t length, aura_callback_t callback,
-                                void *user_data);
+                                off_t length, aura_submit_flags_t flags,
+                                aura_callback_t callback, void *user_data);
 ```
 
 Submit an async ftruncate. Truncates a file to the specified length. Requires kernel 6.9+ and liburing >= 2.7.
@@ -668,8 +697,9 @@ Submit an async ftruncate. Truncates a file to the specified length. Requires ke
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | File descriptor |
+| `fd` | `int` | File descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
 | `length` | `off_t` | New file length |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -682,7 +712,8 @@ Submit an async ftruncate. Truncates a file to the specified length. Requires ke
 ```c
 aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd,
                                       off_t offset, off_t nbytes,
-                                      unsigned int flags,
+                                      unsigned int sync_flags,
+                                      aura_submit_flags_t flags,
                                       aura_callback_t callback,
                                       void *user_data);
 ```
@@ -692,10 +723,11 @@ Submit an async sync_file_range. Syncs a byte range without flushing metadata.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `engine` | `aura_engine_t *` | Engine handle |
-| `fd` | `int` | File descriptor |
+| `fd` | `int` | File descriptor (or registered file index if `AURA_FIXED_FILE` is set) |
 | `offset` | `off_t` | Starting byte offset |
 | `nbytes` | `off_t` | Number of bytes to sync (0 = to end of file) |
-| `flags` | `unsigned int` | `AURA_SYNC_RANGE_WAIT_BEFORE`, `AURA_SYNC_RANGE_WRITE`, `AURA_SYNC_RANGE_WAIT_AFTER` |
+| `sync_flags` | `unsigned int` | `AURA_SYNC_RANGE_WAIT_BEFORE`, `AURA_SYNC_RANGE_WRITE`, `AURA_SYNC_RANGE_WAIT_AFTER` |
+| `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
 | `callback` | `aura_callback_t` | Completion callback (may be `NULL`) |
 | `user_data` | `void *` | Passed to callback |
 
@@ -801,6 +833,18 @@ bool aura_request_is_linked(const aura_request_t *req);
 Check if a request is marked as linked.
 
 **Returns:** `true` if the request has `IOSQE_IO_LINK` set, `false` otherwise.
+
+---
+
+##### `aura_request_set_fixed_file` (removed in 0.6.0)
+
+> **Removed in 0.6.0.** Superseded by the `AURA_FIXED_FILE` submit flag. Pass `AURA_FIXED_FILE` in the `flags` parameter of any I/O function instead:
+>
+> ```c
+> aura_request_t *req = aura_read(engine, 0 /* registered index */,
+>                                  aura_buf(buf), len, offset,
+>                                  AURA_FIXED_FILE, cb, ud);
+> ```
 
 ---
 

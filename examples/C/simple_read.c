@@ -89,7 +89,8 @@ int main(int argc, char **argv) {
 
     /* Submit async read */
     printf("Submitting async read of %d bytes...\n", READ_SIZE);
-    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read_done, &state);
+    aura_request_t *req =
+        aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, 0, on_read_done, &state);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
         aura_buffer_free(engine, buf);

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file write_modes.c
  * @brief Demonstrates O_DIRECT vs buffered I/O with AuraIO
@@ -121,7 +120,7 @@ int run_write_test(const char *filename, int use_direct) {
     for (int i = 0; i < NUM_WRITES; i++) {
         off_t offset = i * WRITE_SIZE;
         aura_request_t *req =
-            aura_write(engine, fd, aura_buf(buf), WRITE_SIZE, offset, on_write_done, &state);
+            aura_write(engine, fd, aura_buf(buf), WRITE_SIZE, offset, 0, on_write_done, &state);
         if (!req) {
             fprintf(stderr, "Failed to submit write %d: %s\n", i, strerror(errno));
             break;
@@ -152,7 +151,7 @@ int run_write_test(const char *filename, int use_direct) {
     printf("Fsyncing...\n");
     write_state_t fsync_state = { .completed = 0, .total = 1, .start_ns = 0, .end_ns = 0 };
     aura_request_t *fsync_req =
-        aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, on_write_done, &fsync_state);
+        aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0, on_write_done, &fsync_state);
     if (fsync_req) {
         while (fsync_state.completed < fsync_state.total) {
             aura_wait(engine, 100);

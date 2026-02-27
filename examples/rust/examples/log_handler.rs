@@ -74,7 +74,7 @@ fn main() -> Result<()> {
     let done_clone = done.clone();
 
     unsafe {
-        engine.read(fd, (&buf).into(), BUF_SIZE, 0, move |result| {
+        engine.read(fd, (&buf).into(), BUF_SIZE, 0, 0, move |result| {
             if let Err(e) = &result {
                 log_emit(LogLevel::Error, &format!("I/O error: {}", e));
             }

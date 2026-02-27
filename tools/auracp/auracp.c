@@ -535,7 +535,7 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
     slot->state = BUF_WRITING;
 
     aura_request_t *wreq = aura_write(ctx->engine, task->dst_fd, aura_buf(slot->buf), slot->bytes,
-                                      slot->offset, on_write_complete, slot);
+                                      slot->offset, 0, on_write_complete, slot);
     if (!wreq) {
         if (ctx->error == 0) {
             fprintf(stderr, "auracp: write submit failed on '%s': %s\n", task->dst_path,
@@ -592,7 +592,7 @@ static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot) {
         slot->state = BUF_FSYNCING;
         ctx->active_ops++;
         aura_request_t *freq =
-            aura_fsync(ctx->engine, task->dst_fd, AURA_FSYNC_DATASYNC, on_fsync_complete, slot);
+            aura_fsync(ctx->engine, task->dst_fd, AURA_FSYNC_DATASYNC, 0, on_fsync_complete, slot);
         if (!freq) {
             slot->task = NULL;
             slot->state = BUF_FREE;
@@ -731,7 +731,7 @@ static void submit_next_read(copy_ctx_t *ctx, buf_slot_t *slot) {
     }
 
     aura_request_t *req = aura_read(ctx->engine, task->src_fd, aura_buf(slot->buf), chunk,
-                                    slot->offset, on_read_complete, slot);
+                                    slot->offset, 0, on_read_complete, slot);
     if (!req) {
         if (ctx->error == 0) {
             fprintf(stderr, "auracp: read submit failed on '%s': %s\n", task->src_path,

@@ -108,7 +108,7 @@ To fully leverage this architecture:
 
     // Hot loop: reuse buffers, no alloc/free
     void *buf = bufs[slot];
-    aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, cb, data);
+    aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, 0, cb, data);
 
     // At shutdown: free once
     for (int i = 0; i < DEPTH; i++)
@@ -164,8 +164,14 @@ AuraIO is designed to scale linearly on large-core servers with high-bandwidth s
 int fds[] = { fd1, fd2, fd3, /* ... */ };
 aura_register_files(engine, fds, count);
 
-// I/O operations automatically use registered files when available.
-// No change needed to aura_read/aura_write calls.
+// Auto-detection: pass raw fds as usual with flags=0 — the engine
+// resolves them to registered indices automatically (O(n) lookup per
+// submission). No change needed to aura_read/aura_write calls.
+
+// Direct-index: pass the registered index and AURA_FIXED_FILE to
+// skip the auto-detection lookup (O(1), best for hot paths).
+aura_request_t *req = aura_read(engine, 0 /* index */, aura_buf(buf),
+                                 len, offset, AURA_FIXED_FILE, cb, ud);
 
 // To replace a file descriptor (e.g., log rotation):
 aura_update_file(engine, index, new_fd);
@@ -195,6 +201,7 @@ engine.unregister(AURA_REG_FILES);
 - Registration is applied to all rings and requires a brief lock per ring — do it once, not per-request.
 - The `aura_update_file()` function allows replacing individual file descriptors without unregistering the entire set (useful for log rotation or connection recycling).
 - There is no AuraIO-imposed limit on registered file count; the limit comes from the kernel (typically 64K+ on modern kernels).
+- **Auto-detection vs direct-index**: By default, the engine scans the registered file table on each submission to auto-detect registered fds (O(n) in the number of registered files). For hot paths with many registered files, pass `AURA_FIXED_FILE` in the `flags` parameter with the registered index directly to skip this lookup.
 
 ### Registered Buffers — Zero-Copy I/O
 
@@ -218,10 +225,10 @@ for (int i = 0; i < NUM_BUFFERS; i++) {
 aura_register_buffers(engine, iovs, NUM_BUFFERS);
 
 // Use registered buffers by index:
-aura_read(engine, fd, aura_buf_fixed(0, 0), BUF_SIZE, offset, cb, data);
+aura_read(engine, fd, aura_buf_fixed(0, 0), BUF_SIZE, offset, 0, cb, data);
 
 // For sub-buffer offsets (reading into the middle of a registered buffer):
-aura_read(engine, fd, aura_buf_fixed(0, 2048), 2048, offset, cb, data);
+aura_read(engine, fd, aura_buf_fixed(0, 2048), 2048, offset, 0, cb, data);
 
 // At shutdown:
 aura_unregister(engine, AURA_REG_BUFFERS);

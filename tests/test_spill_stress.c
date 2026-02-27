@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_spill_stress.c
  * @brief Stress test for adaptive spill logic
@@ -59,7 +58,7 @@ static void *worker(void *arg) {
     /* Phase 1: Fill without polling to build pending pressure */
     for (int i = 0; i < FILL_COUNT && submitted < ctx->ops_target; i++) {
         aura_request_t *req =
-            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, 0, completion_cb, ctx);
         if (req) submitted++;
         else break;
     }
@@ -73,7 +72,7 @@ static void *worker(void *arg) {
     int batch = 0;
     while (submitted < ctx->ops_target) {
         aura_request_t *req =
-            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, 0, completion_cb, ctx);
         if (req) {
             submitted++;
             batch++;

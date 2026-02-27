@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     let total_copied = copy_file(&engine, src_fd, dst_fd, file_size, CHUNK_SIZE)?;
 
     // Fsync the destination
-    let fsync_future = engine.async_fsync(dst_fd)?;
+    let fsync_future = engine.async_fsync(dst_fd, 0)?;
     block_on(&engine, fsync_future)?;
 
     let elapsed = start_time.elapsed().as_secs_f64();
@@ -131,7 +131,7 @@ fn copy_file(
         let buf = engine.allocate_buffer(chunk)?;
 
         // Async read
-        let read_future = unsafe { engine.async_read(src_fd, &buf, chunk, offset as i64)? };
+        let read_future = unsafe { engine.async_read(src_fd, &buf, chunk, offset as i64, 0)? };
         let bytes_read = block_on(engine, read_future)?;
 
         if bytes_read == 0 {
@@ -139,7 +139,7 @@ fn copy_file(
         }
 
         // Async write
-        let write_future = unsafe { engine.async_write(dst_fd, &buf, bytes_read, offset as i64)? };
+        let write_future = unsafe { engine.async_write(dst_fd, &buf, bytes_read, offset as i64, 0)? };
         let bytes_written = block_on(engine, write_future)?;
 
         total_copied += bytes_written;

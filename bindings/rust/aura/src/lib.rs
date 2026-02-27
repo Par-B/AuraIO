@@ -24,7 +24,7 @@
 //!     let done = Arc::new(AtomicBool::new(false));
 //!     let done_clone = done.clone();
 //!
-//!     unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, move |result| {
+//!     unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, 0, move |result| {
 //!         match result {
 //!             Ok(n) => println!("Read {} bytes", n),
 //!             Err(e) => eprintln!("Error: {}", e),
@@ -101,6 +101,9 @@ pub use async_io::{AsyncEngine, IoFuture};
 
 // Re-export libc types commonly needed
 pub use libc::iovec;
+
+/// Submit flag: fd is a registered file index, not a raw fd.
+pub const AURA_FIXED_FILE: u32 = 1 << 0;
 
 #[cfg(test)]
 mod tests {
@@ -524,7 +527,7 @@ mod tests {
 
         unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |result| {
                     match result {
                         Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
                         Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -569,7 +572,7 @@ mod tests {
 
         unsafe {
             engine
-                .write(fd, (&buf).into(), test_data.len(), 0, move |result| {
+                .write(fd, (&buf).into(), test_data.len(), 0, 0, move |result| {
                     match result {
                         Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
                         Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -615,7 +618,7 @@ mod tests {
 
         unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |result| {
                     if result.is_ok() {
                         counter_clone.fetch_add(1, Ordering::SeqCst);
                     }
@@ -648,7 +651,7 @@ mod tests {
         let success_clone = success.clone();
 
         engine
-            .fsync(fd, move |result| {
+            .fsync(fd, 0, move |result| {
                 success_clone.store(result.is_ok(), Ordering::SeqCst);
                 done_clone.store(true, Ordering::SeqCst);
             })
@@ -678,7 +681,7 @@ mod tests {
         let success_clone = success.clone();
 
         engine
-            .fdatasync(fd, move |result| {
+            .fdatasync(fd, 0, move |result| {
                 success_clone.store(result.is_ok(), Ordering::SeqCst);
                 done_clone.store(true, Ordering::SeqCst);
             })
@@ -724,7 +727,7 @@ mod tests {
         // Safety: iovecs live on the stack until wait() completes
         unsafe {
             engine
-                .readv(fd, &iovecs, 0, move |result| {
+                .readv(fd, &iovecs, 0, 0, move |result| {
                     match result {
                         Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
                         Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -776,7 +779,7 @@ mod tests {
         // Safety: iovecs live on the stack until wait() completes
         unsafe {
             engine
-                .writev(fd, &iovecs, 0, move |result| {
+                .writev(fd, &iovecs, 0, 0, move |result| {
                     match result {
                         Ok(n) => result_clone.store(n as i32, Ordering::SeqCst),
                         Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -897,7 +900,7 @@ mod tests {
 
         unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     done_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap();
@@ -937,7 +940,7 @@ mod tests {
 
             unsafe {
                 engine
-                    .read(fd, (&buf).into(), 4, (i * 4) as i64, move |_result| {
+                    .read(fd, (&buf).into(), 4, (i * 4) as i64, 0, move |_result| {
                         completed_clone.fetch_add(1, Ordering::SeqCst);
                         // Buffer dropped here
                         drop(buf); // Buffer captured to keep it alive until callback fires
@@ -975,7 +978,7 @@ mod tests {
 
         let handle = unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     done_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap()
@@ -1061,7 +1064,7 @@ mod tests {
 
         let handle = unsafe {
             engine
-                .read(fd, (&buf).into(), 1024 * 1024, 0, move |result| {
+                .read(fd, (&buf).into(), 1024 * 1024, 0, 0, move |result| {
                     if let Err(Error::Cancelled) = result {
                         was_cancelled_clone.store(true, Ordering::SeqCst);
                     }
@@ -1112,7 +1115,7 @@ mod tests {
 
         let handle = unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     completed_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap()
@@ -1150,7 +1153,7 @@ mod tests {
 
         let handle = unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     completed_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap()
@@ -1213,7 +1216,7 @@ mod tests {
 
             let handle = unsafe {
                 engine
-                    .read(fd, (&buf).into(), 16 * 1024, 0, move |result| {
+                    .read(fd, (&buf).into(), 16 * 1024, 0, 0, move |result| {
                         completed_clone.fetch_add(1, Ordering::SeqCst);
                         if matches!(result, Err(Error::Cancelled)) {
                             cancelled_clone.fetch_add(1, Ordering::SeqCst);
@@ -1262,7 +1265,7 @@ mod tests {
         let result_clone = result_fd.clone();
 
         engine
-            .openat(libc::AT_FDCWD, &path, libc::O_RDONLY, 0, move |result| {
+            .openat(libc::AT_FDCWD, &path, libc::O_RDONLY, 0, 0, move |result| {
                 match result {
                     Ok(fd) => result_clone.store(fd as i32, Ordering::SeqCst),
                     Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -1285,7 +1288,7 @@ mod tests {
         let success_clone = success.clone();
 
         engine
-            .close(opened_fd, move |result| {
+            .close(opened_fd, 0, move |result| {
                 success_clone.store(result.is_ok(), Ordering::SeqCst);
                 done_clone.store(true, Ordering::SeqCst);
             })
@@ -1324,6 +1327,7 @@ mod tests {
                     0,
                     aura_sys::AURA_STATX_SIZE,
                     &mut stx,
+                    0,
                     move |result| {
                         success_clone.store(result.is_ok(), Ordering::SeqCst);
                         done_clone.store(true, Ordering::SeqCst);
@@ -1361,7 +1365,7 @@ mod tests {
         let success_clone = success.clone();
 
         engine
-            .fallocate(fd, 0, 0, 65536, move |result| {
+            .fallocate(fd, 0, 0, 65536, 0, move |result| {
                 success_clone.store(result.is_ok(), Ordering::SeqCst);
                 done_clone.store(true, Ordering::SeqCst);
             })
@@ -1403,7 +1407,7 @@ mod tests {
         let result_clone = result_val.clone();
 
         engine
-            .ftruncate(fd, 4096, move |result| {
+            .ftruncate(fd, 4096, 0, move |result| {
                 match result {
                     Ok(_) => result_clone.store(0, Ordering::SeqCst),
                     Err(ref e) => {
@@ -1469,6 +1473,7 @@ mod tests {
                 0,
                 4096,
                 aura_sys::AURA_SYNC_RANGE_WRITE | aura_sys::AURA_SYNC_RANGE_WAIT_AFTER,
+                0,
                 move |result| {
                     success_clone.store(result.is_ok(), Ordering::SeqCst);
                     done_clone.store(true, Ordering::SeqCst);
@@ -1500,7 +1505,7 @@ mod tests {
 
         unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     completed_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap();
@@ -1533,7 +1538,7 @@ mod tests {
 
         let handle = unsafe {
             engine
-                .read(fd, (&buf).into(), 4096, 0, move |_result| {
+                .read(fd, (&buf).into(), 4096, 0, 0, move |_result| {
                     done_clone.store(true, Ordering::SeqCst);
                 })
                 .unwrap()

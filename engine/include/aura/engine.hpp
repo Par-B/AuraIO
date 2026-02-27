@@ -178,10 +178,11 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+    [[nodiscard]] Request read(int fd, BufferRef buf, size_t len, off_t offset, F &&callback,
+                               aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_read", [&](auto *ctx) {
-            return aura_read(handle_, fd, buf.c_buf(), len, offset, aura_detail_callback_trampoline,
-                             ctx);
+            return aura_read(handle_, fd, buf.c_buf(), len, offset, flags,
+                             aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -198,9 +199,10 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback) {
+    [[nodiscard]] Request write(int fd, BufferRef buf, size_t len, off_t offset, F &&callback,
+                                aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_write", [&](auto *ctx) {
-            return aura_write(handle_, fd, buf.c_buf(), len, offset,
+            return aura_write(handle_, fd, buf.c_buf(), len, offset, flags,
                               aura_detail_callback_trampoline, ctx);
         });
     }
@@ -222,12 +224,13 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+    [[nodiscard]] Request readv(int fd, std::span<const iovec> iov, off_t offset, F &&callback,
+                                aura_submit_flags_t flags = 0) {
         if (iov.size() > static_cast<size_t>(INT_MAX)) {
             throw Error(EINVAL, "iov count exceeds INT_MAX");
         }
         return submit_io(std::forward<F>(callback), "aura_readv", [&](auto *ctx) {
-            return aura_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
+            return aura_readv(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset, flags,
                               aura_detail_callback_trampoline, ctx);
         });
     }
@@ -248,12 +251,13 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback) {
+    [[nodiscard]] Request writev(int fd, std::span<const iovec> iov, off_t offset, F &&callback,
+                                 aura_submit_flags_t flags = 0) {
         if (iov.size() > static_cast<size_t>(INT_MAX)) {
             throw Error(EINVAL, "iov count exceeds INT_MAX");
         }
         return submit_io(std::forward<F>(callback), "aura_writev", [&](auto *ctx) {
-            return aura_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset,
+            return aura_writev(handle_, fd, iov.data(), static_cast<int>(iov.size()), offset, flags,
                                aura_detail_callback_trampoline, ctx);
         });
     }
@@ -267,10 +271,11 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request fsync(int fd, F &&callback) {
+    template <Callback F>
+    [[nodiscard]] Request fsync(int fd, F &&callback, aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_fsync", [&](auto *ctx) {
-            return aura_fsync(handle_, fd, AURA_FSYNC_DEFAULT, aura_detail_callback_trampoline,
-                              ctx);
+            return aura_fsync(handle_, fd, AURA_FSYNC_DEFAULT, flags,
+                              aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -283,10 +288,11 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request fdatasync(int fd, F &&callback) {
+    template <Callback F>
+    [[nodiscard]] Request fdatasync(int fd, F &&callback, aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_fsync", [&](auto *ctx) {
-            return aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC, aura_detail_callback_trampoline,
-                              ctx);
+            return aura_fsync(handle_, fd, AURA_FSYNC_DATASYNC, flags,
+                              aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -312,9 +318,9 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request openat(int dirfd, const char *pathname, int flags, mode_t mode,
-                                 F &&callback) {
+                                 F &&callback, aura_submit_flags_t submit_flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_openat", [&](auto *ctx) {
-            return aura_openat(handle_, dirfd, pathname, flags, mode,
+            return aura_openat(handle_, dirfd, pathname, flags, mode, submit_flags,
                                aura_detail_callback_trampoline, ctx);
         });
     }
@@ -328,9 +334,10 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request close(int fd, F &&callback) {
+    template <Callback F>
+    [[nodiscard]] Request close(int fd, F &&callback, aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_close", [&](auto *ctx) {
-            return aura_close(handle_, fd, aura_detail_callback_trampoline, ctx);
+            return aura_close(handle_, fd, flags, aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -353,9 +360,10 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request statx(int dirfd, const char *pathname, int flags, unsigned int mask,
-                                struct statx *statxbuf, F &&callback) {
+                                struct statx *statxbuf, F &&callback,
+                                aura_submit_flags_t submit_flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_statx", [&](auto *ctx) {
-            return aura_statx(handle_, dirfd, pathname, flags, mask, statxbuf,
+            return aura_statx(handle_, dirfd, pathname, flags, mask, statxbuf, submit_flags,
                               aura_detail_callback_trampoline, ctx);
         });
     }
@@ -376,10 +384,11 @@ class Engine {
      * @throws Error on submission failure
      */
     template <Callback F>
-    [[nodiscard]] Request fallocate(int fd, int mode, off_t offset, off_t len, F &&callback) {
+    [[nodiscard]] Request fallocate(int fd, int mode, off_t offset, off_t len, F &&callback,
+                                    aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_fallocate", [&](auto *ctx) {
-            return aura_fallocate(handle_, fd, mode, offset, len, aura_detail_callback_trampoline,
-                                  ctx);
+            return aura_fallocate(handle_, fd, mode, offset, len, flags,
+                                  aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -395,9 +404,11 @@ class Engine {
      * @return Request handle
      * @throws Error on submission failure
      */
-    template <Callback F> [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback) {
+    template <Callback F>
+    [[nodiscard]] Request ftruncate(int fd, off_t length, F &&callback,
+                                    aura_submit_flags_t flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_ftruncate", [&](auto *ctx) {
-            return aura_ftruncate(handle_, fd, length, aura_detail_callback_trampoline, ctx);
+            return aura_ftruncate(handle_, fd, length, flags, aura_detail_callback_trampoline, ctx);
         });
     }
 
@@ -417,9 +428,9 @@ class Engine {
      */
     template <Callback F>
     [[nodiscard]] Request sync_file_range(int fd, off_t offset, off_t nbytes, unsigned int flags,
-                                          F &&callback) {
+                                          F &&callback, aura_submit_flags_t submit_flags = 0) {
         return submit_io(std::forward<F>(callback), "aura_sync_file_range", [&](auto *ctx) {
-            return aura_sync_file_range(handle_, fd, offset, nbytes, flags,
+            return aura_sync_file_range(handle_, fd, offset, nbytes, flags, submit_flags,
                                         aura_detail_callback_trampoline, ctx);
         });
     }

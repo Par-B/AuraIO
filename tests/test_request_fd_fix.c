@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_request_fd_fix.c
  * @brief Test that aura_request_fd() returns original fd, not internal index
@@ -62,7 +61,7 @@ static void test_request_fd_no_registered_files(void) {
 
     /* Submit a read and check aura_request_fd() */
     void *rbuf = aura_buffer_alloc(engine, BUF_SIZE);
-    aura_request_t *req = aura_read(engine, fd, aura_buf(rbuf), BUF_SIZE, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(rbuf), BUF_SIZE, 0, 0, NULL, NULL);
 
     if (!req) {
         fail(test_name, "Failed to submit read");
@@ -141,8 +140,8 @@ static void test_request_fd_with_registered_files(void) {
     void *rbuf1 = aura_buffer_alloc(engine, BUF_SIZE);
     void *rbuf2 = aura_buffer_alloc(engine, BUF_SIZE);
 
-    aura_request_t *req1 = aura_read(engine, fd1, aura_buf(rbuf1), BUF_SIZE, 0, NULL, NULL);
-    aura_request_t *req2 = aura_read(engine, fd2, aura_buf(rbuf2), BUF_SIZE, 0, NULL, NULL);
+    aura_request_t *req1 = aura_read(engine, fd1, aura_buf(rbuf1), BUF_SIZE, 0, 0, NULL, NULL);
+    aura_request_t *req2 = aura_read(engine, fd2, aura_buf(rbuf2), BUF_SIZE, 0, 0, NULL, NULL);
 
     if (!req1 || !req2) {
         fail(test_name, "Failed to submit reads");
@@ -238,7 +237,7 @@ static void test_request_fd_fsync_registered(void) {
     }
 
     /* Submit fsync and check aura_request_fd() */
-    aura_request_t *req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, NULL, NULL);
+    aura_request_t *req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0, NULL, NULL);
 
     if (!req) {
         fail(test_name, "Failed to submit fsync");

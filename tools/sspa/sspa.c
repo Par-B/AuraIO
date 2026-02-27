@@ -238,6 +238,12 @@ static void on_complete(aura_request_t *req, ssize_t result, void *user_data) {
     wctx->active_ops--;
 
     if (result < 0) {
+        /* EBUSY: kernel rejected the I/O (e.g. page cache conflict on
+         * buffered io_uring).  Treat as transient — resubmit the slot. */
+        if (-result == EBUSY) {
+            if (!wctx->stopping && wctx->error == 0) submit_one(wctx, slot);
+            return;
+        }
         if (wctx->error == 0) wctx->error = (int)(-result);
         return;
     }
@@ -319,15 +325,15 @@ static void submit_one(worker_ctx_t *wctx, io_slot_t *slot) {
     if (do_write) {
         /* Stamp offset into first 8 bytes to defeat dedup */
         memcpy(slot->buf, &offset, sizeof(offset));
-        r = aura_write(wctx->engine, wctx->fd, aura_buf(slot->buf), io_size, offset, on_complete,
+        r = aura_write(wctx->engine, wctx->fd, aura_buf(slot->buf), io_size, offset, 0, on_complete,
                        slot);
     } else {
-        r = aura_read(wctx->engine, wctx->fd, aura_buf(slot->buf), io_size, offset, on_complete,
+        r = aura_read(wctx->engine, wctx->fd, aura_buf(slot->buf), io_size, offset, 0, on_complete,
                       slot);
     }
     if (!r) {
         slot->state = SLOT_FREE;
-        if (errno != EAGAIN && wctx->error == 0) wctx->error = errno;
+        if (errno != EAGAIN && errno != EBUSY && wctx->error == 0) wctx->error = errno;
     } else {
         wctx->active_ops++;
     }

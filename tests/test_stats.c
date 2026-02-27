@@ -385,7 +385,8 @@ TEST(aggregate_stats_sanity) {
     /* Submit a single I/O */
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
@@ -429,7 +430,8 @@ TEST(ring_stats_after_io) {
     /* Submit and complete a read */
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
@@ -461,7 +463,7 @@ TEST(histogram_after_io) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -511,7 +513,7 @@ TEST(aggregate_stats_match_ring_stats) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -569,7 +571,7 @@ TEST(ring_select_round_robin) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
     }
@@ -607,7 +609,7 @@ TEST(ring_select_cpu_local) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
     }
@@ -697,7 +699,7 @@ TEST(ring_select_invalid_mode) {
         void *buf = aura_buffer_alloc(engine, 4096);
         callback_called = 0;
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -731,7 +733,7 @@ TEST(ring_select_round_robin_distribution) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
     }
@@ -775,7 +777,7 @@ TEST(stats_ops_count_accuracy) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -812,7 +814,7 @@ TEST(stats_bytes_accuracy) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -871,7 +873,7 @@ TEST(stats_monotonic_ops) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);
@@ -922,7 +924,8 @@ TEST(cancel_completed_request) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
     aura_wait(engine, 1000);
     assert(callback_called == 1);
@@ -951,7 +954,8 @@ TEST(cancel_pending_request) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     /* Try to cancel — may succeed (0) or fail (-1/EALREADY) if already completed */
@@ -1035,7 +1039,7 @@ TEST(concurrent_stats_and_io) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);

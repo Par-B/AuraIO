@@ -87,8 +87,8 @@ TEST(openat_close_basic) {
     cb_state_t st = { 0 };
 
     /* Open (create) a file */
-    aura_request_t *req =
-        aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_WRONLY | O_TRUNC, 0644, basic_cb, &st);
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_WRONLY | O_TRUNC,
+                                      0644, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0); /* result is the new fd */
@@ -101,7 +101,7 @@ TEST(openat_close_basic) {
 
     /* Close via aura */
     cb_state_t st2 = { 0 };
-    req = aura_close(engine, fd, basic_cb, &st2);
+    req = aura_close(engine, fd, 0, basic_cb, &st2);
     assert(req);
     run_until_done(engine, &st2);
     assert(st2.result == 0);
@@ -128,7 +128,7 @@ TEST(statx_basic) {
     cb_state_t st = { 0 };
 
     aura_request_t *req =
-        aura_statx(engine, AT_FDCWD, filepath, 0, STATX_SIZE | STATX_MODE, &stx, basic_cb, &st);
+        aura_statx(engine, AT_FDCWD, filepath, 0, STATX_SIZE | STATX_MODE, &stx, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -148,7 +148,7 @@ TEST(statx_empty_path) {
     cb_state_t st = { 0 };
 
     aura_request_t *req =
-        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx, basic_cb, &st);
+        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -166,7 +166,7 @@ TEST(fallocate_basic) {
     cb_state_t st = { 0 };
 
     /* Preallocate 1MB */
-    aura_request_t *req = aura_fallocate(engine, fd, 0, 0, 1024 * 1024, basic_cb, &st);
+    aura_request_t *req = aura_fallocate(engine, fd, 0, 0, 1024 * 1024, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -192,7 +192,7 @@ TEST(ftruncate_basic) {
     cb_state_t st = { 0 };
 
     /* Truncate to 1024 */
-    aura_request_t *req = aura_ftruncate(engine, fd, 1024, basic_cb, &st);
+    aura_request_t *req = aura_ftruncate(engine, fd, 1024, 0, basic_cb, &st);
     if (!req) {
         /* liburing < 2.7 doesn't support ftruncate */
         printf("(skipped: liburing too old) ");
@@ -230,7 +230,7 @@ TEST(sync_file_range_basic) {
     cb_state_t st = { 0 };
 
     aura_request_t *req = aura_sync_file_range(
-        engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER, basic_cb, &st);
+        engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -243,8 +243,8 @@ TEST(openat_enoent) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req =
-        aura_openat(engine, AT_FDCWD, "/tmp/aura_nonexistent_file_xyz", O_RDONLY, 0, basic_cb, &st);
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, "/tmp/aura_nonexistent_file_xyz", O_RDONLY,
+                                      0, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -ENOENT);
@@ -257,7 +257,7 @@ TEST(close_ebadf) {
     cb_state_t st = { 0 };
 
     /* Close an invalid fd */
-    aura_request_t *req = aura_close(engine, 9999, basic_cb, &st);
+    aura_request_t *req = aura_close(engine, 9999, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -EBADF);
@@ -271,7 +271,7 @@ TEST(statx_enoent) {
     cb_state_t st = { 0 };
 
     aura_request_t *req = aura_statx(engine, AT_FDCWD, "/tmp/aura_nonexistent_xyz", 0, STATX_SIZE,
-                                     &stx, basic_cb, &st);
+                                     &stx, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -ENOENT);
@@ -286,7 +286,7 @@ TEST(full_lifecycle) {
 
     /* 1. Open */
     aura_request_t *req =
-        aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_RDWR | O_TRUNC, 0644, basic_cb, &st);
+        aura_openat(engine, AT_FDCWD, filepath, O_CREAT | O_RDWR | O_TRUNC, 0644, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0);
@@ -296,7 +296,7 @@ TEST(full_lifecycle) {
     char wbuf[8192];
     memset(wbuf, 'L', sizeof(wbuf));
     cb_state_t st_w = { 0 };
-    req = aura_write(engine, fd, aura_buf(wbuf), sizeof(wbuf), 0, basic_cb, &st_w);
+    req = aura_write(engine, fd, aura_buf(wbuf), sizeof(wbuf), 0, 0, basic_cb, &st_w);
     assert(req);
     run_until_done(engine, &st_w);
     assert(st_w.result == (ssize_t)sizeof(wbuf));
@@ -304,7 +304,7 @@ TEST(full_lifecycle) {
     /* 3. Statx — verify size */
     struct statx stx = { 0 };
     cb_state_t st_s = { 0 };
-    req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx, basic_cb, &st_s);
+    req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx, 0, basic_cb, &st_s);
     assert(req);
     run_until_done(engine, &st_s);
     assert(st_s.result == 0);
@@ -312,7 +312,7 @@ TEST(full_lifecycle) {
 
     /* 4. Ftruncate to half */
     cb_state_t st_t = { 0 };
-    req = aura_ftruncate(engine, fd, 4096, basic_cb, &st_t);
+    req = aura_ftruncate(engine, fd, 4096, 0, basic_cb, &st_t);
     assert(req);
     run_until_done(engine, &st_t);
     if (st_t.result == -EINVAL || st_t.result == -ENOSYS) {
@@ -323,7 +323,7 @@ TEST(full_lifecycle) {
         /* 5. Statx — verify truncated size */
         struct statx stx2 = { 0 };
         cb_state_t st_s2 = { 0 };
-        req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, basic_cb, &st_s2);
+        req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, 0, basic_cb, &st_s2);
         assert(req);
         run_until_done(engine, &st_s2);
         assert(st_s2.result == 0);
@@ -332,14 +332,14 @@ TEST(full_lifecycle) {
 
     /* 6. Fsync */
     cb_state_t st_f = { 0 };
-    req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, basic_cb, &st_f);
+    req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0, basic_cb, &st_f);
     assert(req);
     run_until_done(engine, &st_f);
     assert(st_f.result == 0);
 
     /* 7. Close */
     cb_state_t st_c = { 0 };
-    req = aura_close(engine, fd, basic_cb, &st_c);
+    req = aura_close(engine, fd, 0, basic_cb, &st_c);
     assert(req);
     run_until_done(engine, &st_c);
     assert(st_c.result == 0);
@@ -351,23 +351,23 @@ TEST(null_params) {
     aura_engine_t *engine = make_engine();
 
     /* openat with NULL pathname */
-    aura_request_t *req = aura_openat(engine, AT_FDCWD, NULL, O_RDONLY, 0, NULL, NULL);
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, NULL, O_RDONLY, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* statx with NULL pathname */
     struct statx stx;
-    req = aura_statx(engine, AT_FDCWD, NULL, 0, STATX_SIZE, &stx, NULL, NULL);
+    req = aura_statx(engine, AT_FDCWD, NULL, 0, STATX_SIZE, &stx, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* statx with NULL statxbuf */
-    req = aura_statx(engine, AT_FDCWD, "/tmp", 0, STATX_SIZE, NULL, NULL, NULL);
+    req = aura_statx(engine, AT_FDCWD, "/tmp", 0, STATX_SIZE, NULL, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* close with negative fd */
-    req = aura_close(engine, -1, NULL, NULL);
+    req = aura_close(engine, -1, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -401,7 +401,7 @@ TEST(close_registered_file) {
 
     /* Close the non-registered fd while files are registered */
     cb_state_t st = { 0 };
-    aura_request_t *req = aura_close(engine, fd, basic_cb, &st);
+    aura_request_t *req = aura_close(engine, fd, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -428,7 +428,7 @@ TEST(fallocate_registered_file) {
 
     /* Fallocate via registered file */
     cb_state_t st = { 0 };
-    aura_request_t *req = aura_fallocate(engine, fd, 0, 0, 64 * 1024, basic_cb, &st);
+    aura_request_t *req = aura_fallocate(engine, fd, 0, 0, 64 * 1024, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -461,7 +461,7 @@ TEST(ftruncate_registered_file) {
     }
 
     cb_state_t st = { 0 };
-    aura_request_t *req = aura_ftruncate(engine, fd, 512, basic_cb, &st);
+    aura_request_t *req = aura_ftruncate(engine, fd, 512, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
 
@@ -499,7 +499,7 @@ TEST(sync_file_range_registered_file) {
 
     cb_state_t st = { 0 };
     aura_request_t *req = aura_sync_file_range(
-        engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER, basic_cb, &st);
+        engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -521,8 +521,8 @@ TEST(openat_mode_verification) {
     char modefile[512];
     snprintf(modefile, sizeof(modefile), "%s/modefile", tmpdir);
 
-    aura_request_t *req =
-        aura_openat(engine, AT_FDCWD, modefile, O_CREAT | O_WRONLY | O_TRUNC, 0600, basic_cb, &st);
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, modefile, O_CREAT | O_WRONLY | O_TRUNC,
+                                      0600, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0);
@@ -548,7 +548,7 @@ TEST(ftruncate_extend) {
     cb_state_t st = { 0 };
 
     /* Extend to 1MB */
-    aura_request_t *req = aura_ftruncate(engine, fd, 1024 * 1024, basic_cb, &st);
+    aura_request_t *req = aura_ftruncate(engine, fd, 1024 * 1024, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
 
@@ -580,7 +580,7 @@ TEST(fallocate_keep_size) {
     cb_state_t st = { 0 };
 
     aura_request_t *req =
-        aura_fallocate(engine, fd, FALLOC_FL_KEEP_SIZE, 0, 1024 * 1024, basic_cb, &st);
+        aura_fallocate(engine, fd, FALLOC_FL_KEEP_SIZE, 0, 1024 * 1024, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -607,7 +607,7 @@ TEST(statx_mtime) {
     cb_state_t st = { 0 };
 
     aura_request_t *req =
-        aura_statx(engine, AT_FDCWD, filepath, 0, STATX_MTIME | STATX_SIZE, &stx, basic_cb, &st);
+        aura_statx(engine, AT_FDCWD, filepath, 0, STATX_MTIME | STATX_SIZE, &stx, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == 0);
@@ -633,11 +633,11 @@ TEST(concurrent_metadata_ops) {
     cb_state_t st1 = { 0 }, st2 = { 0 }, st3 = { 0 };
 
     aura_request_t *r1 =
-        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx1, basic_cb, &st1);
+        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx1, 0, basic_cb, &st1);
     aura_request_t *r2 =
-        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, basic_cb, &st2);
+        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, 0, basic_cb, &st2);
     aura_request_t *r3 =
-        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx3, basic_cb, &st3);
+        aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx3, 0, basic_cb, &st3);
     assert(r1 && r2 && r3);
 
     /* Poll until all 3 complete */
@@ -669,7 +669,7 @@ TEST(sync_file_range_flags) {
     /* WRITE only (non-blocking initiation) */
     cb_state_t st1 = { 0 };
     aura_request_t *req =
-        aura_sync_file_range(engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, &st1);
+        aura_sync_file_range(engine, fd, 0, 4096, SYNC_FILE_RANGE_WRITE, 0, basic_cb, &st1);
     assert(req);
     run_until_done(engine, &st1);
     assert(st1.result == 0);
@@ -679,7 +679,7 @@ TEST(sync_file_range_flags) {
     req = aura_sync_file_range(engine, fd, 4096, 4096,
                                SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
                                    SYNC_FILE_RANGE_WAIT_AFTER,
-                               basic_cb, &st2);
+                               0, basic_cb, &st2);
     assert(req);
     run_until_done(engine, &st2);
     assert(st2.result == 0);
@@ -696,8 +696,8 @@ TEST(openat_dirfd) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req =
-        aura_openat(engine, dirfd, "dirfd_test", O_CREAT | O_WRONLY | O_TRUNC, 0644, basic_cb, &st);
+    aura_request_t *req = aura_openat(engine, dirfd, "dirfd_test", O_CREAT | O_WRONLY | O_TRUNC,
+                                      0644, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result >= 0);
@@ -732,8 +732,8 @@ TEST(statx_symlink) {
     /* Stat the symlink target (follow) */
     struct statx stx1 = { 0 };
     cb_state_t st1 = { 0 };
-    aura_request_t *req =
-        aura_statx(engine, AT_FDCWD, linkpath, 0, STATX_SIZE | STATX_MODE, &stx1, basic_cb, &st1);
+    aura_request_t *req = aura_statx(engine, AT_FDCWD, linkpath, 0, STATX_SIZE | STATX_MODE, &stx1,
+                                     0, basic_cb, &st1);
     assert(req);
     run_until_done(engine, &st1);
     assert(st1.result == 0);
@@ -743,8 +743,8 @@ TEST(statx_symlink) {
     /* Stat the symlink itself (nofollow) */
     struct statx stx2 = { 0 };
     cb_state_t st2 = { 0 };
-    req = aura_statx(engine, AT_FDCWD, linkpath, AT_SYMLINK_NOFOLLOW, STATX_MODE, &stx2, basic_cb,
-                     &st2);
+    req = aura_statx(engine, AT_FDCWD, linkpath, AT_SYMLINK_NOFOLLOW, STATX_MODE, &stx2, 0,
+                     basic_cb, &st2);
     assert(req);
     run_until_done(engine, &st2);
     assert(st2.result == 0);
@@ -762,7 +762,7 @@ TEST(fallocate_bad_fd) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_fallocate(engine, 9999, 0, 0, 4096, basic_cb, &st);
+    aura_request_t *req = aura_fallocate(engine, 9999, 0, 0, 4096, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -EBADF);
@@ -778,7 +778,7 @@ TEST(fallocate_bad_mode) {
     cb_state_t st = { 0 };
 
     /* Invalid mode bits — kernel should reject */
-    aura_request_t *req = aura_fallocate(engine, fd, 0x7FFFFFFF, 0, 4096, basic_cb, &st);
+    aura_request_t *req = aura_fallocate(engine, fd, 0x7FFFFFFF, 0, 4096, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result < 0); /* EOPNOTSUPP or EINVAL */
@@ -791,7 +791,7 @@ TEST(ftruncate_bad_fd) {
     aura_engine_t *engine = make_engine();
     cb_state_t st = { 0 };
 
-    aura_request_t *req = aura_ftruncate(engine, 9999, 0, basic_cb, &st);
+    aura_request_t *req = aura_ftruncate(engine, 9999, 0, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     /* Could be -EBADF or -EINVAL/-ENOSYS on older kernels */
@@ -807,7 +807,7 @@ TEST(ftruncate_negative_length) {
     aura_engine_t *engine = make_engine();
 
     /* Negative length is rejected at the API level */
-    aura_request_t *req = aura_ftruncate(engine, fd, -1, basic_cb, NULL);
+    aura_request_t *req = aura_ftruncate(engine, fd, -1, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -820,7 +820,7 @@ TEST(sync_file_range_bad_fd) {
     cb_state_t st = { 0 };
 
     aura_request_t *req =
-        aura_sync_file_range(engine, 9999, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, &st);
+        aura_sync_file_range(engine, 9999, 0, 4096, SYNC_FILE_RANGE_WRITE, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result == -EBADF);
@@ -830,13 +830,13 @@ TEST(sync_file_range_bad_fd) {
 
 TEST(fallocate_null_params) {
     /* fallocate with NULL engine */
-    aura_request_t *req = aura_fallocate(NULL, 0, 0, 0, 4096, basic_cb, NULL);
+    aura_request_t *req = aura_fallocate(NULL, 0, 0, 0, 4096, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* fallocate with negative fd */
     aura_engine_t *engine = make_engine();
-    req = aura_fallocate(engine, -1, 0, 0, 4096, basic_cb, NULL);
+    req = aura_fallocate(engine, -1, 0, 0, 4096, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -844,12 +844,12 @@ TEST(fallocate_null_params) {
 }
 
 TEST(ftruncate_null_params) {
-    aura_request_t *req = aura_ftruncate(NULL, 0, 0, basic_cb, NULL);
+    aura_request_t *req = aura_ftruncate(NULL, 0, 0, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     aura_engine_t *engine = make_engine();
-    req = aura_ftruncate(engine, -1, 0, basic_cb, NULL);
+    req = aura_ftruncate(engine, -1, 0, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -858,12 +858,12 @@ TEST(ftruncate_null_params) {
 
 TEST(sync_file_range_null_params) {
     aura_request_t *req =
-        aura_sync_file_range(NULL, 0, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+        aura_sync_file_range(NULL, 0, 0, 4096, SYNC_FILE_RANGE_WRITE, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     aura_engine_t *engine = make_engine();
-    req = aura_sync_file_range(engine, -1, 0, 4096, SYNC_FILE_RANGE_WRITE, basic_cb, NULL);
+    req = aura_sync_file_range(engine, -1, 0, 4096, SYNC_FILE_RANGE_WRITE, 0, basic_cb, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -876,7 +876,7 @@ TEST(openat_readonly_dir) {
     cb_state_t st = { 0 };
 
     aura_request_t *req = aura_openat(engine, AT_FDCWD, "/proc/aura_nonexistent_test",
-                                      O_CREAT | O_WRONLY, 0644, basic_cb, &st);
+                                      O_CREAT | O_WRONLY, 0644, 0, basic_cb, &st);
     assert(req);
     run_until_done(engine, &st);
     assert(st.result < 0); /* -EACCES or -EROFS */

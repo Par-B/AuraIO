@@ -193,7 +193,7 @@ static void unregister_in_callback(aura_request_t *req, ssize_t result, void *us
     ctx->unregister_rc = aura_unregister(ctx->engine, AURA_REG_BUFFERS);
 
     aura_request_t *nested =
-        aura_read(ctx->engine, ctx->fd, aura_buf_fixed(0, 0), 64, 0, NULL, NULL);
+        aura_read(ctx->engine, ctx->fd, aura_buf_fixed(0, 0), 64, 0, 0, NULL, NULL);
     if (nested) {
         ctx->nested_submit_errno = 0;
     } else {
@@ -595,7 +595,8 @@ TEST(poll_fd_eventfd_integration) {
     callback_called = 0;
 
     /* Submit a read */
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     /* Force flush the submission queue (aura_wait with 0 timeout flushes all rings) */
@@ -652,7 +653,7 @@ TEST(registered_buffers_basic) {
 
     /* Read using registered buffer 0 */
     aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, test_callback, NULL);
+        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -699,8 +700,8 @@ TEST(registered_buffers_callback_deferred_unregister) {
 
     callback_called = 0;
 
-    aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, unregister_in_callback, &cb_ctx);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0,
+                                    unregister_in_callback, &cb_ctx);
     assert(req != NULL);
 
     ret = aura_wait(engine, 1000);
@@ -752,9 +753,9 @@ TEST(registered_buffers_request_deferred_unregister) {
     cb_ctx.second_ring = -1;
 
     aura_request_t *r1 =
-        aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
+        aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, 0, fixed_unreg_callback, &cb_ctx);
     aura_request_t *r2 =
-        aura_read(engine, pipefd[0], aura_buf_fixed(1, 0), 1, -1, fixed_unreg_callback, &cb_ctx);
+        aura_read(engine, pipefd[0], aura_buf_fixed(1, 0), 1, -1, 0, fixed_unreg_callback, &cb_ctx);
     assert(r1 != NULL);
     assert(r2 != NULL);
 
@@ -762,7 +763,8 @@ TEST(registered_buffers_request_deferred_unregister) {
     assert(ret == 0);
 
     errno = 0;
-    aura_request_t *blocked = aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, NULL, NULL);
+    aura_request_t *blocked =
+        aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, 0, NULL, NULL);
     assert(blocked == NULL && errno == EBUSY);
 
     const char bytes[2] = { 'x', 'y' };
@@ -780,7 +782,8 @@ TEST(registered_buffers_request_deferred_unregister) {
     assert(cb_ctx.first_ring != cb_ctx.second_ring);
 
     errno = 0;
-    aura_request_t *after = aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, NULL, NULL);
+    aura_request_t *after =
+        aura_read(engine, pipefd[0], aura_buf_fixed(0, 0), 1, -1, 0, NULL, NULL);
     assert(after == NULL && errno == ENOENT);
 
     close(pipefd[0]);
@@ -809,7 +812,7 @@ TEST(registered_buffers_write_fixed) {
 
     /* Write using registered buffer */
     aura_request_t *req =
-        aura_write(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, test_callback, NULL);
+        aura_write(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -848,7 +851,7 @@ TEST(registered_buffers_offset) {
 
     /* Read into buffer at offset 1024 */
     aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf_fixed(0, 1024), 1024, 0, test_callback, NULL);
+        aura_read(engine, test_fd, aura_buf_fixed(0, 1024), 1024, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -870,7 +873,7 @@ TEST(registered_buffers_invalid) {
     assert(engine != NULL);
 
     /* Read without registering buffers */
-    aura_request_t *req = aura_read(engine, 0, aura_buf_fixed(0, 0), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, 0, aura_buf_fixed(0, 0), 4096, 0, 0, NULL, NULL);
     assert(req == NULL && errno == ENOENT);
 
     /* Register a buffer */
@@ -881,11 +884,11 @@ TEST(registered_buffers_invalid) {
     assert(reg_ret == 0);
 
     /* Invalid buffer index */
-    req = aura_read(engine, 0, aura_buf_fixed(5, 0), 4096, 0, NULL, NULL);
+    req = aura_read(engine, 0, aura_buf_fixed(5, 0), 4096, 0, 0, NULL, NULL);
     assert(req == NULL && errno == EINVAL);
 
     /* Buffer overflow (offset + len > buffer size) */
-    req = aura_read(engine, 0, aura_buf_fixed(0, 1024), 4096, 0, NULL, NULL);
+    req = aura_read(engine, 0, aura_buf_fixed(0, 1024), 4096, 0, 0, NULL, NULL);
     assert(req == NULL && errno == EOVERFLOW);
 
     aura_unregister(engine, AURA_REG_BUFFERS);
@@ -1024,7 +1027,7 @@ TEST(registered_files_callback_request_unregister) {
     callback_called = 0;
     callback_result = 0;
 
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0,
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0,
                                     request_unregister_files_in_callback, &cb_ctx);
     assert(req != NULL);
 
@@ -1152,7 +1155,7 @@ TEST(aura_fsync_both_modes) {
     callback_called = 0;
 
     /* Test fsync with DEFAULT flag */
-    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, test_callback, NULL);
+    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -1161,7 +1164,7 @@ TEST(aura_fsync_both_modes) {
 
     /* Test fsync with DATASYNC flag */
     callback_called = 0;
-    req = aura_fsync(engine, test_fd, AURA_FSYNC_DATASYNC, test_callback, NULL);
+    req = aura_fsync(engine, test_fd, AURA_FSYNC_DATASYNC, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -1211,7 +1214,7 @@ TEST(aura_run_stop) {
     /* Submit some reads that will trigger the callback which stops the loop */
     for (int i = 0; i < 5; i++) {
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, run_stop_callback, engine);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, run_stop_callback, engine);
         assert(req != NULL);
     }
 
@@ -1253,32 +1256,32 @@ TEST(error_null_engine) {
 
     /* aura_read with NULL engine */
     errno = 0;
-    aura_request_t *req = aura_read(NULL, 0, aura_buf(buf), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(NULL, 0, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_write with NULL engine */
     errno = 0;
-    req = aura_write(NULL, 0, aura_buf(buf), 4096, 0, NULL, NULL);
+    req = aura_write(NULL, 0, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_readv with NULL engine */
     struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
     errno = 0;
-    req = aura_readv(NULL, 0, &iov, 1, 0, NULL, NULL);
+    req = aura_readv(NULL, 0, &iov, 1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_writev with NULL engine */
     errno = 0;
-    req = aura_writev(NULL, 0, &iov, 1, 0, NULL, NULL);
+    req = aura_writev(NULL, 0, &iov, 1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_fsync with NULL engine */
     errno = 0;
-    req = aura_fsync(NULL, 0, AURA_FSYNC_DEFAULT, NULL, NULL);
+    req = aura_fsync(NULL, 0, AURA_FSYNC_DEFAULT, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -1305,19 +1308,19 @@ TEST(error_invalid_fd) {
 
     /* aura_read with invalid fd */
     errno = 0;
-    aura_request_t *req = aura_read(engine, -1, aura_buf(buf), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, -1, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_write with invalid fd */
     errno = 0;
-    req = aura_write(engine, -1, aura_buf(buf), 4096, 0, NULL, NULL);
+    req = aura_write(engine, -1, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_fsync with invalid fd */
     errno = 0;
-    req = aura_fsync(engine, -1, AURA_FSYNC_DEFAULT, NULL, NULL);
+    req = aura_fsync(engine, -1, AURA_FSYNC_DEFAULT, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -1331,50 +1334,50 @@ TEST(error_null_buffer) {
 
     /* aura_read with NULL buffer */
     errno = 0;
-    aura_request_t *req = aura_read(engine, 0, aura_buf(NULL), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, 0, aura_buf(NULL), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_write with NULL buffer */
     errno = 0;
-    req = aura_write(engine, 0, aura_buf(NULL), 4096, 0, NULL, NULL);
+    req = aura_write(engine, 0, aura_buf(NULL), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_readv with NULL iov */
     errno = 0;
-    req = aura_readv(engine, 0, NULL, 1, 0, NULL, NULL);
+    req = aura_readv(engine, 0, NULL, 1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_readv with zero iovcnt */
     struct iovec iov = { .iov_base = (void *)0x1, .iov_len = 4096 };
     errno = 0;
-    req = aura_readv(engine, 0, &iov, 0, 0, NULL, NULL);
+    req = aura_readv(engine, 0, &iov, 0, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_readv with negative iovcnt */
     errno = 0;
-    req = aura_readv(engine, 0, &iov, -1, 0, NULL, NULL);
+    req = aura_readv(engine, 0, &iov, -1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_writev with negative iovcnt */
     errno = 0;
-    req = aura_writev(engine, 0, &iov, -1, 0, NULL, NULL);
+    req = aura_writev(engine, 0, &iov, -1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_readv with iovcnt > IOV_MAX */
     errno = 0;
-    req = aura_readv(engine, 0, &iov, IOV_MAX + 1, 0, NULL, NULL);
+    req = aura_readv(engine, 0, &iov, IOV_MAX + 1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_writev with iovcnt > IOV_MAX */
     errno = 0;
-    req = aura_writev(engine, 0, &iov, IOV_MAX + 1, 0, NULL, NULL);
+    req = aura_writev(engine, 0, &iov, IOV_MAX + 1, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -1389,13 +1392,13 @@ TEST(error_zero_length) {
 
     /* aura_read with zero length */
     errno = 0;
-    aura_request_t *req = aura_read(engine, 0, aura_buf(buf), 0, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, 0, aura_buf(buf), 0, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* aura_write with zero length */
     errno = 0;
-    req = aura_write(engine, 0, aura_buf(buf), 0, 0, NULL, NULL);
+    req = aura_write(engine, 0, aura_buf(buf), 0, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
@@ -1460,7 +1463,8 @@ TEST(shutdown_rejects_new_submissions) {
     assert(buf != NULL);
 
     /* Submit a request successfully */
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     /* Flush and wait for completion before destroy to avoid hanging */
@@ -1490,7 +1494,7 @@ TEST(shutdown_drains_pending_ops) {
     /* Submit multiple requests */
     for (int i = 0; i < 5; i++) {
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
     }
 
@@ -1534,7 +1538,8 @@ TEST(stats_basic) {
     /* Submit and complete an operation */
     void *buf = aura_buffer_alloc(engine, 4096);
     callback_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
     aura_wait(engine, 1000);
@@ -1590,7 +1595,7 @@ TEST(load_many_concurrent_reads) {
         assert(bufs[i] != NULL);
 
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(bufs[i]), 4096, 0, 0, concurrent_callback, NULL);
         if (req != NULL) {
             submitted++;
         }
@@ -1635,10 +1640,11 @@ TEST(load_mixed_read_write) {
 
         aura_request_t *req;
         if (i % 2 == 0) {
-            req = aura_read(engine, test_fd, aura_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+            req = aura_read(engine, test_fd, aura_buf(bufs[i]), 4096, 0, 0, concurrent_callback,
+                            NULL);
         } else {
-            req =
-                aura_write(engine, test_fd, aura_buf(bufs[i]), 4096, 0, concurrent_callback, NULL);
+            req = aura_write(engine, test_fd, aura_buf(bufs[i]), 4096, 0, 0, concurrent_callback,
+                             NULL);
         }
         if (req != NULL) {
             submitted++;
@@ -1686,7 +1692,8 @@ TEST(load_vectored_io) {
             iovs[i][j].iov_len = 1024;
         }
 
-        aura_request_t *req = aura_readv(engine, test_fd, iovs[i], 3, 0, concurrent_callback, NULL);
+        aura_request_t *req =
+            aura_readv(engine, test_fd, iovs[i], 3, 0, 0, concurrent_callback, NULL);
         if (req != NULL) {
             submitted++;
         }
@@ -1735,7 +1742,8 @@ TEST(drain_basic) {
     /* Submit some reads */
     void *buf = aura_buffer_alloc(engine, 4096);
     assert(buf != NULL);
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, drain_callback, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, drain_callback, NULL);
     assert(req != NULL);
 
     /* Drain with generous timeout - should complete */
@@ -1769,7 +1777,7 @@ TEST(drain_nonblocking) {
     void *buf = aura_buffer_alloc(engine, 4096);
     assert(buf != NULL);
     aura_request_t *drain_req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, drain_callback, NULL);
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, drain_callback, NULL);
     assert(drain_req != NULL);
 
     /* Non-blocking drain (timeout=0) - may or may not complete */

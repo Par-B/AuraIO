@@ -56,7 +56,7 @@ fn main() -> Result<()> {
     // Submit async read
     println!("Submitting async read of {} bytes...", READ_SIZE);
     unsafe {
-        engine.read(fd, (&buf).into(), READ_SIZE, 0, move |result| {
+        engine.read(fd, (&buf).into(), READ_SIZE, 0, 0, move |result| {
             match result {
                 Ok(n) => {
                     println!("Read {} bytes successfully", n);

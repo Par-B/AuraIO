@@ -85,7 +85,7 @@ fn run_write_test(filename: &str, use_direct: bool) -> Result<()> {
         let state_clone = state.clone();
 
         unsafe {
-            engine.write(fd, (&buf).into(), WRITE_SIZE, offset, move |result| {
+            engine.write(fd, (&buf).into(), WRITE_SIZE, offset, 0, move |result| {
                 if let Err(e) = result {
                     eprintln!("Write failed: {}", e);
                 }

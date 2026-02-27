@@ -864,8 +864,9 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
         octxs[i].batch = &obatch;
         atomic_fetch_add(&obatch.remaining, 1);
 
-        aura_request_t *req = aura_openat(engine, AT_FDCWD, dirs[i]->full_path,
-                                          O_RDONLY | O_DIRECTORY, 0, on_openat_complete, &octxs[i]);
+        aura_request_t *req =
+            aura_openat(engine, AT_FDCWD, dirs[i]->full_path, O_RDONLY | O_DIRECTORY, 0, 0,
+                        on_openat_complete, &octxs[i]);
         if (!req) {
             atomic_fetch_sub(&obatch.remaining, 1);
             /* Fallback: synchronous open */
@@ -957,7 +958,7 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
 
                     aura_request_t *req =
                         aura_statx(engine, sfd, spath, AURA_AT_SYMLINK_NOFOLLOW, AURA_STATX_MASK,
-                                   &child->st, on_statx_complete, &ctxs[ci]);
+                                   &child->st, 0, on_statx_complete, &ctxs[ci]);
                     if (!req) {
                         atomic_fetch_sub(&batch->remaining, 1);
                         struct statx stx;
@@ -988,7 +989,7 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
     for (size_t i = 0; i < ndirs; i++) {
         if (octxs[i].fd >= 0) {
             atomic_fetch_add(&cbatch.remaining, 1);
-            aura_request_t *req = aura_close(engine, octxs[i].fd, on_close_complete, &cbatch);
+            aura_request_t *req = aura_close(engine, octxs[i].fd, 0, on_close_complete, &cbatch);
             if (!req) {
                 atomic_fetch_sub(&cbatch.remaining, 1);
                 close(octxs[i].fd); /* sync fallback */

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_ring_select.c
  * @brief Test utility for ring selection modes
@@ -77,7 +76,7 @@ static void *worker_simple(void *arg) {
 
     while (submitted < ctx->ops_target) {
         aura_request_t *req =
-            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, 0, completion_cb, ctx);
         if (req) {
             submitted++;
             batch++;
@@ -119,7 +118,7 @@ static void *worker_adaptive(void *arg) {
      * CQEs accumulate in the CQ but aren't reaped, so pending_count stays high. */
     for (int i = 0; i < FILL_COUNT && submitted < ctx->ops_target; i++) {
         aura_request_t *req =
-            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, 0, completion_cb, ctx);
         if (req) submitted++;
         else break; /* Pool full */
     }
@@ -143,7 +142,7 @@ static void *worker_adaptive(void *arg) {
     int batch = 0;
     while (submitted < ctx->ops_target) {
         aura_request_t *req =
-            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, completion_cb, ctx);
+            aura_read(ctx->engine, ctx->fd, aura_buf(buf), BUF_SIZE, 0, 0, completion_cb, ctx);
         if (req) {
             submitted++;
             batch++;

@@ -119,6 +119,7 @@ fn main() -> Result<()> {
                 buf_ref,
                 READ_SIZE,
                 0,
+                0,
                 move |result| {
                     // file and buf are dropped when this closure completes,
                     // closing the fd and freeing the buffer automatically

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file custom_config.c
  * @brief Demonstrate AuraIO custom configuration options
@@ -81,8 +80,8 @@ void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
         while (submitted < NUM_OPS && (submitted - completed) < CONCURRENT_BUFS / 2) {
             off_t offset = (rand() % (FILE_SIZE / BUF_SIZE)) * BUF_SIZE;
             void *buf = bufs[submitted % CONCURRENT_BUFS];
-            aura_request_t *req =
-                aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, completion_callback, NULL);
+            aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, offset, 0,
+                                            completion_callback, NULL);
             if (!req) {
                 perror("aura_read");
                 break;

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file test_otel.c
  * @brief Unit tests for OpenTelemetry OTLP/JSON metrics exporter
@@ -545,7 +544,7 @@ TEST(nonzero_counters_after_io) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req);
         aura_wait(engine, 1000);
         assert(callback_called == 1);

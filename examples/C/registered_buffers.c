@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file registered_buffers.c
  * @brief Demonstrate registered (fixed) buffers for zero-copy I/O
@@ -62,11 +61,11 @@ double run_benchmark(aura_engine_t *engine, int fd, int use_registered, void *un
             aura_request_t *req;
             if (use_registered) {
                 /* Use registered buffer by index */
-                req = aura_read(engine, fd, aura_buf_fixed(buf_idx, 0), BUF_SIZE, offset,
+                req = aura_read(engine, fd, aura_buf_fixed(buf_idx, 0), BUF_SIZE, offset, 0,
                                 completion_callback, NULL);
             } else {
                 /* Use pre-allocated unregistered buffer */
-                req = aura_read(engine, fd, aura_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset,
+                req = aura_read(engine, fd, aura_buf(unreg_bufs[buf_idx]), BUF_SIZE, offset, 0,
                                 completion_callback, NULL);
             }
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file bulk_reader.c
  * @brief High-throughput bulk file reader example
@@ -184,7 +183,7 @@ int main(int argc, char **argv) {
         fctx->buf = buf;
 
         /* Submit async read */
-        if (aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_file_read, fctx) != NULL) {
+        if (aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, 0, on_file_read, fctx) != NULL) {
             ctx.files_pending++;
             submitted++;
         } else {

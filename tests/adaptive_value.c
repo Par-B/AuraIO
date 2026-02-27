@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_value.c
  * @brief Adaptive value benchmark: proves AIMD beats static depth tuning
@@ -437,7 +436,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
 
             aura_request_t *req =
                 aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cur_block_size,
-                          cur_offsets[submitted % OFFSET_TABLE_SIZE], io_callback, &slots[slot]);
+                          cur_offsets[submitted % OFFSET_TABLE_SIZE], 0, io_callback, &slots[slot]);
             if (!req) {
                 ctx.free_stack[ctx.free_top++] = slot;
                 aura_wait(engine, 1);

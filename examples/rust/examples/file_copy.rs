@@ -84,7 +84,7 @@ fn main() -> Result<()> {
 
         // Submit async read
         unsafe {
-            engine.read(src_fd, (&buf).into(), chunk, offset as i64, move |result| {
+            engine.read(src_fd, (&buf).into(), chunk, offset as i64, 0, move |result| {
                 match result {
                     Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
                     Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
 
         // Submit async write
         unsafe {
-            engine.write(dst_fd, (&buf).into(), bytes_read as usize, offset as i64, move |result| {
+            engine.write(dst_fd, (&buf).into(), bytes_read as usize, offset as i64, 0, move |result| {
                 match result {
                     Ok(n) => result_clone.store(n as isize, Ordering::SeqCst),
                     Err(_) => result_clone.store(-1, Ordering::SeqCst),
@@ -148,7 +148,7 @@ fn main() -> Result<()> {
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = done.clone();
 
-    engine.fsync(dst_fd, move |_result| {
+    engine.fsync(dst_fd, 0, move |_result| {
         done_clone.store(true, Ordering::SeqCst);
     })?;
 

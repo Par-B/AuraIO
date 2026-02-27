@@ -447,6 +447,27 @@ static file_resolve_guard_t resolve_file_begin(aura_engine_t *engine, int fd) {
     return guard;
 }
 
+/* Validate AURA_FIXED_FILE: files must be registered and index in range. */
+static bool validate_fixed_file(const aura_engine_t *engine, int index) {
+    if (!atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
+        errno = EINVAL;
+        return false;
+    }
+    if (index < 0 || index >= engine->registered_file_count) {
+        errno = EINVAL;
+        return false;
+    }
+    return true;
+}
+
+#define VALIDATE_SUBMIT_FLAGS(flags)                           \
+    do {                                                       \
+        if ((flags) & ~(aura_submit_flags_t)AURA_FIXED_FILE) { \
+            errno = EINVAL;                                    \
+            return NULL;                                       \
+        }                                                      \
+    } while (0)
+
 /*
  * End file resolution: release lock if still held.
  */
@@ -467,10 +488,19 @@ typedef int (*ring_submit_fixed_fn_t)(ring_ctx_t *ctx, aura_request_t *req);
  * Helper for unregistered buffer I/O (used by aura_read and aura_write).
  */
 static aura_request_t *submit_unregistered_io(aura_engine_t *engine, int fd, void *buffer,
-                                              size_t len, off_t offset, aura_callback_t callback,
-                                              void *user_data, ring_submit_fn_t submit_fn) {
+                                              size_t len, off_t offset, aura_submit_flags_t flags,
+                                              aura_callback_t callback, void *user_data,
+                                              ring_submit_fn_t submit_fn) {
 
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
+    file_resolve_guard_t file_guard;
+    if (flags & AURA_FIXED_FILE) {
+        if (!validate_fixed_file(engine, fd)) return NULL;
+        file_guard = (file_resolve_guard_t){
+            .engine = engine, .submit_fd = fd, .uses_registered_file = true, .locked = false
+        };
+    } else {
+        file_guard = resolve_file_begin(engine, fd);
+    }
 
     submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
@@ -556,6 +586,7 @@ static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, i
 static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd,
                                                    struct iovec *reg_iov, int buf_index,
                                                    size_t buf_offset, size_t len, off_t offset,
+                                                   aura_submit_flags_t flags,
                                                    aura_callback_t callback, void *user_data,
                                                    ring_submit_fixed_fn_t submit_fn) {
 
@@ -566,7 +597,12 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
     }
 
     int submit_fd = fd;
-    bool use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+    bool use_registered_file;
+    if (flags & AURA_FIXED_FILE) {
+        use_registered_file = true;
+    } else {
+        use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
+    }
 
     ctx.req->fd = submit_fd;
     ctx.req->original_fd = fd;
@@ -1321,21 +1357,23 @@ void aura_destroy(aura_engine_t *engine) {
  * Static inline ensures devirtualization for zero overhead.
  */
 static inline aura_request_t *submit_io_generic(aura_engine_t *engine, int fd, aura_buf_t buf,
-                                                size_t len, off_t offset, aura_callback_t callback,
-                                                void *user_data, ring_submit_fn_t submit_unreg,
+                                                size_t len, off_t offset, aura_submit_flags_t flags,
+                                                aura_callback_t callback, void *user_data,
+                                                ring_submit_fn_t submit_unreg,
                                                 ring_submit_fixed_fn_t submit_reg) {
     if (!engine || fd < 0 || len == 0) {
         errno = EINVAL;
         return NULL;
     }
+    VALIDATE_SUBMIT_FLAGS(flags);
 
     if (buf.type == AURA_BUF_UNREGISTERED) {
         if (!buf.u.ptr) {
             errno = EINVAL;
             return NULL;
         }
-        return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, callback, user_data,
-                                      submit_unreg);
+        return submit_unregistered_io(engine, fd, buf.u.ptr, len, offset, flags, callback,
+                                      user_data, submit_unreg);
     } else if (buf.type == AURA_BUF_REGISTERED) {
         registered_buf_info_t buf_info =
             validate_registered_buffer(engine, buf.u.fixed.index, buf.u.fixed.offset, len);
@@ -1343,8 +1381,8 @@ static inline aura_request_t *submit_io_generic(aura_engine_t *engine, int fd, a
             return NULL;
         }
         return submit_registered_buffer_io(engine, fd, buf_info.reg_iov, buf.u.fixed.index,
-                                           buf.u.fixed.offset, len, offset, callback, user_data,
-                                           submit_reg);
+                                           buf.u.fixed.offset, len, offset, flags, callback,
+                                           user_data, submit_reg);
     } else {
         errno = EINVAL; /* Invalid buffer type */
         return NULL;
@@ -1352,29 +1390,38 @@ static inline aura_request_t *submit_io_generic(aura_engine_t *engine, int fd, a
 }
 
 aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
-                          aura_callback_t callback, void *user_data) {
-    return submit_io_generic(engine, fd, buf, len, offset, callback, user_data, ring_submit_read,
-                             ring_submit_read_fixed);
+                          aura_submit_flags_t flags, aura_callback_t callback, void *user_data) {
+    return submit_io_generic(engine, fd, buf, len, offset, flags, callback, user_data,
+                             ring_submit_read, ring_submit_read_fixed);
 }
 
 aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf, size_t len, off_t offset,
-                           aura_callback_t callback, void *user_data) {
-    return submit_io_generic(engine, fd, buf, len, offset, callback, user_data, ring_submit_write,
-                             ring_submit_write_fixed);
+                           aura_submit_flags_t flags, aura_callback_t callback, void *user_data) {
+    return submit_io_generic(engine, fd, buf, len, offset, flags, callback, user_data,
+                             ring_submit_write, ring_submit_write_fixed);
 }
 
-aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
-                           aura_callback_t callback, void *user_data) {
+aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int fsync_flags,
+                           aura_submit_flags_t flags, aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
     }
-    if (flags & ~(unsigned)AURA_FSYNC_DATASYNC) {
+    if (fsync_flags & ~(unsigned)AURA_FSYNC_DATASYNC) {
         errno = EINVAL;
         return NULL;
     }
+    VALIDATE_SUBMIT_FLAGS(flags);
 
-    file_resolve_guard_t file_guard = resolve_file_begin(engine, fd);
+    file_resolve_guard_t file_guard;
+    if (flags & AURA_FIXED_FILE) {
+        if (!validate_fixed_file(engine, fd)) return NULL;
+        file_guard = (file_resolve_guard_t){
+            .engine = engine, .submit_fd = fd, .uses_registered_file = true, .locked = false
+        };
+    } else {
+        file_guard = resolve_file_begin(engine, fd);
+    }
 
     submit_ctx_t ctx = submit_begin(engine, !file_guard.uses_registered_file);
     if (!ctx.req) {
@@ -1390,7 +1437,7 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
     ctx.req->uses_registered_file = file_guard.uses_registered_file;
 
     int ret;
-    if (flags & AURA_FSYNC_DATASYNC) {
+    if (fsync_flags & AURA_FSYNC_DATASYNC) {
         ret = ring_submit_fdatasync(ctx.ring, ctx.req);
     } else {
         ret = ring_submit_fsync(ctx.ring, ctx.req);
@@ -1411,12 +1458,14 @@ aura_request_t *aura_fsync(aura_engine_t *engine, int fd, unsigned int flags,
  * Lifecycle Metadata Operations
  * ============================================================================ */
 
-aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
-                            mode_t mode, aura_callback_t callback, void *user_data) {
+aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathname, int open_flags,
+                            mode_t mode, aura_submit_flags_t flags, aura_callback_t callback,
+                            void *user_data) {
     if (!engine || !pathname || (dirfd < 0 && dirfd != AT_FDCWD)) {
         errno = EINVAL;
         return NULL;
     }
+    VALIDATE_SUBMIT_FLAGS(flags);
 
     submit_ctx_t ctx = submit_begin(engine, true);
     if (!ctx.req) return NULL;
@@ -1424,7 +1473,7 @@ aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathna
     ctx.req->fd = dirfd;
     ctx.req->original_fd = dirfd;
     ctx.req->meta.open.pathname = pathname;
-    ctx.req->meta.open.flags = flags;
+    ctx.req->meta.open.flags = open_flags;
     ctx.req->meta.open.mode = mode;
     ctx.req->callback = callback;
     ctx.req->user_data = user_data;
@@ -1440,12 +1489,13 @@ aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathna
     return ctx.req;
 }
 
-aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callback,
-                           void *user_data) {
+aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_submit_flags_t flags,
+                           aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0) {
         errno = EINVAL;
         return NULL;
     }
+    VALIDATE_SUBMIT_FLAGS(flags);
 
     /* Close always uses the raw fd — IOSQE_FIXED_FILE on close means
      * "unregister slot" which is not what callers expect. */
@@ -1468,13 +1518,14 @@ aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_callback_t callba
     return ctx.req;
 }
 
-aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int flags,
-                           unsigned int mask, struct statx *statxbuf, aura_callback_t callback,
-                           void *user_data) {
+aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathname, int statx_flags,
+                           unsigned int mask, struct statx *statxbuf, aura_submit_flags_t flags,
+                           aura_callback_t callback, void *user_data) {
     if (!engine || !pathname || !statxbuf || (dirfd < 0 && dirfd != AT_FDCWD)) {
         errno = EINVAL;
         return NULL;
     }
+    VALIDATE_SUBMIT_FLAGS(flags);
 
     submit_ctx_t ctx = submit_begin(engine, true);
     if (!ctx.req) return NULL;
@@ -1482,7 +1533,7 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
     ctx.req->fd = dirfd;
     ctx.req->original_fd = dirfd;
     ctx.req->meta.statx.pathname = pathname;
-    ctx.req->meta.statx.flags = flags;
+    ctx.req->meta.statx.flags = statx_flags;
     ctx.req->meta.statx.mask = mask;
     ctx.req->meta.statx.buf = statxbuf;
     ctx.req->callback = callback;
@@ -1507,43 +1558,55 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
  *
  * @param engine_     Engine handle
  * @param fd_         File descriptor
+ * @param flags_      Submit flags (0 or AURA_FIXED_FILE)
  * @param callback_   Completion callback
  * @param user_data_  User context
  * @param submit_fn_  Ring submit function (e.g., ring_submit_fallocate)
  * @param setup_code  Statement(s) to set op-specific fields on ctx.req
  */
-#define SUBMIT_FILE_RESOLVED_OP(engine_, fd_, callback_, user_data_, submit_fn_, setup_code) \
-    do {                                                                                     \
-        file_resolve_guard_t file_guard_ = resolve_file_begin(engine_, fd_);                 \
-        submit_ctx_t ctx = submit_begin(engine_, !file_guard_.uses_registered_file);         \
-        if (!ctx.req) {                                                                      \
-            resolve_file_end(&file_guard_);                                                  \
-            return NULL;                                                                     \
-        }                                                                                    \
-        ctx.req->fd = file_guard_.submit_fd;                                                 \
-        ctx.req->original_fd = fd_;                                                          \
-        ctx.req->callback = callback_;                                                       \
-        ctx.req->user_data = user_data_;                                                     \
-        ctx.req->ring_idx = ctx.ring->ring_idx;                                              \
-        ctx.req->uses_registered_file = file_guard_.uses_registered_file;                    \
-        setup_code;                                                                          \
-        if (submit_fn_(ctx.ring, ctx.req) != 0) {                                            \
-            submit_abort(&ctx);                                                              \
-            resolve_file_end(&file_guard_);                                                  \
-            return NULL;                                                                     \
-        }                                                                                    \
-        submit_end(&ctx);                                                                    \
-        resolve_file_end(&file_guard_);                                                      \
-        return ctx.req;                                                                      \
+#define SUBMIT_FILE_RESOLVED_OP(engine_, fd_, flags_, callback_, user_data_, submit_fn_,           \
+                                setup_code)                                                        \
+    do {                                                                                           \
+        VALIDATE_SUBMIT_FLAGS(flags_);                                                             \
+        file_resolve_guard_t file_guard_;                                                          \
+        if ((flags_) & AURA_FIXED_FILE) {                                                          \
+            if (!validate_fixed_file(engine_, fd_)) return NULL;                                   \
+            file_guard_ = (file_resolve_guard_t){                                                  \
+                .engine = engine_, .submit_fd = fd_, .uses_registered_file = true, .locked = false \
+            };                                                                                     \
+        } else {                                                                                   \
+            file_guard_ = resolve_file_begin(engine_, fd_);                                        \
+        }                                                                                          \
+        submit_ctx_t ctx = submit_begin(engine_, !file_guard_.uses_registered_file);               \
+        if (!ctx.req) {                                                                            \
+            resolve_file_end(&file_guard_);                                                        \
+            return NULL;                                                                           \
+        }                                                                                          \
+        ctx.req->fd = file_guard_.submit_fd;                                                       \
+        ctx.req->original_fd = fd_;                                                                \
+        ctx.req->callback = callback_;                                                             \
+        ctx.req->user_data = user_data_;                                                           \
+        ctx.req->ring_idx = ctx.ring->ring_idx;                                                    \
+        ctx.req->uses_registered_file = file_guard_.uses_registered_file;                          \
+        setup_code;                                                                                \
+        if (submit_fn_(ctx.ring, ctx.req) != 0) {                                                  \
+            submit_abort(&ctx);                                                                    \
+            resolve_file_end(&file_guard_);                                                        \
+            return NULL;                                                                           \
+        }                                                                                          \
+        submit_end(&ctx);                                                                          \
+        resolve_file_end(&file_guard_);                                                            \
+        return ctx.req;                                                                            \
     } while (0)
 
 aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t offset, off_t len,
-                               aura_callback_t callback, void *user_data) {
+                               aura_submit_flags_t flags, aura_callback_t callback,
+                               void *user_data) {
     if (!engine || fd < 0 || offset < 0 || len <= 0) {
         errno = EINVAL;
         return NULL;
     }
-    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_fallocate, {
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, flags, callback, user_data, ring_submit_fallocate, {
         ctx.req->offset = offset;
         ctx.req->len = (size_t)len;
         ctx.req->meta.fallocate.mode = mode;
@@ -1551,26 +1614,27 @@ aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode, off_t of
 }
 
 aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd, off_t length,
-                               aura_callback_t callback, void *user_data) {
+                               aura_submit_flags_t flags, aura_callback_t callback,
+                               void *user_data) {
     if (!engine || fd < 0 || length < 0) {
         errno = EINVAL;
         return NULL;
     }
-    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_ftruncate,
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, flags, callback, user_data, ring_submit_ftruncate,
                             { ctx.req->len = (size_t)length; });
 }
 
 aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
-                                     unsigned int flags, aura_callback_t callback,
-                                     void *user_data) {
+                                     unsigned int range_flags, aura_submit_flags_t flags,
+                                     aura_callback_t callback, void *user_data) {
     if (!engine || fd < 0 || offset < 0 || nbytes < 0) {
         errno = EINVAL;
         return NULL;
     }
-    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_sync_file_range, {
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, flags, callback, user_data, ring_submit_sync_file_range, {
         ctx.req->offset = offset;
         ctx.req->len = (size_t)nbytes;
-        ctx.req->meta.sync_range.flags = flags;
+        ctx.req->meta.sync_range.flags = range_flags;
     });
 }
 
@@ -1580,12 +1644,13 @@ aura_request_t *aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset
  */
 
 aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt,
-                           off_t offset, aura_callback_t callback, void *user_data) {
+                           off_t offset, aura_submit_flags_t flags, aura_callback_t callback,
+                           void *user_data) {
     if (!engine || fd < 0 || !iov || iovcnt <= 0 || iovcnt > IOV_MAX) {
         errno = EINVAL;
         return NULL;
     }
-    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_readv, {
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, flags, callback, user_data, ring_submit_readv, {
         ctx.req->iov = iov;
         ctx.req->iovcnt = iovcnt;
         ctx.req->offset = offset;
@@ -1593,12 +1658,13 @@ aura_request_t *aura_readv(aura_engine_t *engine, int fd, const struct iovec *io
 }
 
 aura_request_t *aura_writev(aura_engine_t *engine, int fd, const struct iovec *iov, int iovcnt,
-                            off_t offset, aura_callback_t callback, void *user_data) {
+                            off_t offset, aura_submit_flags_t flags, aura_callback_t callback,
+                            void *user_data) {
     if (!engine || fd < 0 || !iov || iovcnt <= 0 || iovcnt > IOV_MAX) {
         errno = EINVAL;
         return NULL;
     }
-    SUBMIT_FILE_RESOLVED_OP(engine, fd, callback, user_data, ring_submit_writev, {
+    SUBMIT_FILE_RESOLVED_OP(engine, fd, flags, callback, user_data, ring_submit_writev, {
         ctx.req->iov = iov;
         ctx.req->iovcnt = iovcnt;
         ctx.req->offset = offset;

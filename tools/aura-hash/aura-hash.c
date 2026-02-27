@@ -521,7 +521,7 @@ static void submit_next_read(hash_ctx_t *ctx, buf_slot_t *slot) {
     }
 
     aura_request_t *rreq = aura_read(ctx->engine, task->fd, aura_buf(slot->buf), chunk,
-                                     slot->offset, on_read_complete, slot);
+                                     slot->offset, 0, on_read_complete, slot);
     if (!rreq) {
         if (ctx->error == 0) {
             fprintf(stderr, "aura-hash: read submit failed on '%s': %s\n", task->path,

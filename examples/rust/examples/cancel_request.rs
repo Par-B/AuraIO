@@ -50,6 +50,7 @@ fn main() -> Result<()> {
             (&buf).into(),
             READ_SIZE,
             0,
+            0,
             move |result| {
                 match result {
                     Ok(n) => {

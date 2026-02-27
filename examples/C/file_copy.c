@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file file_copy.c
  * @brief Synchronous file copy using AuraIO async I/O
@@ -115,7 +114,7 @@ int main(int argc, char *argv[]) {
         /* Read chunk from source */
         io_state_t read_state = { .done = 0, .result = 0 };
         aura_request_t *req =
-            aura_read(engine, src_fd, aura_buf(buf), chunk, offset, on_io_complete, &read_state);
+            aura_read(engine, src_fd, aura_buf(buf), chunk, offset, 0, on_io_complete, &read_state);
         if (!req) {
             fprintf(stderr, "\nRead submission failed at offset %lld: %s\n", (long long)offset,
                     strerror(errno));
@@ -139,7 +138,7 @@ int main(int argc, char *argv[]) {
 
         /* Write chunk to destination */
         io_state_t write_state = { .done = 0, .result = 0 };
-        req = aura_write(engine, dst_fd, aura_buf(buf), bytes_read, offset, on_io_complete,
+        req = aura_write(engine, dst_fd, aura_buf(buf), bytes_read, offset, 0, on_io_complete,
                          &write_state);
         if (!req) {
             fprintf(stderr, "\nWrite submission failed at offset %lld: %s\n", (long long)offset,
@@ -180,7 +179,7 @@ int main(int argc, char *argv[]) {
         printf("\nFlushing to disk...\n");
         io_state_t fsync_state = { .done = 0, .result = 0 };
         aura_request_t *req =
-            aura_fsync(engine, dst_fd, AURA_FSYNC_DEFAULT, on_io_complete, &fsync_state);
+            aura_fsync(engine, dst_fd, AURA_FSYNC_DEFAULT, 0, on_io_complete, &fsync_state);
         if (!req) {
             fprintf(stderr, "fsync submission failed: %s\n", strerror(errno));
         } else {

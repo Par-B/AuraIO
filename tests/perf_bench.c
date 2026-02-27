@@ -298,7 +298,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
         atomic_fetch_add(&stats.inflight, 1);
 
-        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
+        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0, read_callback,
                       ctx) == NULL) {
             atomic_fetch_sub(&stats.inflight, 1);
             aura_buffer_free(engine, buf);
@@ -335,8 +335,8 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
-                          ctx) == NULL) {
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
+                          read_callback, ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
                 aura_buffer_free(engine, buf);
                 free(ctx);
@@ -427,8 +427,8 @@ static void bench_latency(int duration_sec, size_t buf_size) {
 
         latency_sync_ctx_t sync_ctx = { &done, &result };
 
-        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, latency_callback,
-                      &sync_ctx) != NULL) {
+        if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
+                      latency_callback, &sync_ctx) != NULL) {
             while (!atomic_load(&done)) {
                 aura_wait(engine, 1);
             }
@@ -634,7 +634,7 @@ static void bench_scalability(int duration_sec) {
 
                 atomic_fetch_add(&stats.inflight, 1);
 
-                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
+                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
                               read_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     aura_buffer_free(engine, buf);
@@ -714,8 +714,8 @@ static void bench_syscall_batching(int duration_sec) {
 
             atomic_fetch_add(&stats.inflight, 1);
 
-            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, read_callback,
-                          ctx) == NULL) {
+            if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
+                          read_callback, ctx) == NULL) {
                 atomic_fetch_sub(&stats.inflight, 1);
                 aura_buffer_free(engine, buf);
                 free(ctx);
@@ -842,7 +842,7 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 reads++;
 
-                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset,
+                if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
                               mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     aura_buffer_free(engine, buf);
@@ -868,7 +868,7 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 writes++;
 
-                if (aura_write(engine, write_fds[fd_idx], aura_buf(buf), buf_size, offset,
+                if (aura_write(engine, write_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
                                mixed_callback, ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     aura_buffer_free(engine, buf);
@@ -887,7 +887,7 @@ static void bench_mixed_workload(int duration_sec) {
                 atomic_fetch_add(&stats.inflight, 1);
                 fsyncs++;
 
-                if (aura_fsync(engine, write_fds[fd_idx], AURA_FSYNC_DEFAULT, mixed_callback,
+                if (aura_fsync(engine, write_fds[fd_idx], AURA_FSYNC_DEFAULT, 0, mixed_callback,
                                ctx) == NULL) {
                     atomic_fetch_sub(&stats.inflight, 1);
                     free(ctx);

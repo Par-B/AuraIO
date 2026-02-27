@@ -313,7 +313,7 @@ TEST(request_introspection_during_io) {
     int my_sentinel = 0xBEEF;
     cb_called = 0;
     aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, basic_cb, &my_sentinel);
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, basic_cb, &my_sentinel);
     assert(req);
 
     /* Before completion, request should be pending */
@@ -388,7 +388,7 @@ TEST(drain_with_pending_io) {
 
     /* Submit I/O then drain */
     cb_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, basic_cb, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, basic_cb, NULL);
     assert(req);
 
     int rc = aura_drain(engine, 5000);
@@ -418,7 +418,7 @@ TEST(readv_basic) {
     };
 
     cb_called = 0;
-    aura_request_t *req = aura_readv(engine, test_fd, iov, 2, 0, basic_cb, NULL);
+    aura_request_t *req = aura_readv(engine, test_fd, iov, 2, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -446,7 +446,7 @@ TEST(writev_basic) {
     };
 
     cb_called = 0;
-    aura_request_t *req = aura_writev(engine, test_fd, iov, 2, 0, basic_cb, NULL);
+    aura_request_t *req = aura_writev(engine, test_fd, iov, 2, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -469,16 +469,16 @@ TEST(readv_null_args) {
     assert(engine);
 
     /* NULL engine */
-    assert(aura_readv(NULL, 0, NULL, 0, 0, NULL, NULL) == NULL);
+    assert(aura_readv(NULL, 0, NULL, 0, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     /* NULL iov */
-    assert(aura_readv(engine, test_fd, NULL, 1, 0, NULL, NULL) == NULL);
+    assert(aura_readv(engine, test_fd, NULL, 1, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     /* iovcnt = 0 */
     struct iovec iov = { .iov_base = NULL, .iov_len = 0 };
-    assert(aura_readv(engine, test_fd, &iov, 0, 0, NULL, NULL) == NULL);
+    assert(aura_readv(engine, test_fd, &iov, 0, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     aura_destroy(engine);
@@ -488,10 +488,10 @@ TEST(writev_null_args) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
-    assert(aura_writev(NULL, 0, NULL, 0, 0, NULL, NULL) == NULL);
+    assert(aura_writev(NULL, 0, NULL, 0, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
-    assert(aura_writev(engine, test_fd, NULL, 1, 0, NULL, NULL) == NULL);
+    assert(aura_writev(engine, test_fd, NULL, 1, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     aura_destroy(engine);
@@ -507,7 +507,7 @@ TEST(fsync_basic) {
     assert(engine);
 
     cb_called = 0;
-    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, basic_cb, NULL);
+    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -523,7 +523,7 @@ TEST(fsync_datasync) {
     assert(engine);
 
     cb_called = 0;
-    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DATASYNC, basic_cb, NULL);
+    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DATASYNC, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -539,7 +539,7 @@ TEST(fsync_null_callback) {
     assert(engine);
 
     /* NULL callback is valid (fire-and-forget) */
-    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, NULL, NULL);
+    aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, 0, NULL, NULL);
     assert(req);
     aura_drain(engine, 1000);
 
@@ -548,14 +548,14 @@ TEST(fsync_null_callback) {
 }
 
 TEST(fsync_null_args) {
-    assert(aura_fsync(NULL, 0, AURA_FSYNC_DEFAULT, NULL, NULL) == NULL);
+    assert(aura_fsync(NULL, 0, AURA_FSYNC_DEFAULT, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
     /* Negative fd */
-    assert(aura_fsync(engine, -1, AURA_FSYNC_DEFAULT, NULL, NULL) == NULL);
+    assert(aura_fsync(engine, -1, AURA_FSYNC_DEFAULT, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 
     aura_destroy(engine);
@@ -567,7 +567,7 @@ TEST(fsync_null_args) {
 
 TEST(read_null_engine) {
     char buf[64];
-    assert(aura_read(NULL, 0, aura_buf(buf), 64, 0, NULL, NULL) == NULL);
+    assert(aura_read(NULL, 0, aura_buf(buf), 64, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 }
 
@@ -575,7 +575,7 @@ TEST(read_negative_fd) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[64];
-    assert(aura_read(engine, -1, aura_buf(buf), 64, 0, NULL, NULL) == NULL);
+    assert(aura_read(engine, -1, aura_buf(buf), 64, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
     aura_destroy(engine);
 }
@@ -584,7 +584,7 @@ TEST(read_zero_length) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[64];
-    assert(aura_read(engine, 0, aura_buf(buf), 0, 0, NULL, NULL) == NULL);
+    assert(aura_read(engine, 0, aura_buf(buf), 0, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
     aura_destroy(engine);
 }
@@ -592,14 +592,14 @@ TEST(read_zero_length) {
 TEST(read_null_buf_ptr) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
-    assert(aura_read(engine, 0, aura_buf(NULL), 64, 0, NULL, NULL) == NULL);
+    assert(aura_read(engine, 0, aura_buf(NULL), 64, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
     aura_destroy(engine);
 }
 
 TEST(write_null_engine) {
     char buf[64];
-    assert(aura_write(NULL, 0, aura_buf(buf), 64, 0, NULL, NULL) == NULL);
+    assert(aura_write(NULL, 0, aura_buf(buf), 64, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
 }
 
@@ -607,7 +607,7 @@ TEST(write_negative_fd) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[64];
-    assert(aura_write(engine, -1, aura_buf(buf), 64, 0, NULL, NULL) == NULL);
+    assert(aura_write(engine, -1, aura_buf(buf), 64, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
     aura_destroy(engine);
 }
@@ -616,7 +616,7 @@ TEST(write_zero_length) {
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
     char buf[64];
-    assert(aura_write(engine, 0, aura_buf(buf), 0, 0, NULL, NULL) == NULL);
+    assert(aura_write(engine, 0, aura_buf(buf), 0, 0, 0, NULL, NULL) == NULL);
     assert(errno == EINVAL);
     aura_destroy(engine);
 }
@@ -634,7 +634,7 @@ TEST(read_null_callback) {
     assert(buf);
 
     /* NULL callback should work (fire-and-forget) */
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req);
     aura_drain(engine, 1000);
 
@@ -652,7 +652,7 @@ TEST(write_null_callback) {
     assert(buf);
     memset(buf, 'Z', 4096);
 
-    aura_request_t *req = aura_write(engine, test_fd, aura_buf(buf), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_write(engine, test_fd, aura_buf(buf), 4096, 0, 0, NULL, NULL);
     assert(req);
     aura_drain(engine, 1000);
 
@@ -683,7 +683,7 @@ TEST(cancel_completed_request) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     cb_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, basic_cb, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -728,7 +728,7 @@ TEST(read_fixed_no_registration) {
 
     /* Using a fixed buffer without registration should fail with ENOENT */
     aura_buf_t fbuf = aura_buf_fixed(0, 0);
-    aura_request_t *req = aura_read(engine, 0, fbuf, 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, 0, fbuf, 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == ENOENT);
 
@@ -740,7 +740,7 @@ TEST(write_fixed_no_registration) {
     assert(engine);
 
     aura_buf_t fbuf = aura_buf_fixed(0, 0);
-    aura_request_t *req = aura_write(engine, 0, fbuf, 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_write(engine, 0, fbuf, 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == ENOENT);
 
@@ -769,7 +769,8 @@ TEST(register_buffers_and_use) {
 
     /* Read using registered buffer */
     cb_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, basic_cb, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -777,24 +778,24 @@ TEST(register_buffers_and_use) {
     assert(((char *)regbuf)[0] == 'B');
 
     /* Out-of-range buffer index */
-    req = aura_read(engine, test_fd, aura_buf_fixed(99, 0), 4096, 0, NULL, NULL);
+    req = aura_read(engine, test_fd, aura_buf_fixed(99, 0), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EINVAL);
 
     /* Overflow: offset beyond buffer length */
-    req = aura_read(engine, test_fd, aura_buf_fixed(0, 8192), 4096, 0, NULL, NULL);
+    req = aura_read(engine, test_fd, aura_buf_fixed(0, 8192), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EOVERFLOW);
 
     /* Overflow: length exceeds remaining space */
-    req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 8192, 0, NULL, NULL);
+    req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 8192, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == EOVERFLOW);
 
     /* Write using registered buffer */
     memset(regbuf, 'W', 4096);
     cb_called = 0;
-    req = aura_write(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, basic_cb, NULL);
+    req = aura_write(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -805,7 +806,7 @@ TEST(register_buffers_and_use) {
     assert(rc == 0);
 
     /* Post-unregister: fixed buffers should fail with ENOENT */
-    req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, NULL, NULL);
+    req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == ENOENT);
 
@@ -865,7 +866,7 @@ TEST(register_files_and_io) {
     /* I/O should work transparently with registered files */
     void *buf = aura_buffer_alloc(engine, 4096);
     cb_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, basic_cb, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, basic_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
@@ -876,6 +877,112 @@ TEST(register_files_and_io) {
     rc = aura_unregister(engine, AURA_REG_FILES);
     assert(rc == 0);
 
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_read) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    cb_called = 0;
+    /* Pass index 0 with AURA_FIXED_FILE — skips auto-detection */
+    aura_request_t *req =
+        aura_read(engine, 0, aura_buf(buf), 4096, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result == 4096);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_write) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    memset(buf, 'W', 4096);
+    cb_called = 0;
+    aura_request_t *req =
+        aura_write(engine, 0, aura_buf(buf), 4096, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result == 4096);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_invalid_index) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+
+    /* Index 99 is out of range (only 1 file registered) */
+    aura_request_t *req =
+        aura_read(engine, 99, aura_buf(buf), 4096, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_not_registered) {
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+
+    /* No files registered — AURA_FIXED_FILE should fail */
+    aura_request_t *req =
+        aura_read(engine, 0, aura_buf(buf), 4096, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_buffer_free(engine, buf);
+    aura_destroy(engine);
+}
+
+TEST(fixed_file_unknown_flags) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+
+    /* Unknown flag bit should be rejected */
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, (1u << 7), basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_buffer_free(engine, buf);
     aura_destroy(engine);
     io_teardown();
 }
@@ -960,7 +1067,7 @@ TEST(deferred_unregister_buffers) {
     aura_poll(engine);
 
     /* After finalization, fixed buffer submission should fail */
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, NULL, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, NULL, NULL);
     assert(req == NULL);
     assert(errno == ENOENT || errno == EBUSY);
 
@@ -2014,7 +2121,7 @@ TEST(submit_after_destroy_begins) {
     /* Submit I/O, drain, then destroy */
     void *buf = aura_buffer_alloc(engine, 4096);
     cb_called = 0;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, basic_cb, NULL);
+    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, basic_cb, NULL);
     assert(req);
     aura_drain(engine, 1000);
     assert(cb_called == 1);
@@ -2127,7 +2234,7 @@ TEST(in_callback_context_inside) {
     void *buf = aura_buffer_alloc(engine, 4096);
     int in_cb = -1;
     aura_request_t *req =
-        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, check_in_callback_cb, &in_cb);
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, check_in_callback_cb, &in_cb);
     assert(req);
     aura_wait(engine, 1000);
     assert(in_cb == 1);
@@ -2184,7 +2291,8 @@ TEST(request_op_type_read) {
 
     void *buf = aura_buffer_alloc(engine, 4096);
     last_op_type = -999;
-    aura_request_t *req = aura_read(engine, test_fd, aura_buf(buf), 4096, 0, capture_op_cb, NULL);
+    aura_request_t *req =
+        aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, capture_op_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(last_op_type == AURA_OP_READ);
@@ -2202,7 +2310,8 @@ TEST(request_op_type_write) {
     void *buf = aura_buffer_alloc(engine, 4096);
     memset(buf, 'Z', 4096);
     last_op_type = -999;
-    aura_request_t *req = aura_write(engine, test_fd, aura_buf(buf), 4096, 0, capture_op_cb, NULL);
+    aura_request_t *req =
+        aura_write(engine, test_fd, aura_buf(buf), 4096, 0, 0, capture_op_cb, NULL);
     assert(req);
     aura_wait(engine, 1000);
     assert(last_op_type == AURA_OP_WRITE);
@@ -2288,6 +2397,12 @@ int main(void) {
     /* Registered files */
     RUN_TEST(register_files_null_args);
     RUN_TEST(register_files_and_io);
+    RUN_TEST(fixed_file_read);
+    RUN_TEST(fixed_file_write);
+    RUN_TEST(fixed_file_invalid_index);
+    RUN_TEST(fixed_file_not_registered);
+    RUN_TEST(fixed_file_unknown_flags);
+
     RUN_TEST(update_file_null_args);
     RUN_TEST(update_file_out_of_range);
     RUN_TEST(unregister_reg_files_not_registered);

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file vectored_io.c
  * @brief Demonstrate vectored (scatter-gather) I/O operations
@@ -113,7 +112,7 @@ int main(void) {
     /* Submit vectored write */
     io_context_t write_ctx = { 0, 0 };
     aura_request_t *write_req =
-        aura_writev(engine, wfd, write_iov, 2, 0, write_completion, &write_ctx);
+        aura_writev(engine, wfd, write_iov, 2, 0, 0, write_completion, &write_ctx);
     if (!write_req) {
         perror("aura_writev");
         close(wfd);
@@ -177,7 +176,7 @@ int main(void) {
     /* Submit vectored read */
     io_context_t read_ctx = { 0, 0 };
     aura_request_t *read_req =
-        aura_readv(engine, rfd, read_iov, 2, 0, read_completion, &read_ctx);
+        aura_readv(engine, rfd, read_iov, 2, 0, 0, read_completion, &read_ctx);
     if (!read_req) {
         perror("aura_readv");
         close(rfd);

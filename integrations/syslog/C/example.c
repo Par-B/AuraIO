@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file example.c
  * @brief Example: AuraIO syslog integration
@@ -115,7 +114,7 @@ int main(void) {
     aura_log_emit(AURA_LOG_DEBUG, "submitting read: fd=%d size=%d", fd, BUF_SIZE);
 
     io_done = 0;
-    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_complete, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, 0, on_complete, NULL);
     if (!req) {
         aura_log_emit(AURA_LOG_ERR, "aura_read failed: %s", strerror(errno));
     } else {

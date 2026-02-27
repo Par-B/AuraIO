@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file cancel_request.c
  * @brief Demonstrates cancelling an in-flight I/O operation
@@ -71,7 +70,7 @@ int main(int argc, char *argv[]) {
 
     /* Submit an async read */
     printf("Submitting async read...\n");
-    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, on_read, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), READ_SIZE, 0, 0, on_read, NULL);
     if (!req) {
         fprintf(stderr, "Failed to submit read: %s\n", strerror(errno));
         aura_buffer_free(engine, buf);

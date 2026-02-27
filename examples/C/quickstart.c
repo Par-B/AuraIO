@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file quickstart.c
  * @brief Minimal working example of AuraIO async read
@@ -76,7 +75,7 @@ int main(void) {
     }
 
     /* Submit async read */
-    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, on_done, NULL);
+    aura_request_t *req = aura_read(engine, fd, aura_buf(buf), BUF_SIZE, 0, 0, on_done, NULL);
     if (!req) {
         perror("aura_read");
         close(fd);

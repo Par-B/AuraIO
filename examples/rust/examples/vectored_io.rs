@@ -88,7 +88,7 @@ fn main() -> Result<()> {
     let write_ctx_clone = write_ctx.clone();
 
     unsafe {
-        engine.writev(wfd, &write_iovs, 0, move |result| {
+        engine.writev(wfd, &write_iovs, 0, 0, move |result| {
             match result {
                 Ok(n) => {
                     println!("Vectored write completed: {} bytes", n);
@@ -162,7 +162,7 @@ fn main() -> Result<()> {
     let read_ctx_clone = read_ctx.clone();
 
     unsafe {
-        engine.readv(rfd, &read_iovs, 0, move |result| {
+        engine.readv(rfd, &read_iovs, 0, 0, move |result| {
             match result {
                 Ok(n) => {
                     println!("Vectored read completed: {} bytes", n);

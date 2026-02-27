@@ -16,7 +16,7 @@
 //!
 //! async fn read_file(engine: &Engine, fd: i32) -> aura::Result<Vec<u8>> {
 //!     let buf = engine.allocate_buffer(4096)?;
-//!     let n = unsafe { engine.async_read(fd, &buf, 4096, 0) }?.await?;
+//!     let n = unsafe { engine.async_read(fd, &buf, 4096, 0, 0) }?.await?;
 //!     Ok(buf.as_slice()[..n].to_vec())
 //! }
 //! ```
@@ -210,7 +210,7 @@ pub trait AsyncEngine {
     /// # Example
     ///
     /// ```ignore
-    /// let n = unsafe { engine.async_read(fd, &buffer, 4096, 0) }?.await?;
+    /// let n = unsafe { engine.async_read(fd, &buffer, 4096, 0, 0) }?.await?;
     /// println!("Read {} bytes", n);
     /// ```
     unsafe fn async_read(
@@ -219,6 +219,7 @@ pub trait AsyncEngine {
         buf: impl Into<BufferRef>,
         len: usize,
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture>;
 
     /// Submit an async write and return a Future for the result.
@@ -229,6 +230,7 @@ pub trait AsyncEngine {
     /// * `buf` - Buffer reference containing data to write
     /// * `len` - Number of bytes to write
     /// * `offset` - File offset to write at
+    /// * `flags` - Submit flags (0 or AURA_FIXED_FILE)
     ///
     /// # Returns
     ///
@@ -244,6 +246,7 @@ pub trait AsyncEngine {
         buf: impl Into<BufferRef>,
         len: usize,
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture>;
 
     /// Submit an async fsync and return a Future for the result.
@@ -251,16 +254,17 @@ pub trait AsyncEngine {
     /// # Arguments
     ///
     /// * `fd` - Open file descriptor to sync
+    /// * `flags` - Submit flags (0 or AURA_FIXED_FILE)
     ///
     /// # Returns
     ///
     /// A Future that resolves to `Ok(0)` or `Err(error)`.
-    fn async_fsync(&self, fd: RawFd) -> Result<IoFuture>;
+    fn async_fsync(&self, fd: RawFd, flags: u32) -> Result<IoFuture>;
 
     /// Submit an async fdatasync and return a Future for the result.
     ///
     /// Like fsync but may skip metadata if not needed for data integrity.
-    fn async_fdatasync(&self, fd: RawFd) -> Result<IoFuture>;
+    fn async_fdatasync(&self, fd: RawFd, flags: u32) -> Result<IoFuture>;
 
     /// Submit an async vectored read and return a Future.
     ///
@@ -273,6 +277,7 @@ pub trait AsyncEngine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture>;
 
     /// Submit an async vectored write and return a Future.
@@ -285,6 +290,7 @@ pub trait AsyncEngine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture>;
 }
 
@@ -320,9 +326,10 @@ impl AsyncEngine for Engine {
         buf: impl Into<BufferRef>,
         len: usize,
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture> {
         let buf = buf.into();
-        self.submit_async(|callback| unsafe { self.read(fd, buf, len, offset, callback) })
+        self.submit_async(|callback| unsafe { self.read(fd, buf, len, offset, flags, callback) })
     }
 
     unsafe fn async_write(
@@ -331,17 +338,18 @@ impl AsyncEngine for Engine {
         buf: impl Into<BufferRef>,
         len: usize,
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture> {
         let buf = buf.into();
-        self.submit_async(|callback| unsafe { self.write(fd, buf, len, offset, callback) })
+        self.submit_async(|callback| unsafe { self.write(fd, buf, len, offset, flags, callback) })
     }
 
-    fn async_fsync(&self, fd: RawFd) -> Result<IoFuture> {
-        self.submit_async(|callback| self.fsync(fd, callback))
+    fn async_fsync(&self, fd: RawFd, flags: u32) -> Result<IoFuture> {
+        self.submit_async(|callback| self.fsync(fd, flags, callback))
     }
 
-    fn async_fdatasync(&self, fd: RawFd) -> Result<IoFuture> {
-        self.submit_async(|callback| self.fdatasync(fd, callback))
+    fn async_fdatasync(&self, fd: RawFd, flags: u32) -> Result<IoFuture> {
+        self.submit_async(|callback| self.fdatasync(fd, flags, callback))
     }
 
     unsafe fn async_readv(
@@ -349,8 +357,9 @@ impl AsyncEngine for Engine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture> {
-        self.submit_async(|callback| unsafe { self.readv(fd, iovecs, offset, callback) })
+        self.submit_async(|callback| unsafe { self.readv(fd, iovecs, offset, flags, callback) })
     }
 
     unsafe fn async_writev(
@@ -358,8 +367,9 @@ impl AsyncEngine for Engine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
     ) -> Result<IoFuture> {
-        self.submit_async(|callback| unsafe { self.writev(fd, iovecs, offset, callback) })
+        self.submit_async(|callback| unsafe { self.writev(fd, iovecs, offset, flags, callback) })
     }
 }
 
@@ -404,7 +414,7 @@ mod tests {
         let fd = file.as_raw_fd();
 
         let buf = engine.allocate_buffer(4096).unwrap();
-        let future = unsafe { engine.async_read(fd, &buf, 4096, 0) }.unwrap();
+        let future = unsafe { engine.async_read(fd, &buf, 4096, 0, 0) }.unwrap();
 
         let result = block_on(&engine, future);
         assert!(result.is_ok());
@@ -427,7 +437,7 @@ mod tests {
         let test_data = b"Written async!";
         buf.as_mut_slice()[..test_data.len()].copy_from_slice(test_data);
 
-        let future = unsafe { engine.async_write(fd, &buf, test_data.len(), 0) }.unwrap();
+        let future = unsafe { engine.async_write(fd, &buf, test_data.len(), 0, 0) }.unwrap();
 
         let result = block_on(&engine, future);
         assert!(result.is_ok());
@@ -452,7 +462,7 @@ mod tests {
             .unwrap();
         let fd = file.as_raw_fd();
 
-        let future = engine.async_fsync(fd).unwrap();
+        let future = engine.async_fsync(fd, 0).unwrap();
         let result = block_on(&engine, future);
         assert!(result.is_ok());
     }
@@ -468,7 +478,7 @@ mod tests {
             .unwrap();
         let fd = file.as_raw_fd();
 
-        let future = engine.async_fdatasync(fd).unwrap();
+        let future = engine.async_fdatasync(fd, 0).unwrap();
         let result = block_on(&engine, future);
         assert!(result.is_ok());
     }
@@ -499,7 +509,7 @@ mod tests {
         ];
 
         // Safety: iovecs point to stack-local buffers that outlive the future
-        let future = unsafe { engine.async_readv(fd, &iovecs, 0) }.unwrap();
+        let future = unsafe { engine.async_readv(fd, &iovecs, 0, 0) }.unwrap();
         let result = block_on(&engine, future);
 
         assert!(result.is_ok());
@@ -534,7 +544,7 @@ mod tests {
         ];
 
         // Safety: iovecs point to stack-local buffers that outlive the future
-        let future = unsafe { engine.async_writev(fd, &iovecs, 0) }.unwrap();
+        let future = unsafe { engine.async_writev(fd, &iovecs, 0, 0) }.unwrap();
         let result = block_on(&engine, future);
 
         assert!(result.is_ok());
@@ -564,8 +574,8 @@ mod tests {
         let buf1 = engine.allocate_buffer(4).unwrap();
         let buf2 = engine.allocate_buffer(4).unwrap();
 
-        let future1 = unsafe { engine.async_read(fd, &buf1, 4, 0) }.unwrap();
-        let future2 = unsafe { engine.async_read(fd, &buf2, 4, 4) }.unwrap();
+        let future1 = unsafe { engine.async_read(fd, &buf1, 4, 0, 0) }.unwrap();
+        let future2 = unsafe { engine.async_read(fd, &buf2, 4, 4, 0) }.unwrap();
 
         // Poll both to completion
         let result1 = block_on(&engine, future1);
@@ -597,7 +607,7 @@ mod tests {
         let fd = file.as_raw_fd();
 
         let buf = engine.allocate_buffer(4096).unwrap();
-        let future = unsafe { engine.async_read(fd, &buf, 4096, 0) }.unwrap();
+        let future = unsafe { engine.async_read(fd, &buf, 4096, 0, 0) }.unwrap();
 
         // Start background poller
         let stop = Arc::new(AtomicBool::new(false));

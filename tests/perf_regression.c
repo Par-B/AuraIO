@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file perf_regression.c
  * @brief Performance regression test: raw io_uring vs AuraIO overhead
@@ -658,7 +657,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
 
             aura_request_t *req =
                 aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cfg->block_size,
-                          offsets[submitted % OFFSET_TABLE_SIZE], aura_callback, &slots[slot]);
+                          offsets[submitted % OFFSET_TABLE_SIZE], 0, aura_callback, &slots[slot]);
             if (!req) {
                 // Engine full, return slot and drain some completions
                 ctx.free_stack[ctx.free_top++] = slot;
@@ -884,8 +883,8 @@ int main(int argc, char **argv) {
     int adaptive_warmup =
         cfg.warmup_sec < DEFAULT_ADAPTIVE_WARMUP_SEC ? DEFAULT_ADAPTIVE_WARMUP_SEC : cfg.warmup_sec;
     int sweep_sec = cfg.num_depths * 2 * (cfg.warmup_sec + cfg.duration_sec);
-    int confirm_sec = cfg.runs * ((cfg.warmup_sec + cfg.duration_sec) * 2 +
-                                  (adaptive_warmup + cfg.duration_sec));
+    int confirm_sec =
+        cfg.runs * ((cfg.warmup_sec + cfg.duration_sec) * 2 + (adaptive_warmup + cfg.duration_sec));
     int est_sec = sweep_sec + confirm_sec;
     int num_tests = cfg.num_depths * 2 + cfg.runs * 3;
 
@@ -986,8 +985,8 @@ int main(int argc, char **argv) {
     perf_result_t aura_adaptive = median_result(adapt_runs, cfg.runs);
 
     if (cfg.runs > 1) {
-        printf("  Median selected (run %d/%d/%d by IOPS)\n", cfg.runs / 2 + 1,
-               cfg.runs / 2 + 1, cfg.runs / 2 + 1);
+        printf("  Median selected (run %d/%d/%d by IOPS)\n", cfg.runs / 2 + 1, cfg.runs / 2 + 1,
+               cfg.runs / 2 + 1);
     }
     printf("\n");
 
@@ -1008,8 +1007,8 @@ int main(int argc, char **argv) {
     format_iops(iops_buf, sizeof(iops_buf), raw_best.iops);
     format_lat(avg, sizeof(avg), raw_best.avg_lat_us);
     format_lat(p99, sizeof(p99), raw_best.p99_lat_us);
-    printf("Raw optimized (d=%d):        %14s  %10s  %10s  (baseline, median of %d)\n",
-           best_depth, iops_buf, avg, p99, cfg.runs);
+    printf("Raw optimized (d=%d):        %14s  %10s  %10s  (baseline, median of %d)\n", best_depth,
+           iops_buf, avg, p99, cfg.runs);
 
     double static_iops_pct = pct_diff(raw_best.iops, aura_static.iops);
     double static_avg_pct = pct_diff((double)raw_best.avg_lat_us, (double)aura_static.avg_lat_us);

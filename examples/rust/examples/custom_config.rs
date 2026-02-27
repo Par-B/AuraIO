@@ -60,7 +60,7 @@ fn run_workload(engine: &Engine, fd: RawFd, config_name: &str) -> Result<()> {
             let completed_clone = completed.clone();
 
             unsafe {
-                engine.read(fd, buf_ref, BUF_SIZE, offset as i64, move |result| {
+                engine.read(fd, buf_ref, BUF_SIZE, offset as i64, 0, move |result| {
                     if let Err(e) = result {
                         eprintln!("I/O error: {}", e);
                     }

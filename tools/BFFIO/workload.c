@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file workload.c
  * @brief Core I/O loop, file management, and worker threads for BFFIO
@@ -613,11 +612,11 @@ static void *worker_thread(void *arg) {
 
             aura_request_t *req;
             if (do_write) {
-                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, io_callback,
-                                 ctx);
+                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, 0,
+                                 io_callback, ctx);
             } else {
-                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, io_callback,
-                                ctx);
+                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, 0,
+                                io_callback, ctx);
             }
 
             if (!req) {
@@ -647,8 +646,8 @@ static void *worker_thread(void *arg) {
 
                         atomic_fetch_add(&stats->inflight, 1);
 
-                        aura_request_t *fsync_req =
-                            aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, fsync_callback, fsync_ctx);
+                        aura_request_t *fsync_req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0,
+                                                               fsync_callback, fsync_ctx);
                         if (!fsync_req) {
                             atomic_fetch_sub(&stats->inflight, 1);
                             io_ctx_pool_put(&tctx->pool, fsync_ctx);

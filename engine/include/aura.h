@@ -47,14 +47,14 @@
  */
 
 #define AURA_VERSION_MAJOR 0
-#define AURA_VERSION_MINOR 5
+#define AURA_VERSION_MINOR 6
 #define AURA_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
 #define AURA_VERSION (AURA_VERSION_MAJOR * 10000 + AURA_VERSION_MINOR * 100 + AURA_VERSION_PATCH)
 
 /** Version as a string */
-#define AURA_VERSION_STRING "0.5.0"
+#define AURA_VERSION_STRING "0.6.0"
 
 /* Ensure version components stay within packed integer limits */
 #if AURA_VERSION_MINOR > 99 || AURA_VERSION_PATCH > 99
@@ -189,6 +189,18 @@ typedef enum {
     AURA_OP__RESERVED_15 = 15, /**< Reserved for future ops */
     AURA_OP__RESERVED_16 = 16,
 } aura_op_type_t;
+
+/**
+ * Submit flags for I/O operations
+ *
+ * Passed to aura_read(), aura_write(), etc. to control submission behavior.
+ * Multiple flags may be OR'd together.
+ */
+typedef unsigned int aura_submit_flags_t;
+
+/** fd argument is a registered file index (from aura_register_files), not a raw fd.
+ *  Skips auto-detection and sets IOSQE_FIXED_FILE directly. */
+#define AURA_FIXED_FILE (1u << 0)
 
 /**
  * Completion callback type
@@ -696,6 +708,7 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  * @param buf       Buffer descriptor (use aura_buf() or aura_buf_fixed())
  * @param len       Number of bytes to read
  * @param offset    File offset to read from
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle on success, NULL on error with errno set:
@@ -709,6 +722,7 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int fd, aura_buf_t buf,
                                                     size_t len, off_t offset,
+                                                    aura_submit_flags_t flags,
                                                     aura_callback_t callback, void *user_data);
 
 /**
@@ -732,6 +746,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int f
  * @param buf       Buffer descriptor (use aura_buf() or aura_buf_fixed())
  * @param len       Number of bytes to write
  * @param offset    File offset to write to
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle on success, NULL on error with errno set:
@@ -745,6 +760,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int f
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_write(aura_engine_t *engine, int fd, aura_buf_t buf,
                                                      size_t len, off_t offset,
+                                                     aura_submit_flags_t flags,
                                                      aura_callback_t callback, void *user_data);
 
 /**
@@ -757,15 +773,17 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_write(aura_engine_t *engine, int 
  *
  * @param engine    Engine handle
  * @param fd        Open file descriptor
- * @param flags     Fsync flags (AURA_FSYNC_DEFAULT or AURA_FSYNC_DATASYNC)
+ * @param fsync_flags Fsync flags (AURA_FSYNC_DEFAULT or AURA_FSYNC_DATASYNC)
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle on success, NULL on error (errno set to EINVAL,
  *         EAGAIN, ESHUTDOWN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int fd,
-                                                     unsigned int flags, aura_callback_t callback,
-                                                     void *user_data);
+                                                     unsigned int fsync_flags,
+                                                     aura_submit_flags_t flags,
+                                                     aura_callback_t callback, void *user_data);
 
 /* ============================================================================
  * Lifecycle Metadata Operations
@@ -789,15 +807,17 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
  * @param pathname  Path to file (relative to dirfd)
- * @param flags     Open flags (AURA_O_RDONLY, AURA_O_WRONLY, AURA_O_CREAT, etc.)
+ * @param open_flags Open flags (AURA_O_RDONLY, AURA_O_WRONLY, AURA_O_CREAT, etc.)
  * @param mode      File mode (used when O_CREAT is set)
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
  *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_openat(aura_engine_t *engine, int dirfd,
-                                                      const char *pathname, int flags, mode_t mode,
+                                                      const char *pathname, int open_flags,
+                                                      mode_t mode, aura_submit_flags_t flags,
                                                       aura_callback_t callback, void *user_data);
 
 /**
@@ -808,12 +828,14 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_openat(aura_engine_t *engine, int
  *
  * @param engine    Engine handle
  * @param fd        File descriptor to close
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
  *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int fd,
+                                                     aura_submit_flags_t flags,
                                                      aura_callback_t callback, void *user_data);
 
 #ifdef __linux__
@@ -827,17 +849,19 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int 
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
  * @param pathname  Path (relative to dirfd; "" with AT_EMPTY_PATH for fd-based stat)
- * @param flags     Lookup flags (AURA_AT_EMPTY_PATH, AURA_AT_SYMLINK_NOFOLLOW)
+ * @param statx_flags Lookup flags (AURA_AT_EMPTY_PATH, AURA_AT_SYMLINK_NOFOLLOW)
  * @param mask      Requested fields (AURA_STATX_SIZE, AURA_STATX_MTIME, etc.)
  * @param statxbuf  Output buffer -- kernel writes directly here
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
  *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int dirfd,
-                                                     const char *pathname, int flags,
+                                                     const char *pathname, int statx_flags,
                                                      unsigned int mask, struct statx *statxbuf,
+                                                     aura_submit_flags_t flags,
                                                      aura_callback_t callback, void *user_data);
 #endif
 
@@ -852,6 +876,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int 
  * @param mode      Allocation mode (AURA_FALLOC_DEFAULT, AURA_FALLOC_KEEP_SIZE, etc.)
  * @param offset    Starting byte offset
  * @param len       Length of region
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
@@ -859,6 +884,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_statx(aura_engine_t *engine, int 
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, int fd, int mode,
                                                          off_t offset, off_t len,
+                                                         aura_submit_flags_t flags,
                                                          aura_callback_t callback, void *user_data);
 
 /**
@@ -872,14 +898,15 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fallocate(aura_engine_t *engine, 
  * @param engine    Engine handle
  * @param fd        File descriptor
  * @param length    New file length
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
  *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, int fd,
-                                                         off_t length, aura_callback_t callback,
-                                                         void *user_data);
+                                                         off_t length, aura_submit_flags_t flags,
+                                                         aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous sync_file_range operation.
@@ -891,15 +918,17 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_ftruncate(aura_engine_t *engine, 
  * @param fd        File descriptor
  * @param offset    Starting byte offset
  * @param nbytes    Number of bytes to sync (0 = to end of file)
- * @param flags     AURA_SYNC_RANGE_WAIT_BEFORE, AURA_SYNC_RANGE_WRITE, AURA_SYNC_RANGE_WAIT_AFTER
+ * @param range_flags AURA_SYNC_RANGE_WAIT_BEFORE, AURA_SYNC_RANGE_WRITE, AURA_SYNC_RANGE_WAIT_AFTER
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Completion callback (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle, or NULL on error (errno set to EINVAL,
  *         ESHUTDOWN, EAGAIN, or ENOMEM)
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *
-aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, unsigned int flags,
-                     aura_callback_t callback, void *user_data);
+aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes,
+                     unsigned int range_flags, aura_submit_flags_t flags, aura_callback_t callback,
+                     void *user_data);
 
 /* ============================================================================
  * Vectored I/O Operations
@@ -918,6 +947,7 @@ aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, 
  * @param iov       Array of iovec structures
  * @param iovcnt    Number of elements in iov array
  * @param offset    File offset to read from
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle on success, NULL on error (errno set to EINVAL,
@@ -925,8 +955,8 @@ aura_sync_file_range(aura_engine_t *engine, int fd, off_t offset, off_t nbytes, 
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_readv(aura_engine_t *engine, int fd,
                                                      const struct iovec *iov, int iovcnt,
-                                                     off_t offset, aura_callback_t callback,
-                                                     void *user_data);
+                                                     off_t offset, aura_submit_flags_t flags,
+                                                     aura_callback_t callback, void *user_data);
 
 /**
  * Submit an asynchronous vectored write operation
@@ -940,6 +970,7 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_readv(aura_engine_t *engine, int 
  * @param iov       Array of iovec structures
  * @param iovcnt    Number of elements in iov array
  * @param offset    File offset to write to
+ * @param flags     Submit flags (0 or AURA_FIXED_FILE)
  * @param callback  Function called on completion (may be NULL)
  * @param user_data Passed to callback
  * @return Request handle on success, NULL on error (errno set to EINVAL,
@@ -947,8 +978,8 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_readv(aura_engine_t *engine, int 
  */
 AURA_API AURA_WARN_UNUSED aura_request_t *aura_writev(aura_engine_t *engine, int fd,
                                                       const struct iovec *iov, int iovcnt,
-                                                      off_t offset, aura_callback_t callback,
-                                                      void *user_data);
+                                                      off_t offset, aura_submit_flags_t flags,
+                                                      aura_callback_t callback, void *user_data);
 
 /* ============================================================================
  * Cancellation

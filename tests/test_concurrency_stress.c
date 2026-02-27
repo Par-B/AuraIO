@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 #define _GNU_SOURCE
 #include "aura.h"
 #include <errno.h>
@@ -51,7 +50,7 @@ void *worker(void *arg) {
         // We use aura_buf(&buf) which is UNREGISTERED, so it copies the pointer
         // eventfd writes are very fast, stressing the submission/completion path
         aura_request_t *req =
-            aura_write(engine, efd, aura_buf(&buf), sizeof(buf), 0, on_done, NULL);
+            aura_write(engine, efd, aura_buf(&buf), sizeof(buf), 0, 0, on_done, NULL);
         if (req) {
             count++;
         } else {

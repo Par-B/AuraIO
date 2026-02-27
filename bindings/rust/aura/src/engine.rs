@@ -62,7 +62,7 @@ impl Drop for EngineInner {
 /// let mut buf = engine.allocate_buffer(4096)?;
 /// let file = File::open("/etc/hostname")?;
 ///
-/// unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, |result| {
+/// unsafe { engine.read(file.as_raw_fd(), (&buf).into(), 4096, 0, 0, |result| {
 ///     match result {
 ///         Ok(n) => println!("Read {} bytes", n),
 ///         Err(e) => eprintln!("Error: {}", e),
@@ -330,7 +330,7 @@ impl Engine {
     /// # let buf = engine.allocate_buffer(4096)?;
     /// # let file = File::open("/etc/hostname")?;
     /// # let fd = file.as_raw_fd();
-    /// unsafe { engine.read(fd, (&buf).into(), 4096, 0, |result| {
+    /// unsafe { engine.read(fd, (&buf).into(), 4096, 0, 0, |result| {
     ///     println!("Read result: {:?}", result);
     /// }) }?;
     /// # Ok(())
@@ -347,6 +347,7 @@ impl Engine {
         buf: BufferRef,
         len: usize,
         offset: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -359,6 +360,7 @@ impl Engine {
                 buf.as_raw(),
                 len,
                 offset,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -380,6 +382,7 @@ impl Engine {
         buf: BufferRef,
         len: usize,
         offset: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -392,6 +395,7 @@ impl Engine {
                 buf.as_raw(),
                 len,
                 offset,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -401,7 +405,7 @@ impl Engine {
     /// Submit an async fsync operation
     ///
     /// Ensures all previous writes to the file descriptor are flushed to storage.
-    pub fn fsync<F>(&self, fd: RawFd, callback: F) -> Result<RequestHandle>
+    pub fn fsync<F>(&self, fd: RawFd, flags: u32, callback: F) -> Result<RequestHandle>
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
@@ -410,6 +414,7 @@ impl Engine {
                 self.inner.raw(),
                 fd,
                 aura_sys::AURA_FSYNC_DEFAULT,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -419,7 +424,7 @@ impl Engine {
     /// Submit an async fdatasync operation
     ///
     /// Like fsync, but may skip metadata if not needed for data integrity.
-    pub fn fdatasync<F>(&self, fd: RawFd, callback: F) -> Result<RequestHandle>
+    pub fn fdatasync<F>(&self, fd: RawFd, flags: u32, callback: F) -> Result<RequestHandle>
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
@@ -428,6 +433,7 @@ impl Engine {
                 self.inner.raw(),
                 fd,
                 aura_sys::AURA_FSYNC_DATASYNC,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -447,6 +453,7 @@ impl Engine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -462,6 +469,7 @@ impl Engine {
                 iovecs.as_ptr() as *const _,
                 iovecs.len() as i32,
                 offset,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -481,6 +489,7 @@ impl Engine {
         fd: RawFd,
         iovecs: &[libc::iovec],
         offset: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -496,6 +505,7 @@ impl Engine {
                 iovecs.as_ptr() as *const _,
                 iovecs.len() as i32,
                 offset,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -526,6 +536,7 @@ impl Engine {
         pathname: &std::ffi::CStr,
         flags: i32,
         mode: u32,
+        submit_flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -538,6 +549,7 @@ impl Engine {
                 pathname.as_ptr(),
                 flags,
                 mode,
+                submit_flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -548,12 +560,12 @@ impl Engine {
     ///
     /// Closes a file descriptor asynchronously. The callback receives
     /// `Ok(0)` on success or `Err(error)` on failure.
-    pub fn close<F>(&self, fd: RawFd, callback: F) -> Result<RequestHandle>
+    pub fn close<F>(&self, fd: RawFd, flags: u32, callback: F) -> Result<RequestHandle>
     where
         F: FnOnce(Result<usize>) + Send + 'static,
     {
         self.submit_with_callback(callback, |ctx_ptr| unsafe {
-            aura_sys::aura_close(self.inner.raw(), fd, Some(callback_trampoline), ctx_ptr)
+            aura_sys::aura_close(self.inner.raw(), fd, flags, Some(callback_trampoline), ctx_ptr)
         })
     }
 
@@ -575,6 +587,7 @@ impl Engine {
         flags: i32,
         mask: u32,
         statxbuf: *mut aura_sys::statx,
+        submit_flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -588,6 +601,7 @@ impl Engine {
                 flags,
                 mask,
                 statxbuf,
+                submit_flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -611,6 +625,7 @@ impl Engine {
         mode: i32,
         offset: i64,
         len: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -623,6 +638,7 @@ impl Engine {
                 mode,
                 offset,
                 len,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -637,6 +653,7 @@ impl Engine {
         &self,
         fd: RawFd,
         length: i64,
+        flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -647,6 +664,7 @@ impl Engine {
                 self.inner.raw(),
                 fd,
                 length,
+                flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
@@ -670,6 +688,7 @@ impl Engine {
         offset: i64,
         nbytes: i64,
         flags: u32,
+        submit_flags: u32,
         callback: F,
     ) -> Result<RequestHandle>
     where
@@ -682,6 +701,7 @@ impl Engine {
                 offset,
                 nbytes,
                 flags,
+                submit_flags,
                 Some(callback_trampoline),
                 ctx_ptr,
             )
