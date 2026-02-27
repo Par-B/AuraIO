@@ -50,6 +50,24 @@ public:
     }
 
     /**
+     * Mark this request as linked
+     *
+     * The next submission on this thread will be chained via IOSQE_IO_LINK.
+     * The chained op won't start until this one completes successfully.
+     */
+    void set_linked() noexcept {
+        if (handle_) aura_request_set_linked(handle_);
+    }
+
+    /**
+     * Check if this request is marked as linked
+     * @return true if linked
+     */
+    [[nodiscard]] bool is_linked() const noexcept {
+        return handle_ && aura_request_is_linked(handle_);
+    }
+
+    /**
      * Get underlying C request handle
      * @return Pointer to aura_request_t
      */

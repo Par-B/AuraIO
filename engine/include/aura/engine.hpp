@@ -556,6 +556,20 @@ class Engine {
     }
 
     /**
+     * Force-flush all pending SQEs
+     *
+     * Submits any queued SQEs to the kernel immediately.
+     * Useful after building a linked chain to ensure it is submitted.
+     *
+     * @throws Error on failure
+     */
+    void flush() {
+        if (aura_flush(handle_) != 0) {
+            throw Error(errno, "aura_flush");
+        }
+    }
+
+    /**
      * Process completions (non-blocking)
      *
      * @return Number of completions processed

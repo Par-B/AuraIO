@@ -1022,6 +1022,30 @@ AURA_API void *aura_request_user_data(const aura_request_t *req);
  */
 AURA_API int aura_request_op_type(const aura_request_t *req);
 
+/**
+ * Mark a request as linked
+ *
+ * When a request is linked, the next submission on the same thread will be
+ * chained to it via io_uring's IOSQE_IO_LINK mechanism. The chained operation
+ * will not start until this one completes successfully. If this operation
+ * fails, the chained operation receives -ECANCELED.
+ *
+ * Linked requests are pinned to the same ring to ensure they share one SQ.
+ * Call this between aura_read/write/fsync and the next submission to build
+ * a chain. The final operation in a chain should NOT be marked as linked.
+ *
+ * @param req Request handle (returned by aura_read, aura_write, etc.)
+ */
+AURA_API void aura_request_set_linked(aura_request_t *req);
+
+/**
+ * Check if a request is marked as linked
+ *
+ * @param req Request handle
+ * @return true if the request is linked, false otherwise
+ */
+AURA_API bool aura_request_is_linked(const aura_request_t *req);
+
 /* ============================================================================
  * Event Processing
  * ============================================================================
@@ -1076,6 +1100,21 @@ AURA_API int aura_poll(aura_engine_t *engine);
  *         with errno set to ETIMEDOUT.
  */
 AURA_API int aura_wait(aura_engine_t *engine, int timeout_ms);
+
+/**
+ * Force-flush all pending SQEs across all rings
+ *
+ * Submits any queued SQEs that have not yet been submitted to the kernel.
+ * Normally flushing happens automatically when the batch threshold is reached
+ * or during aura_poll/aura_wait. This function is an escape hatch for when
+ * you need to ensure SQEs (especially linked chains) are submitted immediately.
+ *
+ * Thread-safe: may be called from any thread.
+ *
+ * @param engine Engine handle
+ * @return 0 on success, -1 on error (errno set to EINVAL)
+ */
+AURA_API int aura_flush(aura_engine_t *engine);
 
 /**
  * Run event loop until stopped

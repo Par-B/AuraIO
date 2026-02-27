@@ -137,6 +137,30 @@ impl RequestHandle {
         unsafe { aura_sys::aura_request_user_data(self.inner) }
     }
 
+    /// Mark this request as linked
+    ///
+    /// The next submission on this thread will be chained via `IOSQE_IO_LINK`.
+    /// The chained operation won't start until this one completes successfully.
+    /// If this operation fails, the chained operation receives `-ECANCELED`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked).
+    pub unsafe fn set_linked(&self) {
+        unsafe { aura_sys::aura_request_set_linked(self.inner) };
+    }
+
+    /// Check if this request is marked as linked
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the handle is still valid (the completion
+    /// callback has not yet been invoked).
+    pub unsafe fn is_linked(&self) -> bool {
+        unsafe { aura_sys::aura_request_is_linked(self.inner) }
+    }
+
     /// Get the raw pointer (for internal use)
     pub(crate) fn as_ptr(&self) -> *mut aura_sys::aura_request_t {
         self.inner

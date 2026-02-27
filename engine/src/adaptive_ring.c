@@ -51,6 +51,19 @@ static inline void io_uring_prep_ftruncate(struct io_uring_sqe *sqe, int fd, lof
  * >0 means current thread is inside AuraIO completion callback(s). */
 static _Thread_local int callback_context_depth = 0;
 
+/** Per-thread pointer to the last submitted SQE.
+ *  Set by ring_submit_* macros so that aura_request_set_linked() can
+ *  retroactively apply IOSQE_IO_LINK on the already-prepped SQE. */
+static _Thread_local struct io_uring_sqe *tls_last_sqe = NULL;
+
+struct io_uring_sqe *ring_get_last_sqe(void) {
+    return tls_last_sqe;
+}
+
+void ring_clear_last_sqe(void) {
+    tls_last_sqe = NULL;
+}
+
 /* Conditional locking helpers are in adaptive_ring.h (inline). */
 
 /**
@@ -301,6 +314,7 @@ aura_request_t *ring_get_request(ring_ctx_t *ctx, int *op_idx) {
     req->uses_registered_file = false;
     req->original_fd = -1;
     req->in_pool = false;
+    req->linked = false;
     atomic_store_explicit(&req->pending, false, memory_order_relaxed);
 
     if (op_idx) {
@@ -344,6 +358,12 @@ void ring_put_request(ring_ctx_t *ctx, int op_idx) {
 static inline void sqe_apply_fixed_file(struct io_uring_sqe *sqe, const aura_request_t *req) {
     if (req->uses_registered_file) {
         sqe->flags |= IOSQE_FIXED_FILE;
+    }
+}
+
+static inline void sqe_apply_link(struct io_uring_sqe *sqe, const aura_request_t *req) {
+    if (req->linked) {
+        sqe->flags |= IOSQE_IO_LINK;
     }
 }
 
@@ -400,7 +420,9 @@ static inline void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
         if (!sqe) return (-1);                               \
         prep_call;                                           \
         sqe_apply_fixed_file(sqe, req);                      \
+        sqe_apply_link(sqe, req);                            \
         io_uring_sqe_set_data(sqe, req);                     \
+        tls_last_sqe = sqe;                                  \
         data_finish(ctx, req, op_type);                      \
         return (0);                                          \
     } while (0)
@@ -497,7 +519,9 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
         struct io_uring_sqe *sqe = submit_get_sqe(ctx, req); \
         if (!sqe) return (-1);                               \
         prep_call;                                           \
+        sqe_apply_link(sqe, req);                            \
         io_uring_sqe_set_data(sqe, req);                     \
+        tls_last_sqe = sqe;                                  \
         meta_finish(ctx, req, op_type);                      \
         return (0);                                          \
     } while (0)
@@ -511,18 +535,20 @@ int ring_submit_write_fixed(ring_ctx_t *ctx, aura_request_t *req) {
         if (!sqe) return (-1);                                  \
         prep_call;                                              \
         sqe_apply_fixed_file(sqe, req);                         \
+        sqe_apply_link(sqe, req);                               \
         io_uring_sqe_set_data(sqe, req);                        \
+        tls_last_sqe = sqe;                                     \
         meta_finish(ctx, req, op_type);                         \
         return (0);                                             \
     } while (0)
 
 int ring_submit_fsync(ring_ctx_t *ctx, aura_request_t *req) {
-    RING_SUBMIT_META_OP(ctx, req, AURA_OP_FSYNC, io_uring_prep_fsync(sqe, req->fd, 0));
+    RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_FSYNC, io_uring_prep_fsync(sqe, req->fd, 0));
 }
 
 int ring_submit_fdatasync(ring_ctx_t *ctx, aura_request_t *req) {
-    RING_SUBMIT_META_OP(ctx, req, AURA_OP_FDATASYNC,
-                        io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC));
+    RING_SUBMIT_META_OP_FIXED(ctx, req, AURA_OP_FDATASYNC,
+                              io_uring_prep_fsync(sqe, req->fd, IORING_FSYNC_DATASYNC));
 }
 
 int ring_submit_openat(ring_ctx_t *ctx, aura_request_t *req) {

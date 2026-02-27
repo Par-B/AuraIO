@@ -88,10 +88,11 @@ struct aura_request {
     } meta;
 
     bool in_pool; /**< Debug: true when slot is in free pool (detect double-free) */
+    bool linked;  /**< True if next SQE should be chained via IOSQE_IO_LINK */
 
     /* Pad to 128 bytes (2 full cache lines) so that adjacent requests in
      * the request array never share a cache line. */
-    char _cacheline_pad[128 - 125];
+    char _cacheline_pad[128 - 126];
 };
 
 _Static_assert(sizeof(struct aura_request) == 128, "aura_request must be 128 bytes");
@@ -378,6 +379,17 @@ int ring_get_fd(ring_ctx_t *ctx);
  * When single_thread is set, all mutex ops are skipped. The flag is const
  * after init, so branch prediction eliminates overhead after warmup.
  * ============================================================================ */
+
+/**
+ * Get the last submitted SQE pointer (thread-local).
+ * Used by aura_request_set_linked() to retroactively set IOSQE_IO_LINK.
+ */
+struct io_uring_sqe *ring_get_last_sqe(void);
+
+/**
+ * Clear the last submitted SQE pointer (thread-local).
+ */
+void ring_clear_last_sqe(void);
 
 static inline void ring_lock(ring_ctx_t *ctx) {
     if (!ctx->single_thread) pthread_mutex_lock(&ctx->lock);

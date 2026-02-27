@@ -779,6 +779,30 @@ Get the operation type of a request. Useful in generic completion handlers to di
 
 ---
 
+##### `aura_request_set_linked`
+
+```c
+void aura_request_set_linked(aura_request_t *req);
+```
+
+Mark a request as linked. The next submission on the same thread will be chained via io_uring's `IOSQE_IO_LINK` mechanism. The chained operation will not start until this one completes successfully. If this operation fails, the chained operation receives `-ECANCELED`.
+
+Linked requests are automatically pinned to the same ring. The final operation in a chain should NOT be marked as linked.
+
+---
+
+##### `aura_request_is_linked`
+
+```c
+bool aura_request_is_linked(const aura_request_t *req);
+```
+
+Check if a request is marked as linked.
+
+**Returns:** `true` if the request has `IOSQE_IO_LINK` set, `false` otherwise.
+
+---
+
 #### Event Processing
 
 ##### `aura_get_poll_fd`
@@ -790,6 +814,18 @@ int aura_get_poll_fd(const aura_engine_t *engine);
 Get a pollable file descriptor for event loop integration. Becomes readable when completions are available. Uses level-triggered semantics: remains readable as long as unprocessed completions exist. Compatible with epoll (`EPOLLIN`), poll (`POLLIN`), and select.
 
 **Returns:** Pollable fd, or -1 on error (errno set).
+
+---
+
+##### `aura_flush`
+
+```c
+int aura_flush(aura_engine_t *engine);
+```
+
+Force-flush all pending SQEs across all rings. Submits any queued SQEs that have not yet been submitted to the kernel. Normally flushing happens automatically, but this is useful after building a linked chain to ensure it is submitted immediately.
+
+**Returns:** 0 on success, -1 on error (errno set).
 
 ---
 

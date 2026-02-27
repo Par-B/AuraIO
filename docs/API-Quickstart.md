@@ -487,6 +487,40 @@ aura_drain(engine, 5000);  // 5 second timeout
 aura_destroy(engine);
 ```
 
+### Linked Operations (Op Chaining)
+
+Chain dependent operations so the kernel executes them in order without round-tripping back to user space. For example, write-then-fsync:
+
+```c
+// Write data — mark as linked so fsync waits for it
+aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), 4096, 0, write_cb, ud);
+aura_request_set_linked(wreq);
+
+// Fsync — chained to the write, NOT marked as linked (end of chain)
+aura_request_t *freq = aura_fsync(engine, fd, 0, fsync_cb, ud);
+
+// Both are submitted together; fsync starts only after write succeeds.
+// If write fails, fsync callback receives -ECANCELED.
+aura_wait(engine, -1);
+```
+
+Multi-op chains work too — just mark every op except the last as linked:
+
+```c
+aura_request_t *w1 = aura_write(engine, fd, aura_buf(b1), 4096, 0, cb, ud);
+aura_request_set_linked(w1);
+
+aura_request_t *w2 = aura_write(engine, fd, aura_buf(b2), 4096, 4096, cb, ud);
+aura_request_set_linked(w2);
+
+// Final op: not linked
+aura_fsync(engine, fd, 0, cb, ud);
+
+aura_wait(engine, -1);
+```
+
+Use `aura_flush(engine)` if you need to force-submit a chain without waiting for completions.
+
 ### Registered Buffers (Zero-Copy)
 
 For high-frequency small I/O, register buffers to eliminate kernel mapping overhead:

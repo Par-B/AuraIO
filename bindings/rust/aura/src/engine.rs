@@ -730,6 +730,19 @@ impl Engine {
         }
     }
 
+    /// Force-flush all pending SQEs across all rings
+    ///
+    /// Submits any queued SQEs to the kernel immediately. Useful after
+    /// building a linked chain to ensure it is submitted.
+    pub fn flush(&self) -> Result<()> {
+        let ret = unsafe { aura_sys::aura_flush(self.inner.raw()) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
     /// Process completed operations (non-blocking)
     ///
     /// Returns the number of completions processed.

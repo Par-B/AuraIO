@@ -142,6 +142,18 @@ static _Thread_local int cached_cpu = -1;
 /** Countdown to next sched_getcpu() refresh. */
 static _Thread_local int cpu_refresh_counter = 0;
 
+/** Thread-local link chain state.
+ *  When a linked request is submitted, we pin subsequent submissions to the
+ *  same ring and suppress flushing until the chain ends. */
+static _Thread_local ring_ctx_t *tls_link_ring = NULL;
+static _Thread_local int tls_link_depth = 0;
+
+/** Pointer to the ring used by the last submission on this thread.
+ *  Used by aura_request_set_linked() to set tls_link_ring without
+ *  needing the engine pointer. */
+static _Thread_local ring_ctx_t *tls_last_ring = NULL;
+
+
 /**
  * Select the CPU-local ring.
  *
@@ -641,7 +653,9 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
         return ctx;
     }
 
-    ring_ctx_t *ring = select_ring(engine);
+    /* If we're in a link chain, pin to the same ring so the linked SQEs
+     * share one submission queue. */
+    ring_ctx_t *ring = tls_link_ring ? tls_link_ring : select_ring(engine);
     ring_lock(ring);
 
     if (!ring_can_submit(ring)) {
@@ -691,6 +705,25 @@ static void submit_end(submit_ctx_t *ctx) {
     if (ctx->req->uses_registered_file) {
         atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
     }
+
+    /* Save the ring for aura_request_set_linked() to use. */
+    tls_last_ring = ctx->ring;
+
+    if (tls_link_ring != NULL) {
+        /* We're inside a link chain. This is the chain tail (last op)
+         * since set_linked() was not called on *this* request yet—
+         * it was called on the *previous* one. Force flush to submit the
+         * entire chain together, then clear TLS state. */
+        if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
+            latch_fatal_submit_errno(ctx->engine, errno);
+        }
+        tls_link_ring = NULL;
+        tls_link_depth = 0;
+        ring_clear_last_sqe();
+        ring_unlock(ctx->ring);
+        return;
+    }
+
     if (ring_should_flush(ctx->ring)) {
         if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
             latch_fatal_submit_errno(ctx->engine, errno);
@@ -705,6 +738,13 @@ static void submit_end(submit_ctx_t *ctx) {
  */
 static void submit_abort(submit_ctx_t *ctx) {
     ring_put_request(ctx->ring, ctx->op_idx);
+    /* If we're in a link chain, best-effort flush the partial chain
+     * and clear TLS state so subsequent submissions aren't pinned. */
+    if (tls_link_ring != NULL) {
+        (void)ring_flush(ctx->ring);
+        tls_link_ring = NULL;
+        tls_link_depth = 0;
+    }
     ring_unlock(ctx->ring);
 }
 
@@ -1582,6 +1622,23 @@ int aura_get_poll_fd(const aura_engine_t *engine) {
     return engine->event_fd;
 }
 
+int aura_flush(aura_engine_t *engine) {
+    if (!engine) {
+        errno = EINVAL;
+        return (-1);
+    }
+
+    for (int i = 0; i < engine->ring_count; i++) {
+        ring_ctx_t *ring = &engine->rings[i];
+        ring_lock(ring);
+        if (ring_flush(ring) < 0 && flush_error_is_fatal(errno)) {
+            latch_fatal_submit_errno(engine, errno);
+        }
+        ring_unlock(ring);
+    }
+    return 0;
+}
+
 int aura_poll(aura_engine_t *engine) {
     if (!engine) {
         errno = EINVAL;
@@ -2410,6 +2467,28 @@ int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stat
 int aura_request_op_type(const aura_request_t *req) {
     if (!req) return -1;
     return (int)req->op_type;
+}
+
+void aura_request_set_linked(aura_request_t *req) {
+    if (!req) return;
+    req->linked = true;
+    /* Retroactively set IOSQE_IO_LINK on the SQE that was already prepped
+     * during submission. The SQE is still in the SQ ring because
+     * ring_should_flush() batch threshold is never met by a single SQE,
+     * and linked ops are always submitted back-to-back. */
+    struct io_uring_sqe *sqe = ring_get_last_sqe();
+    if (sqe) {
+        sqe->flags |= IOSQE_IO_LINK;
+    }
+    /* Pin subsequent submissions to the same ring so linked SQEs share
+     * one submission queue. tls_link_ring is checked in submit_begin(). */
+    tls_link_ring = tls_last_ring;
+    tls_link_depth++;
+}
+
+bool aura_request_is_linked(const aura_request_t *req) {
+    if (!req) return false;
+    return req->linked;
 }
 
 const char *aura_phase_name(int phase) {
