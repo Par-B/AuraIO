@@ -186,8 +186,11 @@ aura_unregister(engine, AURA_REG_FILES);
 std::vector<int> fds = { fd1, fd2, fd3 };
 engine.register_files(fds);
 
-// I/O calls unchanged
+// Auto-detection (scans registered table per-call):
 engine.read(fd1, buf, len, offset, callback);
+
+// Direct-index (skips scan + rwlock — use for hot paths):
+engine.read(0, buf, len, offset, callback, AURA_FIXED_FILE);
 
 // Replace a registered fd:
 engine.update_file(0, new_fd);

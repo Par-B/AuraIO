@@ -449,7 +449,8 @@ class Engine {
      * @return Awaitable (co_await yields ssize_t bytes read, or throws aura::Error on failure)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline IoAwaitable async_read(int fd, BufferRef buf, size_t len, off_t offset);
+    inline IoAwaitable async_read(int fd, BufferRef buf, size_t len, off_t offset,
+                                  aura_submit_flags_t flags = 0);
 
     /**
      * Async write operation for coroutines
@@ -458,28 +459,32 @@ class Engine {
      * @param buf Buffer to write from
      * @param len Number of bytes to write
      * @param offset File offset
+     * @param flags Submit flags (e.g. AURA_FIXED_FILE)
      * @return Awaitable (co_await yields ssize_t bytes written, or throws aura::Error on failure)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline IoAwaitable async_write(int fd, BufferRef buf, size_t len, off_t offset);
+    inline IoAwaitable async_write(int fd, BufferRef buf, size_t len, off_t offset,
+                                   aura_submit_flags_t flags = 0);
 
     /**
      * Async fsync operation for coroutines
      *
      * @param fd File descriptor
+     * @param flags Submit flags (e.g. AURA_FIXED_FILE)
      * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline FsyncAwaitable async_fsync(int fd);
+    inline FsyncAwaitable async_fsync(int fd, aura_submit_flags_t flags = 0);
 
     /**
      * Async fdatasync operation for coroutines
      *
      * @param fd File descriptor
+     * @param flags Submit flags (e.g. AURA_FIXED_FILE)
      * @return Awaitable (co_await returns void, or throws aura::Error on failure)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline FsyncAwaitable async_fdatasync(int fd);
+    inline FsyncAwaitable async_fdatasync(int fd, aura_submit_flags_t flags = 0);
 
     // =========================================================================
     // Coroutine Lifecycle Operations

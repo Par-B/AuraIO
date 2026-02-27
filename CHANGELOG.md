@@ -5,11 +5,6 @@ All notable changes to AuraIO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-02-19
-
-### Added
-- **Tiered latency histogram** for NFS-class devices: wider histogram buckets to handle high-latency storage
-
 ## [0.6.0] - 2026-02-27
 
 ### Breaking Changes
@@ -56,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Rust bindings: Extracted `submit_with_callback()` helper to eliminate callback setup boilerplate across all 12 I/O operations (`read`, `write`, `fsync`, `fdatasync`, `readv`, `writev`, `openat`, `close`, `statx`, `fallocate`, `ftruncate`, `sync_file_range`), reducing per-method code from ~24 to ~11 lines (220→132 lines, 88-line reduction, 40% improvement).
   - Rust bindings: Extracted `submit_async()` helper to eliminate Future creation boilerplate across all 6 async operations (`async_read`, `async_write`, `async_fsync`, `async_fdatasync`, `async_readv`, `async_writev`), reducing per-method code from ~9 to ~3 lines (54→18 lines, 36-line reduction, 67% improvement).
   - C engine: Consolidated thread cache buffer cleanup logic (`cleanup_cache_buffers_locked()`) used by 3 cleanup sites (`get_thread_cache()` orphan cleanup, `tls_destructor()` thread exit, `cleanup_phase_2_process_caches()` pool destroy), eliminating 32 lines of duplicated buffer iteration code while centralizing cleanup policy (flush vs free). Reduces call sites from 9-13 lines to 1-3 lines each.
+
+## [0.5.0] - 2026-02-19
+
+### Added
+- **Tiered latency histogram** for NFS-class devices: wider histogram buckets to handle high-latency storage
 
 ## [0.4.0] - 2026-02-15
 

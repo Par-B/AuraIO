@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file coro.hpp
  * @brief C++20 coroutine support for AuraIO
@@ -341,8 +340,10 @@ template <> class Task<void> {
 class IoAwaitable {
     friend class Engine;
 
-    IoAwaitable(Engine &engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write)
-        : engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write) {}
+    IoAwaitable(Engine &engine, int fd, BufferRef buf, size_t len, off_t offset, bool is_write,
+                aura_submit_flags_t flags = 0)
+        : engine_(engine), fd_(fd), buf_(buf), len_(len), offset_(offset), is_write_(is_write),
+          flags_(flags) {}
 
   public:
     IoAwaitable(const IoAwaitable &) = delete;
@@ -372,6 +373,7 @@ class IoAwaitable {
     size_t len_;
     off_t offset_;
     bool is_write_;
+    aura_submit_flags_t flags_;
     ssize_t result_ = 0;
     Request request_{nullptr};           ///< Stored for potential cancellation
     std::atomic<bool> completed_{false}; ///< Race coordination: callback vs await_suspend
@@ -383,8 +385,8 @@ class IoAwaitable {
 class FsyncAwaitable {
     friend class Engine;
 
-    FsyncAwaitable(Engine &engine, int fd, bool datasync = false)
-        : engine_(engine), fd_(fd), datasync_(datasync) {}
+    FsyncAwaitable(Engine &engine, int fd, bool datasync = false, aura_submit_flags_t flags = 0)
+        : engine_(engine), fd_(fd), datasync_(datasync), flags_(flags) {}
 
   public:
     FsyncAwaitable(const FsyncAwaitable &) = delete;
@@ -408,6 +410,7 @@ class FsyncAwaitable {
     Engine &engine_;
     int fd_;
     bool datasync_;
+    aura_submit_flags_t flags_;
     ssize_t result_ = 0;
     Request request_{nullptr};           ///< Stored for potential cancellation
     std::atomic<bool> completed_{false}; ///< Race coordination: callback vs await_suspend
@@ -584,9 +587,9 @@ inline bool IoAwaitable::await_suspend(std::coroutine_handle<> handle) {
             }
         };
         if (is_write_) {
-            request_ = engine_.write(fd_, buf_, len_, offset_, std::move(callback));
+            request_ = engine_.write(fd_, buf_, len_, offset_, std::move(callback), flags_);
         } else {
-            request_ = engine_.read(fd_, buf_, len_, offset_, std::move(callback));
+            request_ = engine_.read(fd_, buf_, len_, offset_, std::move(callback), flags_);
         }
         // If callback already fired, don't suspend (return false).
         // acq_rel ensures result_ written by callback is visible.
@@ -606,9 +609,9 @@ inline bool FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
             }
         };
         if (datasync_) {
-            request_ = engine_.fdatasync(fd_, std::move(callback));
+            request_ = engine_.fdatasync(fd_, std::move(callback), flags_);
         } else {
-            request_ = engine_.fsync(fd_, std::move(callback));
+            request_ = engine_.fsync(fd_, std::move(callback), flags_);
         }
         return !completed_.exchange(true, std::memory_order_acq_rel);
     } catch (const Error &e) {
@@ -618,20 +621,22 @@ inline bool FsyncAwaitable::await_suspend(std::coroutine_handle<> handle) {
 }
 
 // Engine async method implementations
-inline IoAwaitable Engine::async_read(int fd, BufferRef buf, size_t len, off_t offset) {
-    return IoAwaitable(*this, fd, buf, len, offset, false);
+inline IoAwaitable Engine::async_read(int fd, BufferRef buf, size_t len, off_t offset,
+                                      aura_submit_flags_t flags) {
+    return IoAwaitable(*this, fd, buf, len, offset, false, flags);
 }
 
-inline IoAwaitable Engine::async_write(int fd, BufferRef buf, size_t len, off_t offset) {
-    return IoAwaitable(*this, fd, buf, len, offset, true);
+inline IoAwaitable Engine::async_write(int fd, BufferRef buf, size_t len, off_t offset,
+                                       aura_submit_flags_t flags) {
+    return IoAwaitable(*this, fd, buf, len, offset, true, flags);
 }
 
-inline FsyncAwaitable Engine::async_fsync(int fd) {
-    return FsyncAwaitable(*this, fd, false);
+inline FsyncAwaitable Engine::async_fsync(int fd, aura_submit_flags_t flags) {
+    return FsyncAwaitable(*this, fd, false, flags);
 }
 
-inline FsyncAwaitable Engine::async_fdatasync(int fd) {
-    return FsyncAwaitable(*this, fd, true);
+inline FsyncAwaitable Engine::async_fdatasync(int fd, aura_submit_flags_t flags) {
+    return FsyncAwaitable(*this, fd, true, flags);
 }
 
 // --- Lifecycle awaitable await_suspend implementations ---
