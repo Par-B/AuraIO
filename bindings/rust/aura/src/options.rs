@@ -136,6 +136,16 @@ impl Options {
         self
     }
 
+    /// Set batch flush threshold
+    ///
+    /// - `-1` (default): auto-tune via AIMD
+    /// - `0`: never auto-flush (caller controls flush via poll/wait)
+    /// - `>0`: fixed threshold (bypass AIMD batch tuning)
+    pub fn batch_threshold(mut self, threshold: i32) -> Self {
+        self.inner.batch_threshold = threshold;
+        self
+    }
+
     /// Get a reference to the underlying C options struct
     pub(crate) fn as_ptr(&self) -> *const aura_sys::aura_options_t {
         &self.inner

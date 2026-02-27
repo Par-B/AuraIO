@@ -161,6 +161,16 @@ class Options {
         return *this;
     }
 
+    /**
+     * Set batch flush threshold
+     * @param threshold -1 = auto-tune (default), 0 = never auto-flush, >0 = fixed threshold
+     * @return Reference to this for chaining
+     */
+    Options &batch_threshold(int threshold) noexcept {
+        opts_.batch_threshold = threshold;
+        return *this;
+    }
+
     // Getters
     [[nodiscard]] int queue_depth() const noexcept { return opts_.queue_depth; }
     [[nodiscard]] int ring_count() const noexcept { return opts_.ring_count; }
@@ -172,6 +182,7 @@ class Options {
     [[nodiscard]] bool enable_sqpoll() const noexcept { return opts_.enable_sqpoll; }
     [[nodiscard]] int sqpoll_idle_ms() const noexcept { return opts_.sqpoll_idle_ms; }
     [[nodiscard]] bool single_thread() const noexcept { return opts_.single_thread; }
+    [[nodiscard]] int batch_threshold() const noexcept { return opts_.batch_threshold; }
     [[nodiscard]] RingSelect ring_select() const noexcept {
         auto raw = opts_.ring_select;
         if (raw >= AURA_SELECT_ADAPTIVE && raw <= AURA_SELECT_ROUND_ROBIN) {

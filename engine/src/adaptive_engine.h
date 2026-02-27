@@ -372,6 +372,7 @@ typedef struct {
     int passthrough_qualify_count; /**< Consecutive flat-pending ticks toward re-entry */
     int pressure_qualify_count;    /**< Consecutive pressure ticks toward AIMD engage */
     int prev_pending_snapshot;     /**< Previous tick's pending_count for delta */
+    bool batch_threshold_fixed;    /**< True = skip AIMD batch optimizer */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;

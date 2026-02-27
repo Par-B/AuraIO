@@ -412,7 +412,10 @@ typedef struct {
     /* Performance */
     bool single_thread; /**< Skip ring mutexes (caller guarantees single-thread access) */
 
-    uint32_t _reserved[7]; /**< Reserved for future use; must be zero */
+    int batch_threshold; /**< Batch flush threshold: -1 = auto-tune (default),
+                              0 = never auto-flush, >0 = fixed threshold */
+
+    uint32_t _reserved[6]; /**< Reserved for future use; must be zero */
 } aura_options_t;
 
 #ifdef __cplusplus

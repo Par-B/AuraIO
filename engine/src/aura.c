@@ -906,6 +906,9 @@ void aura_options_init(aura_options_t *options) {
 
     /* Ring selection (also zero-init safe since AURA_SELECT_ADAPTIVE = 0) */
     options->ring_select = AURA_SELECT_ADAPTIVE;
+
+    /* Batch threshold: -1 = auto-tune (AIMD), 0 = never auto-flush, >0 = fixed */
+    options->batch_threshold = -1;
 }
 
 /* ============================================================================
@@ -1080,6 +1083,16 @@ static int init_engine_rings(aura_engine_t *engine, const aura_options_t *option
         }
         if (options->max_p99_latency_ms > 0) {
             engine->rings[i].adaptive.max_p99_ms = options->max_p99_latency_ms;
+        }
+
+        /* Apply batch threshold override */
+        if (options->batch_threshold == 0) {
+            atomic_store(&engine->rings[i].adaptive.current_batch_threshold, INT_MAX);
+            engine->rings[i].adaptive.batch_threshold_fixed = true;
+        } else if (options->batch_threshold > 0) {
+            atomic_store(&engine->rings[i].adaptive.current_batch_threshold,
+                         options->batch_threshold);
+            engine->rings[i].adaptive.batch_threshold_fixed = true;
         }
     }
 

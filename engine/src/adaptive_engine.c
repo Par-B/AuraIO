@@ -341,6 +341,7 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     ctrl->passthrough_qualify_count = 0;
     ctrl->pressure_qualify_count = 0;
     ctrl->prev_pending_snapshot = 0;
+    ctrl->batch_threshold_fixed = false;
     ctrl->prev_in_flight_limit = 0;
     ctrl->p99_head = 0;
     ctrl->p99_count = 0;
@@ -734,7 +735,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
     /* =========== INNER LOOP: Batch Optimizer =========== */
     int batch_threshold =
         atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
-    if (stats.sqe_ratio > 0) {
+    if (!ctrl->batch_threshold_fixed && stats.sqe_ratio > 0) {
         if (stats.sqe_ratio < ADAPTIVE_TARGET_SQE_RATIO &&
             batch_threshold < ADAPTIVE_MAX_BATCH_THRESHOLD) {
             batch_threshold++;
