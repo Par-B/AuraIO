@@ -301,7 +301,7 @@ typedef enum {
 | `batch_threshold` | `int` | AIMD-tuned batch size |
 | `p99_latency_ms` | `double` | Current P99 latency estimate (ms) |
 | `throughput_bps` | `double` | Current throughput (bytes/sec) |
-| `aimd_phase` | `int` | Controller phase (0-5, see constants below) |
+| `aimd_phase` | `int` | Controller phase (0-6, see constants below) |
 | `queue_depth` | `int` | Kernel queue depth for this ring |
 
 #### `aura_histogram_t` -- Latency Histogram
@@ -353,6 +353,7 @@ Used in `aura_ring_stats_t.aimd_phase`:
 | `AURA_PHASE_BACKOFF` | 3 | Multiplicative decrease -- P99 exceeded target |
 | `AURA_PHASE_SETTLING` | 4 | Post-backoff stabilization |
 | `AURA_PHASE_CONVERGED` | 5 | Optimal depth found |
+| `AURA_PHASE_PASSTHROUGH` | 6 | No AIMD gating -- default start state, near-zero overhead |
 
 #### Histogram Constants
 
@@ -1135,9 +1136,9 @@ Get a human-readable name for an AIMD phase value.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `phase` | `int` | Phase value (0-5) from `aura_ring_stats_t.aimd_phase` |
+| `phase` | `int` | Phase value (0-6) from `aura_ring_stats_t.aimd_phase` |
 
-**Returns:** Static string: `"BASELINE"`, `"PROBING"`, `"STEADY"`, `"BACKOFF"`, `"SETTLING"`, `"CONVERGED"`, or `"UNKNOWN"` for out-of-range values.
+**Returns:** Static string: `"BASELINE"`, `"PROBING"`, `"STEADY"`, `"BACKOFF"`, `"SETTLING"`, `"CONVERGED"`, `"PASSTHROUGH"`, or `"UNKNOWN"` for out-of-range values.
 
 ---
 

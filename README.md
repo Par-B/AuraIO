@@ -177,7 +177,7 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> aura::Result<()> {
 
 ## Features
 
-- **AIMD Self-Tuning** — Finds and tracks optimal concurrency continuously, per ring, per target
+- **Passthrough-First AIMD** — Starts with zero overhead; engages AIMD only when I/O pressure is detected
 - **Zero Configuration** — Automatically detects cores, allocates rings, sizes queues
 - **Per-Core Rings** — One io_uring per CPU eliminates cross-core contention
 - **Smart Ring Selection** — Three modes: ADAPTIVE (CPU-local with overflow spilling), CPU_LOCAL (strict affinity), ROUND_ROBIN (max scaling)
@@ -304,17 +304,19 @@ See [`examples/`](examples/) for more: bulk readers, write modes, coroutines, as
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**AIMD Self-Tuning:**
-1. **Baseline** — Measures P99 latency at low concurrency (depth 4)
-2. **Probe** — Increases in-flight limit by +1 per tick (10ms) while throughput improves
-3. **Back off** — Cuts limit by ×0.80 if P99 latency spikes (see `ADAPTIVE_LATENCY_GUARD_MULT` and `ADAPTIVE_AIMD_DECREASE` in `engine/src/adaptive_engine.h`)
-4. **Converge** — Settles at the depth that maximizes throughput without blowing latency
-5. **Re-probe** — Periodically re-tests to track changing conditions
+**Passthrough-First AIMD Self-Tuning:**
+1. **Passthrough** (default) — No AIMD gating, near-zero overhead. Sparse latency sampling (1-in-64). Stays here while I/O completes without pressure.
+2. **Engage AIMD** — When the tick thread detects growing queue depth or P99 exceeding a user-set target, transitions to the full AIMD state machine:
+   - **Baseline** — Measures P99 latency at conservative concurrency
+   - **Probe** — Increases in-flight limit by +1 per tick (10ms) while throughput improves
+   - **Back off** — Cuts limit by ×0.80 if P99 latency spikes (see `ADAPTIVE_LATENCY_GUARD_MULT` and `ADAPTIVE_AIMD_DECREASE` in `engine/src/adaptive_engine.h`)
+   - **Converge** — Settles at the depth that maximizes throughput without blowing latency
+3. **Return to Passthrough** — After AIMD converges and pending counts stabilize, overhead drops back to near-zero.
 
 Uses a gentler 20% decrease (vs TCP's 50%) because storage latency
 is more predictable than network RTT — fewer oscillations, faster convergence.
 
-**Result:** Adapts automatically to NVMe, HDD, network storage, noisy neighbors, and workload phase changes.
+**Result:** Page-cache and low-latency workloads run at near-raw io_uring speed. Workloads under pressure get automatic AIMD tuning. The transition is seamless and bidirectional.
 
 ## Proving It: Adaptive Value Benchmark
 
@@ -454,7 +456,7 @@ Synchronous and async code coexist — call `aura_wait()` immediately after subm
 
 1. **Use `aura_buffer_alloc()`** for O_DIRECT — Returns aligned buffers
 2. **Reuse buffers** — Freed buffers go to thread-local cache
-3. **Let it tune** — Give 1-2 seconds for AIMD to converge
+3. **Passthrough is instant** — No warmup needed for page-cache workloads; AIMD engages automatically only when pressure is detected
 4. **Batch submissions** — Submit multiple ops before waiting
 5. **Use vectored I/O** — Combine buffers with `readv`/`writev`
 

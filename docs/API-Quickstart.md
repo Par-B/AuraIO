@@ -58,16 +58,17 @@ AuraIO has four key components:
 | **Engine** | Manages io_uring rings and AIMD controllers. One per application. |
 | **Buffers** | Page-aligned memory from the engine's pool. Required for `O_DIRECT`. |
 | **Callbacks** | Functions invoked when I/O completes. Fire during `poll()`/`wait()`. |
-| **AIMD Controller** | Automatically tunes concurrency to hit optimal throughput within a P99 latency target. |
+| **AIMD Controller** | Passthrough-first adaptive tuning. Starts with zero overhead; engages AIMD congestion control only when I/O pressure is detected. |
 
 ### Self-Tuning Defaults
 
-AuraIO is designed to work well out of the box with **zero configuration**. The AIMD controller automatically:
+AuraIO is designed to work well out of the box with **zero configuration**. The adaptive controller automatically:
 
 - Detects your CPU core count and creates one io_uring ring per core
-- Probes for optimal I/O concurrency depth
-- Backs off when P99 latency rises, increases when there's headroom
-- Converges to a stable operating point
+- Starts in **passthrough mode** — no gating, near-zero overhead
+- Engages AIMD when I/O pressure is detected (growing queue depth or P99 target exceeded)
+- Probes for optimal concurrency depth, backs off on latency spikes
+- Returns to passthrough once the workload stabilizes
 
 **For most applications, `aura_create()` with no options is the right choice.** Override options only when you have a specific constraint (see [When to Override Defaults](#when-to-override-defaults) below).
 
@@ -142,22 +143,22 @@ int main(void) {
 | `ring_count` | 0 (auto: 1 per core) | You want fewer rings (e.g., `1` for a single-threaded tool) |
 | `max_p99_latency_ms` | 0 (auto) | You have a hard latency SLA (e.g., `2.0` for a 2ms P99 ceiling). See below. |
 | `single_thread` | false | Your application is single-threaded and you want to skip mutex overhead |
-| `initial_in_flight` | queue_depth/4 | AIMD auto-tunes this. Override only to start low for latency-sensitive ramp-up |
-| `min_in_flight` | 4 | AIMD auto-tunes this. Rarely needs changing |
-| `disable_adaptive` | false | Benchmarking at a fixed concurrency depth (disables AIMD entirely) |
+| `initial_in_flight` | queue_depth/4 | Only used when adaptive is disabled. In passthrough mode (default), the limit starts at max. |
+| `min_in_flight` | 4 | Floor for AIMD in-flight limit when AIMD is engaged. Rarely needs changing |
+| `disable_adaptive` | false | Benchmarking at a fixed concurrency depth (disables passthrough and AIMD entirely) |
 | `enable_sqpoll` | false | Kernel-side submission polling (requires root/`CAP_SYS_NICE`) |
 
 #### How auto P99 latency detection works
 
-When `max_p99_latency_ms` is 0 (the default), the AIMD controller derives the backoff threshold automatically:
+When `max_p99_latency_ms` is 0 (the default), the engine starts in **passthrough mode** and the AIMD controller only engages when I/O pressure is detected (growing queue depth). Once AIMD is active, it derives the backoff threshold automatically:
 
-1. **Baseline measurement** -- During the first ~100ms (warmup), the controller collects P99 latency samples and tracks the sliding minimum over a 500ms window. This becomes the **baseline P99** -- the best-case latency your device can achieve at the current concurrency.
+1. **Baseline measurement** -- During warmup, the controller collects P99 latency samples and tracks the sliding minimum over a 500ms window. This becomes the **baseline P99** -- the best-case latency your device can achieve at the current concurrency.
 
 2. **10x guard multiplier** -- The backoff threshold is set to **10x the baseline P99**. For example, if your NVMe SSD's baseline P99 is 100us, the controller backs off when P99 exceeds 1ms. This allows normal workload variability while catching genuine device saturation.
 
 3. **10ms hard ceiling** -- Before a baseline is established (or if the baseline is still zero), a 10ms hard ceiling is used. No modern SSD should exceed 10ms for a single I/O under normal conditions.
 
-When you set `max_p99_latency_ms` to a specific value (e.g., `2.0`), the controller uses that as a **hard ceiling** instead of the auto-derived threshold. AIMD will increase concurrency as long as P99 stays below your target, and back off when it exceeds it. This is useful for latency-sensitive services with an SLA.
+When you set `max_p99_latency_ms` to a specific value (e.g., `2.0`), the controller additionally monitors sparse P99 samples during passthrough mode. If sparse P99 exceeds the target, AIMD engages immediately — even without queue depth pressure. Once active, AIMD increases concurrency as long as P99 stays below your target, and backs off when it exceeds it. This is useful for latency-sensitive services with an SLA.
 
 ```c
 // Example: latency-sensitive service with a 2ms P99 target

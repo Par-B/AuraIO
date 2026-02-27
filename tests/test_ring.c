@@ -136,6 +136,12 @@ TEST(ring_can_submit) {
     ring_ctx_t ctx;
     ring_init(&ctx, 64, -1, NULL);
 
+    /* In passthrough mode, always submittable */
+    assert(ring_can_submit(&ctx));
+
+    /* Disable passthrough to test AIMD gating */
+    atomic_store(&ctx.adaptive.passthrough_mode, false);
+
     assert(ring_can_submit(&ctx));
 
     /* Use up all slots (artificially) */

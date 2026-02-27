@@ -91,8 +91,8 @@ TEST(controller_init) {
     int ret = adaptive_init(&ctrl, 256, 32, 4);
     assert(ret == 0);
     assert(ctrl.max_queue_depth == 256);
-    assert(ctrl.current_in_flight_limit == 32);
-    assert(ctrl.phase == ADAPTIVE_PHASE_BASELINE);
+    assert(ctrl.current_in_flight_limit == 256); /* passthrough starts at max */
+    assert(ctrl.phase == ADAPTIVE_PHASE_PASSTHROUGH);
 
     adaptive_destroy(&ctrl);
 }
@@ -114,7 +114,7 @@ TEST(controller_getters) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
 
-    assert(adaptive_get_inflight_limit(&ctrl) == 32);
+    assert(adaptive_get_inflight_limit(&ctrl) == 256); /* passthrough: limit = max */
     assert(adaptive_get_batch_threshold(&ctrl) == ADAPTIVE_MIN_BATCH);
 
     adaptive_destroy(&ctrl);
@@ -127,6 +127,7 @@ TEST(controller_phase_names) {
     assert(strcmp(adaptive_phase_name(ADAPTIVE_PHASE_BACKOFF), "BACKOFF") == 0);
     assert(strcmp(adaptive_phase_name(ADAPTIVE_PHASE_SETTLING), "SETTLING") == 0);
     assert(strcmp(adaptive_phase_name(ADAPTIVE_PHASE_CONVERGED), "CONVERGED") == 0);
+    assert(strcmp(adaptive_phase_name(ADAPTIVE_PHASE_PASSTHROUGH), "PASSTHROUGH") == 0);
 }
 
 TEST(controller_record_completion) {
@@ -162,7 +163,12 @@ TEST(controller_tick_baseline) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
 
-    assert(ctrl.phase == ADAPTIVE_PHASE_BASELINE);
+    assert(ctrl.phase == ADAPTIVE_PHASE_PASSTHROUGH);
+
+    /* Force out of passthrough into BASELINE for this test */
+    atomic_store(&ctrl.passthrough_mode, false);
+    atomic_store(&ctrl.phase, ADAPTIVE_PHASE_BASELINE);
+    atomic_store(&ctrl.current_in_flight_limit, 32);
 
     /* Run through warmup period */
     for (int i = 0; i < ADAPTIVE_WARMUP_SAMPLES; i++) {
@@ -170,7 +176,7 @@ TEST(controller_tick_baseline) {
         for (int j = 0; j < 100; j++) {
             adaptive_record_completion(&ctrl, 100000, 4096);
         }
-        adaptive_tick(&ctrl);
+        adaptive_tick(&ctrl, 0);
     }
 
     /* Should have transitioned to PROBING */
@@ -183,11 +189,12 @@ TEST(controller_min_inflight) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
 
-    /* Force backoff repeatedly */
+    /* Force out of passthrough and into backoff */
+    atomic_store(&ctrl.passthrough_mode, false);
     ctrl.phase = ADAPTIVE_PHASE_BACKOFF;
     ctrl.current_in_flight_limit = 4;
 
-    adaptive_tick(&ctrl);
+    adaptive_tick(&ctrl, 0);
 
     /* Should not go below min_in_flight */
     assert(ctrl.current_in_flight_limit >= ctrl.min_in_flight);
@@ -199,6 +206,10 @@ TEST(controller_probing_additive_increase) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
 
+    /* Force out of passthrough */
+    atomic_store(&ctrl.passthrough_mode, false);
+    atomic_store(&ctrl.current_in_flight_limit, 32);
+
     /* Ensure adaptive_tick enters PROBING increase path:
      * - enough samples (>= LOW_IOPS_MIN_SAMPLES)
      * - no latency spike (p99 << default 10ms guard)
@@ -208,10 +219,10 @@ TEST(controller_probing_additive_increase) {
     }
 
     ctrl.phase = ADAPTIVE_PHASE_PROBING;
-    ctrl.prev_in_flight_limit = 31; /* current is 32 after init */
+    ctrl.prev_in_flight_limit = 31; /* current is 32 */
     ctrl.prev_throughput_bps = 0.0;
 
-    bool changed = adaptive_tick(&ctrl);
+    bool changed = adaptive_tick(&ctrl, 0);
     assert(changed == true);
     assert(ctrl.current_in_flight_limit == 32 + ADAPTIVE_AIMD_INCREASE);
     assert(ctrl.phase == ADAPTIVE_PHASE_PROBING);
@@ -226,6 +237,8 @@ TEST(controller_probing_additive_increase) {
 TEST(low_iops_skips_with_few_samples) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
+    atomic_store(&ctrl.passthrough_mode, false);
+    atomic_store(&ctrl.phase, ADAPTIVE_PHASE_BASELINE);
 
     /* Record only a few completions (< 20) */
     for (int i = 0; i < 5; i++) {
@@ -236,7 +249,7 @@ TEST(low_iops_skips_with_few_samples) {
      * - samples < 20
      * - time < 100ms (just started)
      */
-    bool changed = adaptive_tick(&ctrl);
+    bool changed = adaptive_tick(&ctrl, 0);
     assert(changed == false);
 
     /* Histogram should NOT be reset (still accumulating) */
@@ -249,6 +262,8 @@ TEST(low_iops_skips_with_few_samples) {
 TEST(low_iops_proceeds_with_min_samples) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
+    atomic_store(&ctrl.passthrough_mode, false);
+    atomic_store(&ctrl.phase, ADAPTIVE_PHASE_BASELINE);
 
     /* Record exactly 20 completions (minimum threshold) */
     for (int i = 0; i < ADAPTIVE_LOW_IOPS_MIN_SAMPLES; i++) {
@@ -256,7 +271,7 @@ TEST(low_iops_proceeds_with_min_samples) {
     }
 
     /* Tick should proceed because we have enough samples */
-    adaptive_tick(&ctrl);
+    adaptive_tick(&ctrl, 0);
 
     /* Active histogram should be empty after swap (we're now on the fresh one) */
     adaptive_histogram_t *hist = adaptive_hist_active(&ctrl.hist_pair);
@@ -268,6 +283,8 @@ TEST(low_iops_proceeds_with_min_samples) {
 TEST(low_iops_proceeds_with_min_time) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
+    atomic_store(&ctrl.passthrough_mode, false);
+    atomic_store(&ctrl.phase, ADAPTIVE_PHASE_BASELINE);
 
     /* Record only a few completions (< 20) */
     for (int i = 0; i < 5; i++) {
@@ -278,7 +295,7 @@ TEST(low_iops_proceeds_with_min_time) {
     ctrl.sample_start_ns -= (ADAPTIVE_MIN_SAMPLE_WINDOW_MS + 10) * 1000000LL;
 
     /* Tick should proceed because enough time has passed */
-    adaptive_tick(&ctrl);
+    adaptive_tick(&ctrl, 0);
 
     /* Active histogram should be empty after swap (we're now on the fresh one) */
     adaptive_histogram_t *hist = adaptive_hist_active(&ctrl.hist_pair);
@@ -290,6 +307,7 @@ TEST(low_iops_proceeds_with_min_time) {
 TEST(low_iops_p99_validity_threshold) {
     adaptive_controller_t ctrl;
     adaptive_init(&ctrl, 256, 32, 4);
+    atomic_store(&ctrl.passthrough_mode, false);
 
     /* With < 20 samples, latency_rising should NOT trigger backoff */
     for (int i = 0; i < 10; i++) {
@@ -304,7 +322,7 @@ TEST(low_iops_p99_validity_threshold) {
     ctrl.baseline_p99_ms = 1.0; /* 1ms baseline */
     ctrl.baseline_count = 10;
 
-    adaptive_tick(&ctrl);
+    adaptive_tick(&ctrl, 0);
 
     /* Should NOT have transitioned to BACKOFF (not enough samples for valid P99) */
     /* With < 20 samples, have_valid_p99 is false, so latency_rising stays false */

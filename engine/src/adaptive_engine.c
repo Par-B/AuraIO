@@ -313,11 +313,13 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
      * On platforms where _Atomic types use internal locks, memset would
      * destroy the lock state. Instead, init atomics first, then zero
      * the non-atomic fields individually. */
-    atomic_init(&ctrl->current_in_flight_limit, initial_inflight);
+    /* Start in passthrough mode: no AIMD gating, limit = max */
+    atomic_init(&ctrl->passthrough_mode, true);
+    atomic_init(&ctrl->current_in_flight_limit, max_queue_depth);
     atomic_init(&ctrl->current_batch_threshold, ADAPTIVE_MIN_BATCH);
     atomic_init(&ctrl->current_p99_ms, UINT64_C(0));
     atomic_init(&ctrl->current_throughput_bps, UINT64_C(0));
-    atomic_init(&ctrl->phase, ADAPTIVE_PHASE_BASELINE);
+    atomic_init(&ctrl->phase, ADAPTIVE_PHASE_PASSTHROUGH);
     atomic_init(&ctrl->submit_calls, 0);
     atomic_init(&ctrl->sqes_submitted, 0);
     atomic_init(&ctrl->sample_start_ns, get_time_ns());
@@ -336,6 +338,9 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     ctrl->spike_count = 0;
     ctrl->settling_timer = 0;
     ctrl->entered_via_backoff = false;
+    ctrl->passthrough_qualify_count = 0;
+    ctrl->pressure_qualify_count = 0;
+    ctrl->prev_pending_snapshot = 0;
     ctrl->prev_in_flight_limit = 0;
     ctrl->p99_head = 0;
     ctrl->p99_count = 0;
@@ -398,6 +403,8 @@ const char *adaptive_phase_name(adaptive_phase_t phase) {
         return "SETTLING";
     case ADAPTIVE_PHASE_CONVERGED:
         return "CONVERGED";
+    case ADAPTIVE_PHASE_PASSTHROUGH:
+        return "PASSTHROUGH";
     default:
         return "UNKNOWN";
     }
@@ -607,11 +614,40 @@ static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tic
     return false; /* No params changed (BACKOFF will change them on next tick) */
 }
 
+/**
+ * Reset AIMD state machine to BASELINE for fresh warmup.
+ * Called when transitioning from passthrough to AIMD.
+ */
+static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
+    atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BASELINE, memory_order_release);
+    atomic_store_explicit(&ctrl->current_in_flight_limit, ctrl->min_in_flight,
+                          memory_order_relaxed);
+    ctrl->warmup_count = 0;
+    ctrl->plateau_count = 0;
+    ctrl->steady_count = 0;
+    ctrl->spike_count = 0;
+    ctrl->settling_timer = 0;
+    ctrl->entered_via_backoff = false;
+    ctrl->passthrough_qualify_count = 0;
+
+    /* Clear sliding windows so stale passthrough-era data doesn't
+     * influence the fresh AIMD baseline/probing decisions. */
+    ctrl->p99_head = 0;
+    ctrl->p99_count = 0;
+    ctrl->throughput_head = 0;
+    ctrl->throughput_count = 0;
+    ctrl->baseline_head = 0;
+    ctrl->baseline_count = 0;
+    ctrl->baseline_p99_ms = 0.0;
+    ctrl->prev_throughput_bps = 0.0;
+    ctrl->prev_in_flight_limit = 0;
+}
+
 /* ============================================================================
  * Control Loop
  * ============================================================================ */
 
-bool adaptive_tick(adaptive_controller_t *ctrl) {
+bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
     /* NOT thread-safe: must be called from a single thread only.
      * Concurrent calls would double-swap the histogram (fetch_xor twice),
      * causing both callers to read the active histogram and corrupt state. */
@@ -652,6 +688,43 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
         atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
 #endif
         return false; /* Skip this tick, keep accumulating */
+    }
+
+    /* =========== Passthrough monitoring =========== */
+    int pending_delta = pending_count - ctrl->prev_pending_snapshot;
+    ctrl->prev_pending_snapshot = pending_count;
+
+    if (adaptive_is_passthrough(ctrl)) {
+        bool pressure = (pending_delta > AIMD_ENGAGE_PENDING_DELTA)
+                     || (pending_count > ctrl->max_queue_depth / 2);
+
+        /* P99 target check: if user set max_p99_ms, check sparse samples */
+        if (!pressure && ctrl->max_p99_ms > 0) {
+            tick_stats_t pt_stats = tick_swap_and_compute_stats(ctrl, elapsed_ns);
+            if (pt_stats.have_valid_p99 && pt_stats.p99_ms > ctrl->max_p99_ms)
+                pressure = true;
+
+            atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(),
+                                  memory_order_release);
+        }
+
+        if (pressure) {
+            ctrl->pressure_qualify_count++;
+            if (ctrl->pressure_qualify_count >= AIMD_ENGAGE_TICKS) {
+                atomic_store_explicit(&ctrl->passthrough_mode, false,
+                                      memory_order_relaxed);
+                adaptive_reset_to_baseline(ctrl);
+                ctrl->pressure_qualify_count = 0;
+                params_changed = true;
+            }
+        } else {
+            ctrl->pressure_qualify_count = 0;
+        }
+
+#ifndef NDEBUG
+        atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
+#endif
+        return params_changed;
     }
 
     /* Swap histograms and compute statistics.
@@ -713,8 +786,30 @@ bool adaptive_tick(adaptive_controller_t *ctrl) {
     case ADAPTIVE_PHASE_CONVERGED:
         state_changed_params = handle_converged_phase(ctrl, &stats);
         break;
+    case ADAPTIVE_PHASE_PASSTHROUGH:
+        /* Should not reach here — passthrough exits early above */
+        break;
     }
     params_changed = params_changed || state_changed_params;
+
+    /* Check passthrough re-entry: CONVERGED + flat pending → passthrough */
+    if (atomic_load_explicit(&ctrl->phase, memory_order_relaxed) == ADAPTIVE_PHASE_CONVERGED) {
+        if (abs(pending_delta) <= PASSTHROUGH_REENTER_DELTA_MAX) {
+            ctrl->passthrough_qualify_count++;
+            if (ctrl->passthrough_qualify_count >= PASSTHROUGH_REENTER_TICKS) {
+                atomic_store_explicit(&ctrl->passthrough_mode, true,
+                                      memory_order_relaxed);
+                atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PASSTHROUGH,
+                                      memory_order_release);
+                atomic_store_explicit(&ctrl->current_in_flight_limit,
+                                      ctrl->max_queue_depth, memory_order_relaxed);
+                ctrl->passthrough_qualify_count = 0;
+                params_changed = true;
+            }
+        } else {
+            ctrl->passthrough_qualify_count = 0;
+        }
+    }
 
     /* Reset sample start for next period.  Use a fresh timestamp so the next
      * period's elapsed_ns does not include the processing time of this tick

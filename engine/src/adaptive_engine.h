@@ -265,6 +265,29 @@ static inline int bucket_upper_bound_us(int bucket) {
 }
 
 /* ============================================================================
+ * Passthrough Mode Constants
+ * ============================================================================
+ *
+ * Passthrough mode skips AIMD gating on the hot path when there's no I/O
+ * pressure, eliminating overhead on page-cache workloads.
+ */
+
+/** Consecutive ticks of growing pending before engaging AIMD (30ms) */
+#define AIMD_ENGAGE_TICKS              3
+
+/** Minimum pending growth per tick to count as "growing" */
+#define AIMD_ENGAGE_PENDING_DELTA      4
+
+/** Consecutive flat-pending ticks after CONVERGED to re-enter passthrough (100ms) */
+#define PASSTHROUGH_REENTER_TICKS      10
+
+/** Maximum |pending delta| per tick to count as "flat" for re-entry */
+#define PASSTHROUGH_REENTER_DELTA_MAX  2
+
+/** Latency sample mask in passthrough mode: 1-in-64 */
+#define PASSTHROUGH_SAMPLE_MASK        0x3F
+
+/* ============================================================================
  * Types
  * ============================================================================ */
 
@@ -272,12 +295,13 @@ static inline int bucket_upper_bound_us(int bucket) {
  * Adaptive phase
  */
 typedef enum {
-    ADAPTIVE_PHASE_BASELINE, /**< Collecting baseline latency */
-    ADAPTIVE_PHASE_PROBING,  /**< Increasing in-flight limit */
-    ADAPTIVE_PHASE_STEADY,   /**< Maintaining optimal config */
-    ADAPTIVE_PHASE_BACKOFF,  /**< Reducing due to latency spike */
-    ADAPTIVE_PHASE_SETTLING, /**< Waiting for metrics to stabilize */
-    ADAPTIVE_PHASE_CONVERGED /**< Tuning complete */
+    ADAPTIVE_PHASE_BASELINE,    /**< Collecting baseline latency */
+    ADAPTIVE_PHASE_PROBING,     /**< Increasing in-flight limit */
+    ADAPTIVE_PHASE_STEADY,      /**< Maintaining optimal config */
+    ADAPTIVE_PHASE_BACKOFF,     /**< Reducing due to latency spike */
+    ADAPTIVE_PHASE_SETTLING,    /**< Waiting for metrics to stabilize */
+    ADAPTIVE_PHASE_CONVERGED,   /**< Tuning complete */
+    ADAPTIVE_PHASE_PASSTHROUGH  /**< No AIMD gating (default start state) */
 } adaptive_phase_t;
 
 /**
@@ -329,6 +353,7 @@ typedef struct {
     _Atomic uint64_t current_p99_ms;         /**< Current sample P99 (double stored as uint64_t) */
     _Atomic uint64_t current_throughput_bps; /**< Current throughput (double stored as uint64_t) */
     _Atomic adaptive_phase_t phase;          /**< Current phase */
+    _Atomic bool passthrough_mode;           /**< True = skip AIMD gating (hot read per submit) */
     int max_queue_depth;                     /**< Upper bound on in-flight */
     int min_in_flight;                       /**< Lower bound on in-flight */
     int prev_in_flight_limit;                /**< Previous limit for efficiency ratio */
@@ -344,6 +369,9 @@ typedef struct {
     int spike_count;               /**< Consecutive latency spikes */
     int settling_timer;            /**< Time in SETTLING phase */
     bool entered_via_backoff;      /**< STEADY was reached via BACKOFF (not plateau) */
+    int passthrough_qualify_count; /**< Consecutive flat-pending ticks toward re-entry */
+    int pressure_qualify_count;    /**< Consecutive pressure ticks toward AIMD engage */
+    int prev_pending_snapshot;     /**< Previous tick's pending_count for delta */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;
@@ -413,10 +441,11 @@ void adaptive_record_completion(adaptive_controller_t *ctrl, int64_t latency_ns,
  * NOT thread-safe: must be called from a single thread only (the tick thread).
  * Concurrent calls will corrupt internal state (sliding windows, counters).
  *
- * @param ctrl Controller
+ * @param ctrl          Controller
+ * @param pending_count Current number of in-flight operations
  * @return true if parameters changed, false otherwise
  */
-bool adaptive_tick(adaptive_controller_t *ctrl);
+bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count);
 
 /**
  * Record a submit syscall
@@ -450,6 +479,18 @@ static inline int adaptive_get_inflight_limit(adaptive_controller_t *ctrl) {
  */
 static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
     return atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
+}
+
+/**
+ * Check if controller is in passthrough mode
+ *
+ * Inlined: called on every submission in ring_can_submit() and data_finish().
+ *
+ * @param ctrl Controller
+ * @return true if passthrough (no AIMD gating)
+ */
+static inline bool adaptive_is_passthrough(const adaptive_controller_t *ctrl) {
+    return atomic_load_explicit((_Atomic bool *)&ctrl->passthrough_mode, memory_order_relaxed);
 }
 
 /**

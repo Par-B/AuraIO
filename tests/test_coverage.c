@@ -276,7 +276,7 @@ TEST(adaptive_inline_getters_direct) {
     int rc = adaptive_init(&ctrl, 128, 16, 4);
     assert(rc == 0);
 
-    assert(adaptive_get_inflight_limit(&ctrl) == 16);
+    assert(adaptive_get_inflight_limit(&ctrl) == 128); /* passthrough: limit = max */
     assert(adaptive_get_batch_threshold(&ctrl) == ADAPTIVE_MIN_BATCH);
 
     adaptive_destroy(&ctrl);

@@ -132,7 +132,7 @@ TEST(ring_stats_basic) {
     assert(rc == 0);
 
     assert(rs.queue_depth == 64);
-    assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_CONVERGED);
+    assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_PASSTHROUGH);
     assert(rs.in_flight_limit > 0);
     assert(rs.pending_count == 0);
 
@@ -329,6 +329,7 @@ TEST(phase_name_valid) {
     assert(strcmp(aura_phase_name(AURA_PHASE_BACKOFF), "BACKOFF") == 0);
     assert(strcmp(aura_phase_name(AURA_PHASE_SETTLING), "SETTLING") == 0);
     assert(strcmp(aura_phase_name(AURA_PHASE_CONVERGED), "CONVERGED") == 0);
+    assert(strcmp(aura_phase_name(AURA_PHASE_PASSTHROUGH), "PASSTHROUGH") == 0);
 }
 
 TEST(phase_name_invalid) {
@@ -336,7 +337,7 @@ TEST(phase_name_invalid) {
     name = aura_phase_name(-1);
     assert(name != NULL);
     assert(strcmp(name, "UNKNOWN") == 0);
-    name = aura_phase_name(6);
+    name = aura_phase_name(7);
     assert(name != NULL);
     assert(strcmp(name, "UNKNOWN") == 0);
     name = aura_phase_name(999);
@@ -352,6 +353,7 @@ TEST(phase_constants_match) {
     assert(AURA_PHASE_BACKOFF == 3);
     assert(AURA_PHASE_SETTLING == 4);
     assert(AURA_PHASE_CONVERGED == 5);
+    assert(AURA_PHASE_PASSTHROUGH == 6);
 }
 
 /* ============================================================================
@@ -945,7 +947,7 @@ static void *stats_reader_thread(void *arg) {
             aura_ring_stats_t rs;
             aura_get_ring_stats(ctx->engine, i, &rs, sizeof(rs));
             assert(rs.queue_depth > 0);
-            assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_CONVERGED);
+            assert(rs.aimd_phase >= 0 && rs.aimd_phase <= AURA_PHASE_PASSTHROUGH);
 
             aura_histogram_t hist;
             aura_get_histogram(ctx->engine, i, &hist, sizeof(hist));

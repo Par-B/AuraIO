@@ -56,7 +56,26 @@ Cache misses are expensive. AuraIO ensures that data stays hot in the L1/L2 cach
 
 Performance is not just about raw speed but about **consistent latency**. AuraIO embeds an intelligent controller to manage queue depth.
 
-### Double-Loop Control System
+### Passthrough Mode
+
+The default start state is **passthrough** — no AIMD gating on the submission hot path. In passthrough mode:
+- `ring_can_submit()` returns `true` immediately (single atomic load of the passthrough flag)
+- Latency sampling is reduced from 1-in-8 to 1-in-64, cutting `clock_gettime()` overhead by 8x
+- The tick thread (every 10ms) monitors `pending_count` and sparse P99 samples for signs of I/O pressure
+
+This means page-cache workloads and low-latency storage see near-zero overhead from AuraIO's adaptive machinery.
+
+**Engagement criteria** (any one triggers AIMD):
+- `pending_count` growing by >4 per tick for 3 consecutive ticks (30ms)
+- `pending_count` exceeds half the max queue depth (immediate)
+- When `max_p99_latency_ms` is set: sparse P99 exceeds the target
+
+**Return to passthrough**: After AIMD reaches CONVERGED and pending counts remain flat (delta ≤ 2) for 100ms (10 ticks), the controller returns to passthrough with the in-flight limit reset to max.
+
+### Double-Loop Control System (AIMD Active)
+
+When AIMD is engaged, the full two-loop control system operates:
+
 1.  **Inner Loop (Batch Optimizer)**:
     - Monitors the ratio of `SQE Submitted` vs `Syscalls Made`.
     - Dynamically tunes batch sizes to amortize the cost of the `io_uring_submit` syscall without adding artificial latency to individual requests.
@@ -69,9 +88,9 @@ Performance is not just about raw speed but about **consistent latency**. AuraIO
 
 ### State Machine and Convergence
 
-The outer loop progresses through phases: PROBING → SETTLING → STEADY → CONVERGED. CONVERGED is **not terminal**. Spike detection can trigger BACKOFF → SETTLING → STEADY at any time. From STEADY, if the ring entered via BACKOFF (tracked via `entered_via_backoff`), the controller automatically re-enters PROBING after `ADAPTIVE_REPROBE_INTERVAL` (100 ticks ≈ 1 second), allowing re-adaptation when workload characteristics change.
+The controller starts in PASSTHROUGH. When pressure is detected, it transitions to BASELINE and progresses through: BASELINE → PROBING → SETTLING → STEADY → CONVERGED → PASSTHROUGH. CONVERGED is **not terminal** in either direction — spike detection can trigger BACKOFF → SETTLING → STEADY at any time, and stable conditions trigger a return to PASSTHROUGH. From STEADY, if the ring entered via BACKOFF (tracked via `entered_via_backoff`), the controller automatically re-enters PROBING after `ADAPTIVE_REPROBE_INTERVAL` (100 ticks ≈ 1 second), allowing re-adaptation when workload characteristics change.
 
-**Time-to-convergence**: STEADY state requires `ADAPTIVE_STEADY_THRESHOLD` = 500 ticks (× 10ms tick interval = ~5 seconds) of stable operation before transitioning to CONVERGED. Total ramp time from a cold start is approximately **7–15 seconds** depending on workload variability — faster on stable, consistent workloads; slower on highly variable or latency-sensitive ones.
+**Time-to-convergence**: STEADY state requires `ADAPTIVE_STEADY_THRESHOLD` = 500 ticks (× 10ms tick interval = ~5 seconds) of stable operation before transitioning to CONVERGED. Total ramp time from AIMD engagement is approximately **7–15 seconds** depending on workload variability — faster on stable, consistent workloads; slower on highly variable or latency-sensitive ones. Workloads that never trigger pressure remain in passthrough indefinitely with near-zero overhead.
 
 ## 5. Performance Tips for Users
 
@@ -110,26 +129,23 @@ To fully leverage this architecture:
         aura_wait(engine, 100);
     ```
 
-6.  **Set `initial_in_flight` to Match Your Workload**: The AIMD controller defaults to starting at `max(queue_depth / 4, 4)` and ramping up over ~1 second. This is the right default for latency-sensitive production workloads, but it means the first second of I/O runs at reduced concurrency. If your workload has a short ramp time, needs to reach peak throughput immediately, or is a benchmark without latency constraints, set `initial_in_flight` to your target depth at engine creation.
+6.  **`initial_in_flight` is ignored in passthrough mode**: The engine starts in passthrough mode where the in-flight limit equals `max_queue_depth` (no gating). The `initial_in_flight` option only takes effect if AIMD engages due to I/O pressure — at that point, the controller starts at `min_in_flight` and probes upward. For most workloads, the defaults work well. If you disable adaptive tuning (`disable_adaptive = true`), the engine uses `initial_in_flight` as a fixed limit.
 
     ```c
     aura_options_t opts;
     aura_options_init(&opts);
     opts.queue_depth = 512;
 
-    // Benchmark / throughput-only: start at full depth
-    opts.initial_in_flight = 512;
+    // Default: passthrough mode, full queue depth available immediately
+    // AIMD engages only when pressure is detected
 
-    // Latency-sensitive with short ramp: start closer to expected steady-state
-    // (e.g., if AIMD typically converges to ~64, start there instead of 128)
-    opts.initial_in_flight = 64;
-
-    // Latency-targeting mode: start low, let AIMD probe up
+    // Latency-targeting mode: AIMD engages when P99 exceeds target
     opts.max_p99_latency_ms = 2.0;
-    opts.initial_in_flight = 4;
-    ```
 
-    **Rule of thumb**: if you know your target concurrency, set `initial_in_flight` to that value. If you don't, leave it at 0 (auto) and give the AIMD controller enough ramp time to converge — STEADY state requires ~5 seconds (500 ticks × 10ms) before transitioning to CONVERGED, making total cold-start ramp time approximately 7–15 seconds depending on workload variability.
+    // Fixed depth (no adaptive tuning):
+    opts.disable_adaptive = true;
+    opts.initial_in_flight = 64;
+    ```
 
 ## 6. High-Performance Deployment (64+ Cores, NVMe Arrays, High-Speed Networks)
 
@@ -358,8 +374,8 @@ Different depths exercise different bottlenecks. At low depth (32), the overhead
 2. **Adaptive** at depth=256 with AIMD enabled — measures the full stack including the tick thread, histogram recording, and limit adjustments. Uses extended warmup (2s vs 1s default) to let AIMD converge before measurement begins
 3. The AIMD converged depth is reported to show whether the controller found a similar optimum to the sweep
 
-**Latency sampling (1 in 8 ops):**
-Both paths use identical `clock_gettime(CLOCK_MONOTONIC)` sampling at 1-in-8 rate, matching AuraIO's internal `RING_LATENCY_SAMPLE_RATE` (= 8) — every 8th operation is sampled. Sampling every op would add ~20ns overhead that biases the measurement; 1-in-8 is enough for stable P99 estimation.
+**Latency sampling (1-in-8 AIMD, 1-in-64 passthrough):**
+Both paths use identical `clock_gettime(CLOCK_MONOTONIC)` sampling. When AIMD is active, AuraIO samples at 1-in-8 rate (`RING_LATENCY_SAMPLE_RATE` = 8). In passthrough mode, sampling is reduced to 1-in-64 (`PASSTHROUGH_SAMPLE_MASK` = 0x3F), cutting `clock_gettime()` overhead by 8x. The regression test forces AIMD mode to compare like-for-like with the raw baseline.
 
 **Temp file with unlink:**
 The default test file is created via `mkstemp` + `fallocate(1GB)` + `unlink`. The unlink ensures automatic cleanup even on crash. Data is written with random bytes to prevent the filesystem from returning zeros for unwritten regions. `O_DIRECT` is enabled via `fcntl(F_SETFL)` to bypass the page cache — the AIMD controller needs to see true device latency, and cached reads would make both paths appear identically fast.

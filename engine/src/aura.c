@@ -779,9 +779,9 @@ static void *tick_thread_func(void *arg) {
         /* Tick each ring's adaptive controller and compute avg pending */
         int total_pending = 0;
         for (int i = 0; i < engine->ring_count; i++) {
-            adaptive_tick(&engine->rings[i].adaptive);
             int pending =
                 atomic_load_explicit(&engine->rings[i].pending_count, memory_order_relaxed);
+            adaptive_tick(&engine->rings[i].adaptive, pending);
             total_pending += pending;
             if (pending >
                 atomic_load_explicit(&engine->rings[i].peak_pending_count, memory_order_relaxed)) {

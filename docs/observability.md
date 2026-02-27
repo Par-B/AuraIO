@@ -68,7 +68,7 @@ Fields in `aura_ring_stats_t`:
 | `batch_threshold` | `int` | AIMD-tuned batch size |
 | `p99_latency_ms` | `double` | Current P99 latency estimate (ms) |
 | `throughput_bps` | `double` | Current throughput (bytes/sec) |
-| `aimd_phase` | `int` | Controller phase (0-5, see table below) |
+| `aimd_phase` | `int` | Controller phase (0-6, see table below) |
 | `queue_depth` | `int` | Maximum queue depth for this ring |
 
 AIMD phases (via `aura_phase_name()`):
@@ -81,6 +81,7 @@ AIMD phases (via `aura_phase_name()`):
 | 3 | BACKOFF | Multiplicative decrease — P99 exceeded target |
 | 4 | SETTLING | Post-backoff stabilization |
 | 5 | CONVERGED | Optimal depth found, minor adjustments only |
+| 6 | PASSTHROUGH | No AIMD gating — default start state, near-zero overhead |
 
 ### Latency Histogram
 
@@ -241,7 +242,7 @@ Integrate this into whichever HTTP server you already run — there is no built-
 | `aura_ring_queue_depth` | gauge | `ring` | Kernel queue depth per ring |
 | `aura_ring_p99_latency_seconds` | gauge | `ring` | P99 latency per ring |
 | `aura_ring_throughput_bytes_per_second` | gauge | `ring` | Throughput per ring |
-| `aura_ring_aimd_phase` | gauge | `ring` | AIMD phase (0-5) per ring |
+| `aura_ring_aimd_phase` | gauge | `ring` | AIMD phase (0-6) per ring |
 | `aura_latency_seconds` | histogram | `ring` | Latency distribution per ring (sum estimated from bucket midpoints) |
 | `aura_adaptive_spills_total` | counter | — | ADAPTIVE mode: submissions spilled to non-local ring |
 | `aura_buffer_pool_allocated_bytes` | gauge | — | Buffer pool allocated bytes |
@@ -342,8 +343,8 @@ aura_throughput_bytes_per_second
 # Per-ring P99 latency
 aura_ring_p99_latency_seconds
 
-# AIMD phase distribution (are rings converged?)
-count by (ring) (aura_ring_aimd_phase == 5)
+# AIMD phase distribution (are rings in passthrough or converged?)
+count by (ring) (aura_ring_aimd_phase == 6 or aura_ring_aimd_phase == 5)
 
 # Latency P99 from histogram (more accurate than gauge)
 histogram_quantile(0.99, rate(aura_latency_seconds_bucket[1m]))

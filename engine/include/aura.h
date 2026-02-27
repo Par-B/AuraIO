@@ -293,8 +293,9 @@ _Static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size chan
 #define AURA_PHASE_PROBING 1   /**< Increasing in-flight limit */
 #define AURA_PHASE_STEADY 2    /**< Maintaining optimal config */
 #define AURA_PHASE_BACKOFF 3   /**< Reducing due to latency spike */
-#define AURA_PHASE_SETTLING 4  /**< Waiting for metrics to stabilize */
-#define AURA_PHASE_CONVERGED 5 /**< Tuning complete */
+#define AURA_PHASE_SETTLING 4     /**< Waiting for metrics to stabilize */
+#define AURA_PHASE_CONVERGED 5    /**< Tuning complete */
+#define AURA_PHASE_PASSTHROUGH 6  /**< No AIMD gating (low-pressure default) */
 
 /**
  * Latency histogram snapshot

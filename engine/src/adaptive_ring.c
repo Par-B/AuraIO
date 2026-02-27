@@ -392,8 +392,10 @@ static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, aura_request_t *req)
 /** Common postamble for data-transfer submissions (latency-sampled). */
 static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
     req->op_type = op;
+    int mask = adaptive_is_passthrough(&ctx->adaptive)
+        ? PASSTHROUGH_SAMPLE_MASK : RING_LATENCY_SAMPLE_MASK;
     req->submit_time_ns =
-        (ctx->sample_counter++ & RING_LATENCY_SAMPLE_MASK) == 0 ? get_time_ns() : 0;
+        (ctx->sample_counter++ & mask) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
@@ -949,6 +951,8 @@ bool ring_can_submit(ring_ctx_t *ctx) {
     if (!ctx) {
         return false;
     }
+
+    if (adaptive_is_passthrough(&ctx->adaptive)) return true;
 
     int limit = adaptive_get_inflight_limit(&ctx->adaptive);
     return atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) < limit;

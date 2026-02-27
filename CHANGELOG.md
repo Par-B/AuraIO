@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`aura_get_stats()` returns `int`**: Was `void`. Now returns `0` on success, `-1` with `errno=EINVAL` on NULL/invalid input
 
 ### Added
+- **Passthrough mode**: Engine starts in zero-overhead passthrough mode by default, bypassing AIMD gating entirely. AIMD congestion control engages automatically only when I/O pressure is detected (growing pending queue, queue >50% full, or sparse P99 exceeding target). Returns to passthrough when AIMD converges and pending stabilizes. Eliminates 9-31% overhead on page-cache workloads. New phase `AURA_PHASE_PASSTHROUGH` (6) visible in stats and observability
 - **atree directory tree tool** (`tools/atree/`): `tree(1)` replacement with per-file stats (size, date) and aggregate directory summaries. Uses batched `aura_statx` via io_uring with parallel worker threads for fast scanning of large trees. Supports long format (`-l`), size sorting (`-s`), depth limiting (`-L`), LS_COLORS, and color auto-detection
 - **aura-hash checksum tool** (`tools/aura-hash/`): Parallel file checksum utility (sha256sum/md5sum replacement) using AuraIO read pipelining with OpenSSL EVP. Supports SHA-256, SHA-1, MD5, recursive directory hashing, O_DIRECT mode, and coreutils-compatible output format
 - **auracp file copy tool** (`tools/auracp/`): Production-quality async pipelined file copy with cross-file I/O pipeline, recursive directory support, O_DIRECT mode, progress bar, and AIMD stats reporting
