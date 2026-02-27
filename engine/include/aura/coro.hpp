@@ -424,8 +424,10 @@ class FsyncAwaitable {
 class OpenatAwaitable {
     friend class Engine;
 
-    OpenatAwaitable(Engine &engine, int dirfd, const char *pathname, int flags, mode_t mode)
-        : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mode_(mode) {}
+    OpenatAwaitable(Engine &engine, int dirfd, const char *pathname, int flags, mode_t mode,
+                    aura_submit_flags_t submit_flags = 0)
+        : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mode_(mode),
+          submit_flags_(submit_flags) {}
 
   public:
     OpenatAwaitable(const OpenatAwaitable &) = delete;
@@ -452,6 +454,7 @@ class OpenatAwaitable {
     const char *pathname_;
     int flags_;
     mode_t mode_;
+    aura_submit_flags_t submit_flags_;
     ssize_t result_ = 0;
     Request request_{nullptr};
     std::atomic<bool> completed_{false};
@@ -468,13 +471,14 @@ class MetadataAwaitable {
     enum class Op { Close, Fallocate, Ftruncate, SyncFileRange };
 
     // Close
-    MetadataAwaitable(Engine &engine, int fd, Op op) : engine_(engine), fd_(fd), op_(op) {}
+    MetadataAwaitable(Engine &engine, int fd, Op op, aura_submit_flags_t submit_flags = 0)
+        : engine_(engine), fd_(fd), op_(op), submit_flags_(submit_flags) {}
 
     // Fallocate / Ftruncate / SyncFileRange
     MetadataAwaitable(Engine &engine, int fd, Op op, int mode, off_t offset, off_t len,
-                      unsigned int flags)
-        : engine_(engine), fd_(fd), op_(op), mode_(mode), offset_(offset), len_(len),
-          flags_(flags) {}
+                      unsigned int flags, aura_submit_flags_t submit_flags = 0)
+        : engine_(engine), fd_(fd), op_(op), mode_(mode), offset_(offset), len_(len), flags_(flags),
+          submit_flags_(submit_flags) {}
 
   public:
     MetadataAwaitable(const MetadataAwaitable &) = delete;
@@ -517,6 +521,7 @@ class MetadataAwaitable {
     off_t offset_ = 0;
     off_t len_ = 0;
     unsigned int flags_ = 0;
+    aura_submit_flags_t submit_flags_ = 0;
     ssize_t result_ = 0;
     Request request_{nullptr};
     std::atomic<bool> completed_{false};
@@ -532,9 +537,9 @@ class StatxAwaitable {
     friend class Engine;
 
     StatxAwaitable(Engine &engine, int dirfd, const char *pathname, int flags, unsigned int mask,
-                   struct statx *statxbuf)
+                   struct statx *statxbuf, aura_submit_flags_t submit_flags = 0)
         : engine_(engine), dirfd_(dirfd), pathname_(pathname), flags_(flags), mask_(mask),
-          statxbuf_(statxbuf) {}
+          statxbuf_(statxbuf), submit_flags_(submit_flags) {}
 
   public:
     StatxAwaitable(const StatxAwaitable &) = delete;
@@ -561,6 +566,7 @@ class StatxAwaitable {
     int flags_;
     unsigned int mask_;
     struct statx *statxbuf_;
+    aura_submit_flags_t submit_flags_;
     ssize_t result_ = 0;
     Request request_{nullptr};
     std::atomic<bool> completed_{false};
@@ -649,7 +655,8 @@ inline bool OpenatAwaitable::await_suspend(std::coroutine_handle<> handle) {
                 handle.resume();
             }
         };
-        request_ = engine_.openat(dirfd_, pathname_, flags_, mode_, std::move(callback));
+        request_ =
+            engine_.openat(dirfd_, pathname_, flags_, mode_, std::move(callback), submit_flags_);
         return !completed_.exchange(true, std::memory_order_acq_rel);
     } catch (const Error &e) {
         result_ = -e.code();
@@ -667,16 +674,18 @@ inline bool MetadataAwaitable::await_suspend(std::coroutine_handle<> handle) {
         };
         switch (op_) {
         case Op::Close:
-            request_ = engine_.close(fd_, std::move(callback));
+            request_ = engine_.close(fd_, std::move(callback), submit_flags_);
             break;
         case Op::Fallocate:
-            request_ = engine_.fallocate(fd_, mode_, offset_, len_, std::move(callback));
+            request_ =
+                engine_.fallocate(fd_, mode_, offset_, len_, std::move(callback), submit_flags_);
             break;
         case Op::Ftruncate:
-            request_ = engine_.ftruncate(fd_, len_, std::move(callback));
+            request_ = engine_.ftruncate(fd_, len_, std::move(callback), submit_flags_);
             break;
         case Op::SyncFileRange:
-            request_ = engine_.sync_file_range(fd_, offset_, len_, flags_, std::move(callback));
+            request_ = engine_.sync_file_range(fd_, offset_, len_, flags_, std::move(callback),
+                                               submit_flags_);
             break;
         }
         return !completed_.exchange(true, std::memory_order_acq_rel);
@@ -695,7 +704,8 @@ inline bool StatxAwaitable::await_suspend(std::coroutine_handle<> handle) {
                 handle.resume();
             }
         };
-        request_ = engine_.statx(dirfd_, pathname_, flags_, mask_, statxbuf_, std::move(callback));
+        request_ = engine_.statx(dirfd_, pathname_, flags_, mask_, statxbuf_, std::move(callback),
+                                 submit_flags_);
         return !completed_.exchange(true, std::memory_order_acq_rel);
     } catch (const Error &e) {
         result_ = -e.code();
@@ -706,34 +716,40 @@ inline bool StatxAwaitable::await_suspend(std::coroutine_handle<> handle) {
 
 // --- Engine lifecycle async method implementations ---
 
-inline OpenatAwaitable Engine::async_openat(int dirfd, const char *pathname, int flags,
-                                            mode_t mode) {
-    return OpenatAwaitable(*this, dirfd, pathname, flags, mode);
+inline OpenatAwaitable Engine::async_openat(int dirfd, const char *pathname, int flags, mode_t mode,
+                                            aura_submit_flags_t submit_flags) {
+    return OpenatAwaitable(*this, dirfd, pathname, flags, mode, submit_flags);
 }
 
-inline MetadataAwaitable Engine::async_close(int fd) {
-    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Close);
+inline MetadataAwaitable Engine::async_close(int fd, aura_submit_flags_t submit_flags) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Close, submit_flags);
 }
 
 #ifdef __linux__
 inline StatxAwaitable Engine::async_statx(int dirfd, const char *pathname, int flags,
-                                          unsigned int mask, struct statx *statxbuf) {
-    return StatxAwaitable(*this, dirfd, pathname, flags, mask, statxbuf);
+                                          unsigned int mask, struct statx *statxbuf,
+                                          aura_submit_flags_t submit_flags) {
+    return StatxAwaitable(*this, dirfd, pathname, flags, mask, statxbuf, submit_flags);
 }
 #endif
 
-inline MetadataAwaitable Engine::async_fallocate(int fd, int mode, off_t offset, off_t len) {
-    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Fallocate, mode, offset, len, 0);
+inline MetadataAwaitable Engine::async_fallocate(int fd, int mode, off_t offset, off_t len,
+                                                 aura_submit_flags_t submit_flags) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Fallocate, mode, offset, len, 0,
+                             submit_flags);
 }
 
-inline MetadataAwaitable Engine::async_ftruncate(int fd, off_t length) {
-    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Ftruncate, 0, 0, length, 0);
+inline MetadataAwaitable Engine::async_ftruncate(int fd, off_t length,
+                                                 aura_submit_flags_t submit_flags) {
+    return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::Ftruncate, 0, 0, length, 0,
+                             submit_flags);
 }
 
 inline MetadataAwaitable Engine::async_sync_file_range(int fd, off_t offset, off_t nbytes,
-                                                       unsigned int flags) {
+                                                       unsigned int flags,
+                                                       aura_submit_flags_t submit_flags) {
     return MetadataAwaitable(*this, fd, MetadataAwaitable::Op::SyncFileRange, 0, offset, nbytes,
-                             flags);
+                             flags, submit_flags);
 }
 
 } // namespace aura

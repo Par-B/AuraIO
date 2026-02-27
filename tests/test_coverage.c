@@ -987,6 +987,188 @@ TEST(fixed_file_unknown_flags) {
     io_teardown();
 }
 
+TEST(fixed_file_negative_index) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+
+    /* Negative index should be rejected */
+    aura_request_t *req =
+        aura_read(engine, -1, aura_buf(buf), 4096, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_fsync) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    cb_called = 0;
+    aura_request_t *req =
+        aura_fsync(engine, 0, AURA_FSYNC_DEFAULT, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result >= 0);
+
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_readv) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    cb_called = 0;
+    aura_request_t *req = aura_readv(engine, 0, &iov, 1, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result == 4096);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_writev) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    void *buf = aura_buffer_alloc(engine, 4096);
+    memset(buf, 'V', 4096);
+    struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
+    cb_called = 0;
+    aura_request_t *req = aura_writev(engine, 0, &iov, 1, 0, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result == 4096);
+
+    aura_buffer_free(engine, buf);
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_fallocate) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    cb_called = 0;
+    aura_request_t *req = aura_fallocate(engine, 0, 0, 0, 4096, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result >= 0);
+
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_sync_file_range) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    cb_called = 0;
+    aura_request_t *req =
+        aura_sync_file_range(engine, 0, 0, 4096, AURA_SYNC_RANGE_WRITE | AURA_SYNC_RANGE_WAIT_AFTER,
+                             AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result >= 0);
+
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_rejected_by_openat) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    /* openat rejects AURA_FIXED_FILE */
+    aura_request_t *req = aura_openat(engine, AT_FDCWD, "/tmp/aura_test_dummy", AURA_O_RDONLY, 0,
+                                      AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_rejected_by_close) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    /* close rejects AURA_FIXED_FILE */
+    aura_request_t *req = aura_close(engine, test_fd, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+    io_teardown();
+}
+
+TEST(fixed_file_rejected_by_statx) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    struct statx stx;
+    /* statx rejects AURA_FIXED_FILE */
+    aura_request_t *req = aura_statx(engine, AT_FDCWD, test_file, 0, AURA_STATX_ALL, &stx,
+                                     AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req == NULL);
+    assert(errno == EINVAL);
+
+    aura_destroy(engine);
+    io_teardown();
+}
+
 TEST(update_file_null_args) {
     assert(aura_update_file(NULL, 0, -1) == -1);
     assert(errno == EINVAL);
@@ -2402,6 +2584,15 @@ int main(void) {
     RUN_TEST(fixed_file_invalid_index);
     RUN_TEST(fixed_file_not_registered);
     RUN_TEST(fixed_file_unknown_flags);
+    RUN_TEST(fixed_file_negative_index);
+    RUN_TEST(fixed_file_fsync);
+    RUN_TEST(fixed_file_readv);
+    RUN_TEST(fixed_file_writev);
+    RUN_TEST(fixed_file_fallocate);
+    RUN_TEST(fixed_file_sync_file_range);
+    RUN_TEST(fixed_file_rejected_by_openat);
+    RUN_TEST(fixed_file_rejected_by_close);
+    RUN_TEST(fixed_file_rejected_by_statx);
 
     RUN_TEST(update_file_null_args);
     RUN_TEST(update_file_out_of_range);

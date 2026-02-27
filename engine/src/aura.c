@@ -447,7 +447,14 @@ static file_resolve_guard_t resolve_file_begin(aura_engine_t *engine, int fd) {
     return guard;
 }
 
-/* Validate AURA_FIXED_FILE: files must be registered and index in range. */
+/* Validate AURA_FIXED_FILE: files must be registered and index in range.
+ *
+ * THREADING: This does NOT hold reg_lock — the acquire fence on files_registered
+ * synchronizes with the release store after registration completes, making
+ * registered_file_count visible. Callers must not race AURA_FIXED_FILE submissions
+ * with aura_unregister(AURA_REG_FILES). The unregister path drains in-flight ops
+ * before clearing state, so concurrent submissions during unregistration are
+ * already undefined behavior. */
 static bool validate_fixed_file(const aura_engine_t *engine, int index) {
     if (!atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
         errno = EINVAL;
@@ -599,6 +606,10 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
     int submit_fd = fd;
     bool use_registered_file;
     if (flags & AURA_FIXED_FILE) {
+        if (!validate_fixed_file(engine, fd)) {
+            pthread_rwlock_unlock(&engine->reg_lock);
+            return NULL;
+        }
         use_registered_file = true;
     } else {
         use_registered_file = resolve_registered_file_locked(engine, fd, &submit_fd);
@@ -1465,7 +1476,11 @@ aura_request_t *aura_openat(aura_engine_t *engine, int dirfd, const char *pathna
         errno = EINVAL;
         return NULL;
     }
-    VALIDATE_SUBMIT_FLAGS(flags);
+    /* openat creates a new fd — AURA_FIXED_FILE is not applicable. */
+    if (flags != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
 
     submit_ctx_t ctx = submit_begin(engine, true);
     if (!ctx.req) return NULL;
@@ -1495,10 +1510,12 @@ aura_request_t *aura_close(aura_engine_t *engine, int fd, aura_submit_flags_t fl
         errno = EINVAL;
         return NULL;
     }
-    VALIDATE_SUBMIT_FLAGS(flags);
-
     /* Close always uses the raw fd — IOSQE_FIXED_FILE on close means
-     * "unregister slot" which is not what callers expect. */
+     * "unregister slot" which is not what callers expect. Reject all flags. */
+    if (flags != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
     submit_ctx_t ctx = submit_begin(engine, true);
     if (!ctx.req) return NULL;
 
@@ -1525,7 +1542,11 @@ aura_request_t *aura_statx(aura_engine_t *engine, int dirfd, const char *pathnam
         errno = EINVAL;
         return NULL;
     }
-    VALIDATE_SUBMIT_FLAGS(flags);
+    /* statx uses dirfd+pathname — AURA_FIXED_FILE is not applicable. */
+    if (flags != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
 
     submit_ctx_t ctx = submit_begin(engine, true);
     if (!ctx.req) return NULL;

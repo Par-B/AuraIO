@@ -495,14 +495,15 @@ class Engine {
      * @return Awaitable (co_await yields int fd, or throws aura::Error)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline OpenatAwaitable async_openat(int dirfd, const char *pathname, int flags, mode_t mode);
+    inline OpenatAwaitable async_openat(int dirfd, const char *pathname, int flags, mode_t mode,
+                                        aura_submit_flags_t submit_flags = 0);
 
     /**
      * Async close for coroutines
      * @return Awaitable (co_await returns void, or throws aura::Error)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline MetadataAwaitable async_close(int fd);
+    inline MetadataAwaitable async_close(int fd, aura_submit_flags_t submit_flags = 0);
 
 #ifdef __linux__
     /**
@@ -511,7 +512,7 @@ class Engine {
      */
     [[nodiscard("must be immediately co_await-ed")]]
     inline StatxAwaitable async_statx(int dirfd, const char *pathname, int flags, unsigned int mask,
-                                      struct statx *statxbuf);
+                                      struct statx *statxbuf, aura_submit_flags_t submit_flags = 0);
 #endif
 
     /**
@@ -519,14 +520,16 @@ class Engine {
      * @return Awaitable (co_await returns void, or throws aura::Error)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline MetadataAwaitable async_fallocate(int fd, int mode, off_t offset, off_t len);
+    inline MetadataAwaitable async_fallocate(int fd, int mode, off_t offset, off_t len,
+                                             aura_submit_flags_t submit_flags = 0);
 
     /**
      * Async ftruncate for coroutines
      * @return Awaitable (co_await returns void, or throws aura::Error)
      */
     [[nodiscard("must be immediately co_await-ed")]]
-    inline MetadataAwaitable async_ftruncate(int fd, off_t length);
+    inline MetadataAwaitable async_ftruncate(int fd, off_t length,
+                                             aura_submit_flags_t submit_flags = 0);
 
     /**
      * Async sync_file_range for coroutines
@@ -534,7 +537,8 @@ class Engine {
      */
     [[nodiscard("must be immediately co_await-ed")]]
     inline MetadataAwaitable async_sync_file_range(int fd, off_t offset, off_t nbytes,
-                                                   unsigned int flags);
+                                                   unsigned int flags,
+                                                   aura_submit_flags_t submit_flags = 0);
 
     // =========================================================================
     // Cancellation

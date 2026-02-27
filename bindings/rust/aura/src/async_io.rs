@@ -76,6 +76,7 @@ struct IoState {
 /// **must** keep buffers alive until the engine is polled at least once
 /// after the drop, to ensure the kernel has observed the cancel before
 /// the buffer memory is reused.
+#[must_use = "futures do nothing unless awaited; dropping cancels the I/O"]
 pub struct IoFuture {
     state: Arc<Mutex<IoState>>,
     engine: Arc<EngineInner>,
