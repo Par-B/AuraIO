@@ -620,7 +620,7 @@ static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tic
  */
 static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BASELINE, memory_order_release);
-    atomic_store_explicit(&ctrl->current_in_flight_limit, ctrl->min_in_flight,
+    atomic_store_explicit(&ctrl->current_in_flight_limit, ctrl->max_queue_depth / 2,
                           memory_order_relaxed);
     ctrl->warmup_count = 0;
     ctrl->plateau_count = 0;

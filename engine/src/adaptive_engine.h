@@ -272,11 +272,11 @@ static inline int bucket_upper_bound_us(int bucket) {
  * pressure, eliminating overhead on page-cache workloads.
  */
 
-/** Consecutive ticks of growing pending before engaging AIMD (30ms) */
-#define AIMD_ENGAGE_TICKS              3
+/** Consecutive ticks of growing pending before engaging AIMD (80ms) */
+#define AIMD_ENGAGE_TICKS              8
 
 /** Minimum pending growth per tick to count as "growing" */
-#define AIMD_ENGAGE_PENDING_DELTA      4
+#define AIMD_ENGAGE_PENDING_DELTA      16
 
 /** Consecutive flat-pending ticks after CONVERGED to re-enter passthrough (100ms) */
 #define PASSTHROUGH_REENTER_TICKS      10
