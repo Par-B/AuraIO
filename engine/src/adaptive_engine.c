@@ -695,8 +695,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
     ctrl->prev_pending_snapshot = pending_count;
 
     if (adaptive_is_passthrough(ctrl)) {
-        bool pressure = (pending_delta > AIMD_ENGAGE_PENDING_DELTA)
-                     || (pending_count > ctrl->max_queue_depth / 2);
+        bool pressure = (pending_delta > AIMD_ENGAGE_PENDING_DELTA);
 
         /* P99 target check: if user set max_p99_ms, check sparse samples */
         if (!pressure && ctrl->max_p99_ms > 0) {
