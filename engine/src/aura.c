@@ -90,6 +90,7 @@ struct aura_engine {
     _Atomic int avg_ring_pending; /**< Tick-updated average pending across rings */
     atomic_bool shutting_down; /**< Shutdown in progress - reject new submissions */
     aura_ring_select_t ring_select; /**< Ring selection mode */
+    bool single_thread; /**< Single-thread mode: skip rwlocks and use plain stores */
     _Atomic int fatal_submit_errno; /**< Latched fatal submit error from ring_flush */
 
     /* === Cache line 1+: registration path === */
@@ -443,12 +444,14 @@ static file_resolve_guard_t resolve_file_begin(aura_engine_t *engine, int fd) {
     };
 
     if (atomic_load_explicit(&engine->files_registered, memory_order_acquire)) {
-        pthread_rwlock_rdlock(&engine->reg_lock);
-        guard.locked = true;
+        if (!engine->single_thread) {
+            pthread_rwlock_rdlock(&engine->reg_lock);
+            guard.locked = true;
+        }
         guard.uses_registered_file = resolve_registered_file_locked(engine, fd, &guard.submit_fd);
 
         /* If file not registered, release lock immediately */
-        if (!guard.uses_registered_file) {
+        if (guard.locked && !guard.uses_registered_file) {
             pthread_rwlock_unlock(&engine->reg_lock);
             guard.locked = false;
         }
@@ -563,22 +566,22 @@ static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, i
 
     registered_buf_info_t info = { .reg_iov = NULL };
 
-    pthread_rwlock_rdlock(&engine->reg_lock);
+    if (!engine->single_thread) pthread_rwlock_rdlock(&engine->reg_lock);
 
     if (!atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed)) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!engine->single_thread) pthread_rwlock_unlock(&engine->reg_lock);
         errno = ENOENT; /* No buffers registered */
         return info;
     }
 
     if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed)) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!engine->single_thread) pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Unregister in progress */
         return info;
     }
 
     if (buf_index < 0 || buf_index >= engine->registered_buffer_count) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!engine->single_thread) pthread_rwlock_unlock(&engine->reg_lock);
         errno = EINVAL;
         return info;
     }
@@ -587,12 +590,12 @@ static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, i
 
     /* Overflow-safe bounds check: avoid offset + len which can wrap */
     if (buf_offset >= reg_iov->iov_len || len > reg_iov->iov_len - buf_offset) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!engine->single_thread) pthread_rwlock_unlock(&engine->reg_lock);
         errno = EOVERFLOW;
         return info;
     }
 
-    /* Success: keep lock held, return iov */
+    /* Success: keep lock held (multi-thread) or proceed without (single-thread) */
     info.reg_iov = reg_iov;
     return info;
 }
@@ -608,9 +611,11 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
                                                    aura_callback_t callback, void *user_data,
                                                    ring_submit_fixed_fn_t submit_fn) {
 
+    bool st = engine->single_thread;
+
     submit_ctx_t ctx = submit_begin(engine, false);
     if (!ctx.req) {
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!st) pthread_rwlock_unlock(&engine->reg_lock);
         return NULL;
     }
 
@@ -622,7 +627,7 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
          * but still hold reg_lock (acquired by validate_registered_buffer) to
          * protect the registered buffer state used below. */
         if (!validate_fixed_file(engine, fd)) {
-            pthread_rwlock_unlock(&engine->reg_lock);
+            if (!st) pthread_rwlock_unlock(&engine->reg_lock);
             return NULL;
         }
         use_registered_file = true;
@@ -640,21 +645,35 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
     ctx.req->uses_registered_buffer = true;
     ctx.req->uses_registered_file = use_registered_file;
 
-    atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+    if (st) {
+        atomic_store_explicit(
+            &ctx.ring->fixed_buf_inflight,
+            atomic_load_explicit(&ctx.ring->fixed_buf_inflight, memory_order_relaxed) + 1,
+            memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+    }
 
     ctx.req->buffer = (char *)reg_iov->iov_base + buf_offset;
     ctx.req->buf_index = buf_index;
     ctx.req->buf_offset = buf_offset;
 
     if (submit_fn(ctx.ring, ctx.req) != 0) {
-        atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+        if (st) {
+            atomic_store_explicit(
+                &ctx.ring->fixed_buf_inflight,
+                atomic_load_explicit(&ctx.ring->fixed_buf_inflight, memory_order_relaxed) - 1,
+                memory_order_relaxed);
+        } else {
+            atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
+        }
         submit_abort(&ctx);
-        pthread_rwlock_unlock(&engine->reg_lock);
+        if (!st) pthread_rwlock_unlock(&engine->reg_lock);
         return NULL;
     }
 
     submit_end(&ctx);
-    pthread_rwlock_unlock(&engine->reg_lock);
+    if (!st) pthread_rwlock_unlock(&engine->reg_lock);
     return ctx.req;
 }
 
@@ -844,7 +863,13 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
  */
 static void submit_end(submit_ctx_t *ctx) {
     if (ctx->req->uses_registered_file) {
-        atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
+        if (ctx->engine->single_thread) {
+            uint32_t v =
+                atomic_load_explicit(&ctx->ring->fixed_file_inflight, memory_order_relaxed);
+            atomic_store_explicit(&ctx->ring->fixed_file_inflight, v + 1, memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
+        }
     }
 
     /* Single-owner fast path: no lock to release */
@@ -1173,6 +1198,8 @@ static int init_engine_rings(aura_engine_t *engine, const aura_options_t *option
             engine->rings[i].adaptive.batch_threshold_fixed = true;
         }
     }
+
+    engine->single_thread = options->single_thread;
 
     return 0;
 }
