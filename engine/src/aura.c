@@ -1388,7 +1388,8 @@ void aura_destroy(aura_engine_t *engine) {
     tls_link_ring = NULL;
     tls_link_depth = 0;
 
-    aura_drain(engine, -1); /* Phase 2: drain I/O before unregistering */
+    int drain_rc_ = aura_drain(engine, -1); /* Phase 2: drain I/O before unregistering */
+    (void)drain_rc_;
     destroy_phase_3_unregister(engine);
     destroy_phase_4_cleanup_resources(engine);
 }
