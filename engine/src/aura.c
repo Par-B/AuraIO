@@ -238,8 +238,16 @@ static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
         }
         atomic_store_explicit(&ring->single_thread, true, memory_order_release);
     } else {
-        /* Shared ring — keep mutexes, disable single_thread if it was set */
+        /* Shared ring — disable single_thread and wait for any in-progress
+         * lockless critical section to drain before proceeding.
+         * This spin only happens once per ring lifetime (first sharing). */
         atomic_store_explicit(&ring->single_thread, false, memory_order_release);
+        while (atomic_load_explicit(&ring->st_users, memory_order_acquire) > 0) {
+            /* spin — bounded by the sole owner's critical section duration */
+        }
+        while (atomic_load_explicit(&ring->st_cq_users, memory_order_acquire) > 0) {
+            /* spin */
+        }
     }
 
     tls_owned_ring = ring;
@@ -773,8 +781,20 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
     }
 
     /* If we're in a link chain, pin to the same ring so the linked SQEs
-     * share one submission queue. */
-    ring_ctx_t *ring = tls_link_ring ? tls_link_ring : select_ring(engine);
+     * share one submission queue. Validate that the stale TLS pointer
+     * still belongs to this engine (handles engine destroy+recreate). */
+    ring_ctx_t *ring;
+    if (tls_link_ring && tls_engine == engine && tls_link_ring >= engine->rings &&
+        tls_link_ring < engine->rings + engine->ring_count) {
+        ring = tls_link_ring;
+    } else {
+        if (tls_link_ring) {
+            /* Stale pointer from a destroyed engine — clear link state. */
+            tls_link_ring = NULL;
+            tls_link_depth = 0;
+        }
+        ring = select_ring(engine);
+    }
 
     /* Single-owner fast path: no lock, inline capacity check.
      * Applies to THREAD_LOCAL mode and single-ring single-thread engines. */

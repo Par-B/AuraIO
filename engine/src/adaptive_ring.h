@@ -159,6 +159,12 @@ typedef struct {
      * single-thread access. Set during init, const after. */
     _Atomic bool single_thread;
 
+    /* Count of threads currently inside a lockless critical section.
+     * Used to safely transition single_thread from true→false: the new
+     * thread spins until st_users==0 before proceeding with the mutex. */
+    _Atomic int st_users;
+    _Atomic int st_cq_users;
+
     /* Thread-local ring ownership tracking */
     _Atomic int owner_count;    /**< Number of threads that have claimed this ring */
     bool single_issuer_enabled; /**< SINGLE_ISSUER was successfully set */
@@ -471,25 +477,61 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
 
 static inline bool ring_lock(ring_ctx_t *ctx) {
     bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
-    if (!st) pthread_mutex_lock(&ctx->lock);
-    return st;
+    if (st) {
+        atomic_fetch_add_explicit(&ctx->st_users, 1, memory_order_acquire);
+        /* Re-check: if another thread cleared single_thread between our
+         * load and the st_users bump, fall back to the mutex. */
+        if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire)) {
+            atomic_fetch_sub_explicit(&ctx->st_users, 1, memory_order_release);
+            pthread_mutex_lock(&ctx->lock);
+            return false;
+        }
+        return true;
+    }
+    pthread_mutex_lock(&ctx->lock);
+    return false;
 }
 static inline bool ring_trylock(ring_ctx_t *ctx, bool *single_thread_out) {
     bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
     *single_thread_out = st;
-    if (st) return true;
+    if (st) {
+        atomic_fetch_add_explicit(&ctx->st_users, 1, memory_order_acquire);
+        if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire)) {
+            atomic_fetch_sub_explicit(&ctx->st_users, 1, memory_order_release);
+            *single_thread_out = false;
+            return pthread_mutex_trylock(&ctx->lock) == 0;
+        }
+        return true;
+    }
     return pthread_mutex_trylock(&ctx->lock) == 0;
 }
 static inline void ring_unlock(ring_ctx_t *ctx, bool single_thread) {
-    if (!single_thread) pthread_mutex_unlock(&ctx->lock);
+    if (single_thread) {
+        atomic_fetch_sub_explicit(&ctx->st_users, 1, memory_order_release);
+    } else {
+        pthread_mutex_unlock(&ctx->lock);
+    }
 }
 static inline bool ring_cq_lock(ring_ctx_t *ctx) {
     bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
-    if (!st) pthread_mutex_lock(&ctx->cq_lock);
-    return st;
+    if (st) {
+        atomic_fetch_add_explicit(&ctx->st_cq_users, 1, memory_order_acquire);
+        if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire)) {
+            atomic_fetch_sub_explicit(&ctx->st_cq_users, 1, memory_order_release);
+            pthread_mutex_lock(&ctx->cq_lock);
+            return false;
+        }
+        return true;
+    }
+    pthread_mutex_lock(&ctx->cq_lock);
+    return false;
 }
 static inline void ring_cq_unlock(ring_ctx_t *ctx, bool single_thread) {
-    if (!single_thread) pthread_mutex_unlock(&ctx->cq_lock);
+    if (single_thread) {
+        atomic_fetch_sub_explicit(&ctx->st_cq_users, 1, memory_order_release);
+    } else {
+        pthread_mutex_unlock(&ctx->cq_lock);
+    }
 }
 
 #endif /* ADAPTIVE_RING_H */

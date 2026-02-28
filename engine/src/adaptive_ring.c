@@ -226,6 +226,8 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     ctx->free_request_count = queue_depth;
     atomic_init(&ctx->fixed_buf_inflight, 0);
     atomic_init(&ctx->fixed_file_inflight, 0);
+    atomic_init(&ctx->st_users, 0);
+    atomic_init(&ctx->st_cq_users, 0);
 
     /* Set CQE drain batch size based on queue depth */
     int batch = queue_depth >> 2;
