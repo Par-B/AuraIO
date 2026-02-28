@@ -447,7 +447,9 @@ static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     req->op_type = op;
     int mask = adaptive_is_passthrough(&ctx->adaptive) ? PASSTHROUGH_SAMPLE_MASK
                                                        : RING_LATENCY_SAMPLE_MASK;
-    req->submit_time_ns = (ctx->sample_counter++ & mask) == 0 ? get_time_ns() : 0;
+    unsigned int sc = atomic_load_explicit(&ctx->sample_counter, memory_order_relaxed);
+    atomic_store_explicit(&ctx->sample_counter, sc + 1, memory_order_relaxed);
+    req->submit_time_ns = (sc & mask) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
@@ -913,6 +915,7 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
  * (which is a no-op for single_thread rings).
  */
 int ring_drain_cqes_fast(ring_ctx_t *ctx) {
+    if (!ctx || !ctx->ring_initialized) return 0;
     int completed = 0;
     struct io_uring_cqe *cqe;
 
@@ -964,6 +967,8 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
     }
 
     if (timeout_ms == 0) {
+        if (atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
+            return ring_drain_cqes_fast(ctx);
         return ring_drain_cqes(ctx);
     }
 

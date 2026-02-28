@@ -142,7 +142,7 @@ typedef struct {
      *  Written under ring->lock, read lock-free in ring_should_flush()
      *  (advisory only — stale values affect flush timing, not correctness). */
     _Alignas(64) _Atomic int queued_sqes;
-    unsigned int sample_counter; /**< Submission counter for sampling */
+    _Atomic unsigned int sample_counter; /**< Submission counter for sampling */
 
     /* Completion-path counters (written during process_completion) */
     _Alignas(64) int64_t
@@ -430,8 +430,12 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted > 0) {
         int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
-        int sub = submitted < old ? submitted : old;
-        atomic_store_explicit(&ctx->queued_sqes, old - sub, memory_order_relaxed);
+        for (;;) {
+            int sub = submitted < old ? submitted : old;
+            if (atomic_compare_exchange_weak_explicit(&ctx->queued_sqes, &old, old - sub,
+                                                      memory_order_relaxed, memory_order_relaxed))
+                break;
+        }
         adaptive_record_submit(&ctx->adaptive, submitted);
     }
     return submitted;
