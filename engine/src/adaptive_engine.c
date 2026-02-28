@@ -306,12 +306,11 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     }
 
     if (min_inflight < 1) min_inflight = 4; /* Default floor */
-    if (initial_inflight < min_inflight) initial_inflight = min_inflight;
-    if (initial_inflight > max_queue_depth) initial_inflight = max_queue_depth;
 
-    /* Note: initial_inflight is validated but not stored — passthrough mode
-     * starts at max_queue_depth, and AIMD engagement resets to max/2 via
-     * adaptive_reset_to_baseline(). Kept for API compatibility. */
+    /* Note: initial_inflight is accepted for API compatibility but not stored —
+     * passthrough mode starts at max_queue_depth, and AIMD engagement resets
+     * to max/2 via adaptive_reset_to_baseline(). */
+    (void)initial_inflight;
 
     /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
      * On platforms where _Atomic types use internal locks, memset would
