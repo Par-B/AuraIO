@@ -655,7 +655,8 @@ static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
         ctrl->hist_pair.pending_reset = NULL;
     }
     adaptive_histogram_t *old = adaptive_hist_swap(&ctrl->hist_pair);
-    adaptive_hist_reset(old);
+    /* Defer reset to next tick so in-flight writers are not racing with memset. */
+    ctrl->hist_pair.pending_reset = old;
     atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
     atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
     atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
