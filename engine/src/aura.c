@@ -1178,10 +1178,13 @@ static int init_engine_rings(aura_engine_t *engine, const aura_options_t *option
             engine->sqpoll_enabled = true;
         }
 
-        /* Apply custom adaptive settings if provided */
+        /* Apply custom adaptive settings if provided.
+         * Store initial_in_flight for AIMD engagement but do NOT override
+         * current_in_flight_limit here — passthrough mode needs it at
+         * max_queue_depth.  The stored value is applied when AIMD engages
+         * via adaptive_reset_to_baseline(). */
         if (options->initial_in_flight > 0) {
-            atomic_store(&engine->rings[i].adaptive.current_in_flight_limit,
-                         options->initial_in_flight);
+            engine->rings[i].adaptive.aimd_initial_in_flight = options->initial_in_flight;
         }
         if (options->min_in_flight > 0) {
             engine->rings[i].adaptive.min_in_flight = options->min_in_flight;

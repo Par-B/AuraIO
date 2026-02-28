@@ -307,10 +307,9 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
 
     if (min_inflight < 1) min_inflight = 4; /* Default floor */
 
-    /* Note: initial_inflight is accepted for API compatibility but not stored —
-     * passthrough mode starts at max_queue_depth, and AIMD engagement resets
-     * to max/2 via adaptive_reset_to_baseline(). */
-    (void)initial_inflight;
+    /* Store initial_inflight for use when AIMD engages (adaptive_reset_to_baseline).
+     * Passthrough mode starts at max_queue_depth; this value is only applied
+     * when transitioning from passthrough to active AIMD control. */
 
     /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
      * On platforms where _Atomic types use internal locks, memset would
@@ -331,6 +330,7 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     /* Zero all non-atomic fields */
     ctrl->max_queue_depth = max_queue_depth;
     ctrl->min_in_flight = min_inflight;
+    ctrl->aimd_initial_in_flight = initial_inflight;
     ctrl->baseline_p99_ms = 0.0;
     ctrl->latency_rise_threshold = 0.0;
     ctrl->max_p99_ms = 0.0;
@@ -625,7 +625,8 @@ static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tic
  */
 static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BASELINE, memory_order_release);
-    int initial = ctrl->max_queue_depth / 2;
+    int initial = (ctrl->aimd_initial_in_flight > 0) ? ctrl->aimd_initial_in_flight
+                                                     : ctrl->max_queue_depth / 2;
     if (initial < ctrl->min_in_flight) initial = ctrl->min_in_flight;
     atomic_store_explicit(&ctrl->current_in_flight_limit, initial, memory_order_relaxed);
     ctrl->warmup_count = 0;

@@ -366,6 +366,7 @@ typedef struct {
     _Atomic bool passthrough_mode;           /**< True = skip AIMD gating (hot read per submit) */
     int max_queue_depth;                     /**< Upper bound on in-flight */
     int min_in_flight;                       /**< Lower bound on in-flight */
+    int aimd_initial_in_flight;              /**< Starting limit when AIMD engages (0 = max/2) */
     int prev_in_flight_limit;                /**< Previous limit for efficiency ratio */
 
     /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
