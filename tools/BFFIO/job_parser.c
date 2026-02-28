@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file job_parser.c
  * @brief FIO-compatible job file and CLI parser for BFFIO
@@ -429,13 +428,25 @@ static int apply_param(job_config_t *job, const char *key, const char *value) {
             job->ring_select = 1;
         } else if (strcasecmp(value, "round_robin") == 0) {
             job->ring_select = 2;
+        } else if (strcasecmp(value, "thread_local") == 0) {
+            job->ring_select = 3;
         } else {
             fprintf(stderr,
                     "BFFIO: unknown ring-select mode '%s' "
-                    "(use: adaptive, cpu_local, round_robin)\n",
+                    "(use: adaptive, cpu_local, round_robin, thread_local)\n",
                     value);
             return -1;
         }
+        return 0;
+    }
+
+    if (strcmp(key, "sqpoll") == 0) {
+        int v;
+        if (parse_int(value, &v) != 0) {
+            fprintf(stderr, "BFFIO: invalid integer for '%s': '%s'\n", key, value);
+            return -1;
+        }
+        job->sqpoll = v;
         return 0;
     }
 

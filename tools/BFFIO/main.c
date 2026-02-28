@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file main.c
  * @brief BFFIO - Better Faster FIO (powered by Aura)
@@ -59,8 +58,9 @@ static void print_usage(void) {
            "  --target-p99=LATENCY   P99 latency ceiling. Suffixes: us, ms, s (default: ms)\n"
            "                         AIMD finds max concurrency under this target.\n"
            "                         Examples: 2ms, 500us, 1.5ms, 0.01s\n"
-           "  --ring-select=MODE     Ring selection: adaptive, cpu_local, round_robin (default: "
-           "adaptive)\n"
+           "  --ring-select=MODE     Ring selection: adaptive, cpu_local, round_robin,\n"
+           "                         thread_local (default: adaptive)\n"
+           "  --sqpoll=0|1           Enable SQPOLL mode (default: 0, requires root)\n"
            "  --ioengine=ENGINE      Accepted but always uses Aura\n"
            "  --output-format=FMT    Output format: normal, json (default: normal)\n");
 }
@@ -178,6 +178,7 @@ int main(int argc, char *argv[]) {
             (job->numjobs <= 1) ? 1 : 0; /* 1 ring for single-thread, auto for multi */
         opts.single_thread = (job->numjobs <= 1); /* Skip mutexes for single-thread */
         opts.ring_select = (aura_ring_select_t)job->ring_select;
+        opts.enable_sqpoll = job->sqpoll;
 
         /* Pass user's P99 latency target to AIMD controller */
         if (job->target_p99_ms > 0.0) {

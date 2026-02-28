@@ -27,6 +27,7 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 
 /* ============================================================================
  * Timing utilities
@@ -459,31 +460,7 @@ static void *worker_thread(void *arg) {
     aura_engine_t *engine = tctx->engine;
     thread_stats_t *stats = tctx->stats;
 
-    /* Initialize per-thread io_ctx pool */
-    if (io_ctx_pool_init(&tctx->pool, tctx->effective_depth) != 0) {
-        fprintf(stderr, "BFFIO: thread %d: failed to init io_ctx pool\n", tctx->thread_id);
-        return NULL;
-    }
-
-    /* Pre-allocate aligned buffers for each pool slot (zero-malloc hot path).
-     * Fill with non-zero data once to avoid zero-page optimization on writes.
-     * FIO also fills once at init (--refill_buffers is opt-in). */
-    for (int s = 0; s < tctx->effective_depth; s++) {
-        tctx->pool.slots[s].buffer = aura_buffer_alloc(engine, (size_t)config->bs);
-        if (tctx->pool.slots[s].buffer) {
-            memset(tctx->pool.slots[s].buffer, 0xA5 ^ (s & 0xFF), (size_t)config->bs);
-        }
-        if (!tctx->pool.slots[s].buffer) {
-            fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", tctx->thread_id,
-                    s);
-            for (int f = 0; f < s; f++) {
-                aura_buffer_free(engine, tctx->pool.slots[f].buffer);
-                tctx->pool.slots[f].buffer = NULL;
-            }
-            io_ctx_pool_destroy(&tctx->pool);
-            return NULL;
-        }
-    }
+    /* Pool and buffers are pre-allocated in workload_run() before thread spawn. */
 
     /* Seed PRNG: unique per thread */
     uint64_t rng = (uint64_t)(tctx->thread_id + 1) * 2654435761ULL;
@@ -544,7 +521,7 @@ static void *worker_thread(void *arg) {
 
             /* Select file for this I/O */
             int file_idx = select_file(tctx, &rng);
-            int fd = tctx->fds[file_idx];
+            int fd = tctx->file_indices ? tctx->file_indices[file_idx] : tctx->fds[file_idx];
 
             /* Generate offset (per-file) */
             uint64_t offset;
@@ -610,13 +587,17 @@ static void *worker_thread(void *arg) {
             /* Submit the I/O */
             atomic_fetch_add(&stats->inflight, 1);
 
+            aura_buf_t abuf =
+                (ctx->reg_buf_index >= 0) ? aura_buf_fixed(ctx->reg_buf_index, 0) : aura_buf(buf);
+            aura_submit_flags_t flags = tctx->submit_flags;
+
             aura_request_t *req;
             if (do_write) {
-                req = aura_write(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, 0,
-                                 io_callback, ctx);
+                req = aura_write(engine, fd, abuf, (size_t)bs, (off_t)offset, flags, io_callback,
+                                 ctx);
             } else {
-                req = aura_read(engine, fd, aura_buf(buf), (size_t)bs, (off_t)offset, 0,
-                                io_callback, ctx);
+                req =
+                    aura_read(engine, fd, abuf, (size_t)bs, (off_t)offset, flags, io_callback, ctx);
             }
 
             if (!req) {
@@ -646,8 +627,9 @@ static void *worker_thread(void *arg) {
 
                         atomic_fetch_add(&stats->inflight, 1);
 
-                        aura_request_t *fsync_req = aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0,
-                                                               fsync_callback, fsync_ctx);
+                        aura_request_t *fsync_req =
+                            aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, tctx->submit_flags,
+                                       fsync_callback, fsync_ctx);
                         if (!fsync_req) {
                             atomic_fetch_sub(&stats->inflight, 1);
                             io_ctx_pool_put(&tctx->pool, fsync_ctx);
@@ -656,6 +638,9 @@ static void *worker_thread(void *arg) {
                 }
             }
         }
+
+        /* Flush any batched submissions before polling for completions */
+        aura_flush(engine);
 
         /* Reset completion timestamp cache before processing completions.
          * The first callback in this poll cycle will call now_ns() once;
@@ -781,6 +766,94 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
         tctx[i].file_ios_limit = (per_file_size > config->bs) ? per_file_size / config->bs : 1;
     }
 
+    /* Pre-allocate io_ctx pools and buffers for all threads (moved from
+     * worker_thread so we can register all buffers with the kernel before
+     * spawning threads). */
+    int total_bufs = 0;
+    for (int i = 0; i < num_threads; i++) {
+        if (io_ctx_pool_init(&tctx[i].pool, tctx[i].effective_depth) != 0) {
+            fprintf(stderr, "BFFIO: thread %d: failed to init io_ctx pool\n", i);
+            for (int j = 0; j < i; j++) {
+                for (int s = 0; s < tctx[j].pool.capacity; s++) {
+                    if (tctx[j].pool.slots[s].buffer)
+                        aura_buffer_free(engine, tctx[j].pool.slots[s].buffer);
+                }
+                io_ctx_pool_destroy(&tctx[j].pool);
+            }
+            for (int j = 0; j < num_threads; j++) free(tctx[j].seq_offsets);
+            free(tctx);
+            file_set_close(&fset);
+            return -1;
+        }
+        for (int s = 0; s < tctx[i].effective_depth; s++) {
+            tctx[i].pool.slots[s].buffer = aura_buffer_alloc(engine, (size_t)config->bs);
+            if (!tctx[i].pool.slots[s].buffer) {
+                fprintf(stderr, "BFFIO: thread %d: failed to pre-allocate buffer %d\n", i, s);
+                /* Cleanup and bail */
+                for (int j = 0; j <= i; j++) {
+                    for (int k = 0; k < tctx[j].pool.capacity; k++) {
+                        if (tctx[j].pool.slots[k].buffer)
+                            aura_buffer_free(engine, tctx[j].pool.slots[k].buffer);
+                    }
+                    io_ctx_pool_destroy(&tctx[j].pool);
+                }
+                for (int j = 0; j < num_threads; j++) free(tctx[j].seq_offsets);
+                free(tctx);
+                file_set_close(&fset);
+                return -1;
+            }
+            memset(tctx[i].pool.slots[s].buffer, 0xA5 ^ (s & 0xFF), (size_t)config->bs);
+            tctx[i].pool.slots[s].reg_buf_index = -1;
+            total_bufs++;
+        }
+    }
+
+    /* Register all pre-allocated buffers with the kernel for fixed-buffer I/O.
+     * This eliminates per-I/O page pinning overhead. */
+    int bufs_registered = 0;
+    if (total_bufs > 0) {
+        struct iovec *iovs = calloc((size_t)total_bufs, sizeof(struct iovec));
+        if (iovs) {
+            int idx = 0;
+            for (int i = 0; i < num_threads; i++) {
+                for (int s = 0; s < tctx[i].effective_depth; s++) {
+                    iovs[idx].iov_base = tctx[i].pool.slots[s].buffer;
+                    iovs[idx].iov_len = (size_t)config->bs;
+                    idx++;
+                }
+            }
+            if (aura_register_buffers(engine, iovs, (unsigned int)total_bufs) == 0) {
+                bufs_registered = 1;
+                /* Assign registered buffer indices to each slot */
+                idx = 0;
+                for (int i = 0; i < num_threads; i++) {
+                    for (int s = 0; s < tctx[i].effective_depth; s++) {
+                        tctx[i].pool.slots[s].reg_buf_index = idx++;
+                    }
+                }
+            }
+            free(iovs);
+        }
+    }
+
+    /* Register file descriptors with the kernel for fixed-file I/O.
+     * This eliminates per-I/O fd table lookup overhead. */
+    int files_registered = 0;
+    if (fset.fd_count > 0 &&
+        aura_register_files(engine, fset.fds, (unsigned int)fset.fd_count) == 0) {
+        files_registered = 1;
+        /* Set up file index arrays and submit flags for all threads */
+        for (int i = 0; i < num_threads; i++) {
+            tctx[i].file_indices = calloc((size_t)fset.fd_count, sizeof(int));
+            if (tctx[i].file_indices) {
+                for (int f = 0; f < fset.fd_count; f++) {
+                    tctx[i].file_indices[f] = f; /* registered index == array position */
+                }
+                tctx[i].submit_flags = AURA_FIXED_FILE;
+            }
+        }
+    }
+
     /* Always spawn pthreads so the main thread can run the timer loop */
     pthread_t *threads = calloc((size_t)num_threads, sizeof(pthread_t));
     if (!threads) {
@@ -903,6 +976,14 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
     int drain_rc_ = aura_drain(engine, 5000);
     (void)drain_rc_;
 
+    /* Unregister buffers and files before freeing */
+    if (bufs_registered) {
+        aura_unregister(engine, AURA_REG_BUFFERS);
+    }
+    if (files_registered) {
+        aura_unregister(engine, AURA_REG_FILES);
+    }
+
     /* Free pre-allocated buffers, per-file offsets, then destroy pools */
     for (int i = 0; i < num_threads; i++) {
         for (int s = 0; s < tctx[i].pool.capacity; s++) {
@@ -913,6 +994,7 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
         }
         io_ctx_pool_destroy(&tctx[i].pool);
         free(tctx[i].seq_offsets);
+        free(tctx[i].file_indices);
     }
 
     /* Compute actual measurement runtime */

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 #ifndef BFFIO_JOB_PARSER_H
 #define BFFIO_JOB_PARSER_H
 
@@ -58,7 +57,9 @@ typedef struct {
     int group_reporting;                   /* aggregate stats across threads */
     int fsync_freq;                        /* fsync every N writes (0=never) */
     double target_p99_ms;                  /* P99 latency ceiling (0=disabled) */
-    int ring_select; /* ring selection mode (0=adaptive, 1=cpu_local, 2=round_robin) */
+    int ring_select; /* ring selection mode (0=adaptive, 1=cpu_local, 2=round_robin, 3=thread_local)
+                      */
+    int sqpoll;      /* enable SQPOLL mode (0 or 1, requires root/CAP_SYS_NICE) */
 } job_config_t;
 
 /* Top-level benchmark config */

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 #ifndef BFFIO_WORKLOAD_H
 #define BFFIO_WORKLOAD_H
 
@@ -15,7 +14,8 @@ typedef struct {
     thread_stats_t *stats;
     uint64_t submit_time_ns;
     size_t io_size;
-    void *buffer; /* pre-allocated, reused across I/Os */
+    void *buffer;      /* pre-allocated, reused across I/Os */
+    int reg_buf_index; /* registered buffer index (-1 = not registered) */
     aura_engine_t *engine;
     int is_write;
     _Atomic int *ramping;  /* skip stats during warmup */
@@ -51,8 +51,10 @@ typedef struct {
     int thread_id;
     const job_config_t *config;
     aura_engine_t *engine;
-    int *fds; /* file descriptors array */
+    int *fds;          /* file descriptors array (raw fds) */
+    int *file_indices; /* registered file indices (NULL if not registered) */
     int fd_count;
+    aura_submit_flags_t submit_flags; /* 0 or AURA_FIXED_FILE */
     thread_stats_t *stats;
     _Atomic int *running;      /* global run flag */
     _Atomic int *ramping;      /* true during ramp_time */
