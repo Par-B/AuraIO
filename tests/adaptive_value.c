@@ -41,6 +41,12 @@
 #include <linux/fs.h>
 #include <locale.h>
 
+// Suppress warn_unused_result for calls where failure is intentional
+#define IGNORE_RESULT(x) \
+    do {                 \
+        if (x) {}        \
+    } while (0)
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -177,7 +183,7 @@ static int create_temp_file(config_t *cfg) {
     for (size_t off = 0; off < DEFAULT_FILE_SIZE; off += buf_size) {
         size_t len = buf_size;
         if (off + len > DEFAULT_FILE_SIZE) len = DEFAULT_FILE_SIZE - off;
-        (void)pwrite(fd, buf, len, (off_t)off);
+        IGNORE_RESULT(pwrite(fd, buf, len, (off_t)off));
     }
     free(buf);
     fsync(fd);
@@ -241,7 +247,7 @@ static void *noise_thread_func(void *arg) {
     off_t max_offset = (off_t)(DEFAULT_FILE_SIZE - NOISE_BLOCK_SIZE);
 
     while (atomic_load(&ctx->running)) {
-        (void)pwrite(ctx->fd, buf, NOISE_BLOCK_SIZE, offset);
+        IGNORE_RESULT(pwrite(ctx->fd, buf, NOISE_BLOCK_SIZE, offset));
         offset += NOISE_BLOCK_SIZE;
         if (offset > max_offset) offset = 0;
         atomic_fetch_add(&ctx->ops_done, 1);
@@ -324,12 +330,11 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
     aura_options_init(&opts);
     opts.queue_depth = rc->depth;
     opts.ring_count = 1;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
     opts.single_thread = true;
     opts.disable_adaptive = !rc->adaptive;
     if (!rc->adaptive) {
         opts.initial_in_flight = rc->depth;
-    } else {
-        opts.initial_in_flight = 4;
     }
     if (rc->target_p99_ms > 0) {
         opts.max_p99_latency_ms = rc->target_p99_ms;
@@ -367,6 +372,21 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
             return result;
         }
     }
+    // Register buffers with the kernel for zero-copy I/O
+    struct iovec *iovs = malloc((size_t)num_bufs * sizeof(struct iovec));
+    bool use_fixed_bufs = false;
+    bool use_fixed_file = false;
+    if (iovs) {
+        for (int i = 0; i < num_bufs; i++) {
+            iovs[i].iov_base = bufs[i];
+            iovs[i].iov_len = (size_t)max_block;
+        }
+        use_fixed_bufs = (aura_register_buffers(engine, iovs, (unsigned int)num_bufs) == 0);
+        free(iovs);
+    }
+    // Register the file descriptor for fixed-file submission
+    use_fixed_file = (aura_register_files(engine, &fd, 1) == 0);
+
     int free_top = num_bufs;
     for (int i = 0; i < num_bufs; i++) free_stack[i] = i;
 
@@ -411,21 +431,13 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
 
         if (!ctx.warming_up && now >= ctx.measure_deadline) {
             if (inflight == 0) break;
-            aura_wait(engine, 1);
+            IGNORE_RESULT(aura_wait(engine, 1));
             inflight = submitted - ctx.completed;
             continue;
         }
 
-        // For adaptive mode, respect engine's AIMD-chosen depth
-        if (rc->adaptive) {
-            aura_ring_stats_t rstats;
-            if (aura_get_ring_stats(engine, 0, &rstats, sizeof(rstats)) == 0 &&
-                rstats.in_flight_limit > 0) {
-                effective_depth = rstats.in_flight_limit;
-                if (effective_depth > rc->depth) effective_depth = rc->depth;
-            }
-        }
-
+        // Engine enforces AIMD limits internally via ring_can_submit(),
+        // so we just submit up to buffer availability and let the engine gate.
         while (inflight < effective_depth && ctx.free_top > 0) {
             int slot = ctx.free_stack[--ctx.free_top];
 
@@ -434,12 +446,15 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
             else slots[slot].submit_ns = 0;
             sample_counter++;
 
-            aura_request_t *req =
-                aura_read(engine, fd, aura_buf(bufs[slot]), (size_t)cur_block_size,
-                          cur_offsets[submitted % OFFSET_TABLE_SIZE], 0, io_callback, &slots[slot]);
+            aura_buf_t buf = use_fixed_bufs ? aura_buf_fixed(slot, 0) : aura_buf(bufs[slot]);
+            int io_fd = use_fixed_file ? 0 : fd;
+            unsigned int flags = use_fixed_file ? AURA_FIXED_FILE : 0;
+            aura_request_t *req = aura_read(engine, io_fd, buf, (size_t)cur_block_size,
+                                            cur_offsets[submitted % OFFSET_TABLE_SIZE], flags,
+                                            io_callback, &slots[slot]);
             if (!req) {
                 ctx.free_stack[ctx.free_top++] = slot;
-                aura_wait(engine, 1);
+                IGNORE_RESULT(aura_wait(engine, 1));
                 inflight = submitted - ctx.completed;
                 continue;
             }
@@ -448,7 +463,7 @@ static phase_result_t run_workload(int fd, const run_config_t *rc) {
         }
 
         int n = aura_poll(engine);
-        if (n == 0 && inflight > 0) aura_wait(engine, 1);
+        if (n == 0 && inflight > 0) IGNORE_RESULT(aura_wait(engine, 1));
         inflight = submitted - ctx.completed;
     }
 
