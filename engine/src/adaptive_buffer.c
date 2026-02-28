@@ -1129,7 +1129,15 @@ int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     /* Check load factor and grow if needed */
     size_t count = map->count;
     if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
-        if (buf_map_grow(map) != 0) {
+        if (map->capacity >= BUF_MAP_MAX_CAPACITY) {
+            /* At max capacity — allow inserts up to 100% (linear probe still works).
+             * Only reject when truly full. */
+            if (count >= map->capacity) {
+                pthread_mutex_unlock(&map->lock);
+                errno = ENOMEM;
+                return -1;
+            }
+        } else if (buf_map_grow(map) != 0) {
             pthread_mutex_unlock(&map->lock);
             errno = ENOMEM;
             return -1;
