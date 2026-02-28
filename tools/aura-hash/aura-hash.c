@@ -730,6 +730,9 @@ static int run_multithreaded(const config_t *config, task_queue_t *master_queue)
         }
     }
 
+    /* Track which threads have been joined by tryjoin */
+    bool *joined = calloc(num_workers, sizeof(bool));
+
     /* Progress updates from main thread while workers run */
     bool all_done = false;
     while (!all_done && !g_interrupted) {
@@ -739,17 +742,21 @@ static int run_multithreaded(const config_t *config, task_queue_t *master_queue)
         /* Check if all workers finished (non-blocking) */
         all_done = true;
         for (int i = 0; i < num_workers; i++) {
-            if (pthread_tryjoin_np(threads[i], NULL) != 0) {
+            if (joined[i]) continue;
+            if (pthread_tryjoin_np(threads[i], NULL) == 0) {
+                joined[i] = true;
+            } else {
                 all_done = false;
-                break;
             }
         }
     }
 
     /* Join remaining threads */
     for (int i = 0; i < num_workers; i++) {
-        pthread_join(threads[i], NULL);
+        if (!joined[i]) pthread_join(threads[i], NULL);
     }
+
+    free(joined);
 
     int err = 0;
     for (int i = 0; i < num_workers; i++) {

@@ -470,7 +470,7 @@ static int build_task_list(const config_t *config, task_queue_t *queue) {
             if (!dst_path) return -1;
 
             /* Check same file */
-            if (dst_is_dir) {
+            {
                 struct stat check_st;
                 if (stat(dst_path, &check_st) == 0 && src_st.st_dev == check_st.st_dev &&
                     src_st.st_ino == check_st.st_ino) {

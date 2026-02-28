@@ -142,12 +142,12 @@ int ring_init(ring_ctx_t *ctx, int queue_depth, int cpu_id, const ring_options_t
     } while (0)
 
 /* Helper: apply SINGLE_ISSUER + R_DISABLED if requested */
-#define APPLY_SINGLE_ISSUER_PARAMS(p, si, rd)                                                     \
-    do {                                                                                          \
-        if (si) {                                                                                 \
-            (p)->flags |= IORING_SETUP_SINGLE_ISSUER;                                             \
-            if (rd) (p)->flags |= IORING_SETUP_R_DISABLED;                                        \
-        }                                                                                         \
+#define APPLY_SINGLE_ISSUER_PARAMS(p, si, rd)              \
+    do {                                                   \
+        if (si) {                                          \
+            (p)->flags |= IORING_SETUP_SINGLE_ISSUER;      \
+            if (rd) (p)->flags |= IORING_SETUP_R_DISABLED; \
+        }                                                  \
     } while (0)
 
     APPLY_SQPOLL_PARAMS(&params);
@@ -445,10 +445,9 @@ static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, aura_request_t *req)
 /** Common postamble for data-transfer submissions (latency-sampled). */
 static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_type_t op) {
     req->op_type = op;
-    int mask = adaptive_is_passthrough(&ctx->adaptive)
-        ? PASSTHROUGH_SAMPLE_MASK : RING_LATENCY_SAMPLE_MASK;
-    req->submit_time_ns =
-        (ctx->sample_counter++ & mask) == 0 ? get_time_ns() : 0;
+    int mask = adaptive_is_passthrough(&ctx->adaptive) ? PASSTHROUGH_SAMPLE_MASK
+                                                       : RING_LATENCY_SAMPLE_MASK;
+    req->submit_time_ns = (ctx->sample_counter++ & mask) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
     queued_sqes_inc(ctx);
@@ -949,7 +948,8 @@ int ring_poll(ring_ctx_t *ctx) {
         return (0);
     }
 
-    if (ctx->single_thread) return ring_drain_cqes_fast(ctx);
+    if (atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
+        return ring_drain_cqes_fast(ctx);
 
     return ring_drain_cqes(ctx);
 }

@@ -414,7 +414,7 @@ static int worker_run(worker_ctx_t *wctx, double total_duration_sec) {
 
     /* Stop resubmitting and drain in-flight ops */
     wctx->stopping = true;
-    if (wctx->active_ops > 0) aura_drain(engine, 3000);
+    if (wctx->active_ops > 0) aura_drain(engine, -1);
 
 cleanup:
     for (int i = 0; i < PIPELINE_DEPTH; i++) {

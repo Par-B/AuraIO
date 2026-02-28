@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_ring.h
  * @brief io_uring ring management
@@ -158,12 +157,12 @@ typedef struct {
 
     /* Single-thread fast path: skip mutexes when caller guarantees
      * single-thread access. Set during init, const after. */
-    bool single_thread;
+    _Atomic bool single_thread;
 
     /* Thread-local ring ownership tracking */
-    _Atomic int owner_count;       /**< Number of threads that have claimed this ring */
-    bool single_issuer_enabled;    /**< SINGLE_ISSUER was successfully set */
-    bool needs_enable;             /**< Ring was created with R_DISABLED, needs ring_enable() */
+    _Atomic int owner_count;    /**< Number of threads that have claimed this ring */
+    bool single_issuer_enabled; /**< SINGLE_ISSUER was successfully set */
+    bool needs_enable;          /**< Ring was created with R_DISABLED, needs ring_enable() */
 } ring_ctx_t;
 
 /**
@@ -438,20 +437,24 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
 }
 
 static inline void ring_lock(ring_ctx_t *ctx) {
-    if (!ctx->single_thread) pthread_mutex_lock(&ctx->lock);
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+        pthread_mutex_lock(&ctx->lock);
 }
 static inline bool ring_trylock(ring_ctx_t *ctx) {
-    if (ctx->single_thread) return true;
+    if (atomic_load_explicit(&ctx->single_thread, memory_order_relaxed)) return true;
     return pthread_mutex_trylock(&ctx->lock) == 0;
 }
 static inline void ring_unlock(ring_ctx_t *ctx) {
-    if (!ctx->single_thread) pthread_mutex_unlock(&ctx->lock);
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+        pthread_mutex_unlock(&ctx->lock);
 }
 static inline void ring_cq_lock(ring_ctx_t *ctx) {
-    if (!ctx->single_thread) pthread_mutex_lock(&ctx->cq_lock);
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+        pthread_mutex_lock(&ctx->cq_lock);
 }
 static inline void ring_cq_unlock(ring_ctx_t *ctx) {
-    if (!ctx->single_thread) pthread_mutex_unlock(&ctx->cq_lock);
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+        pthread_mutex_unlock(&ctx->cq_lock);
 }
 
 #endif /* ADAPTIVE_RING_H */
