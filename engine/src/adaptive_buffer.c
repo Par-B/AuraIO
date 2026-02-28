@@ -59,6 +59,8 @@ static int cache_flush(buffer_pool_t *pool, thread_cache_t *cache, int class_idx
 static void tls_key_init(void) {
     if (pthread_key_create(&tls_key, tls_destructor) == 0) {
         tls_key_valid = true;
+    } else {
+        aura_log(AURA_LOG_WARN, "pthread_key_create failed: thread cache cleanup disabled");
     }
 }
 
