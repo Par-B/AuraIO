@@ -1843,29 +1843,33 @@ void *aura_request_user_data(const aura_request_t *req) {
  * ============================================================================
  */
 
-int aura_get_poll_fd(aura_engine_t *engine) {
+int aura_get_poll_fd(const aura_engine_t *engine) {
     if (!engine || engine->ring_count == 0) {
         errno = EINVAL;
         return (-1);
     }
 
+    /* Cast away const: lazy eventfd registration is logically const
+     * (it only mutates atomic bookkeeping, not observable engine state). */
+    aura_engine_t *eng = (aura_engine_t *)engine;
+
     /* Lazy registration: if eventfd exists but is not registered with rings
      * (THREAD_LOCAL mode), register now so the caller's event loop works. */
-    if (engine->event_fd >= 0 &&
-        !atomic_load_explicit(&engine->eventfd_registered, memory_order_acquire)) {
+    if (eng->event_fd >= 0 &&
+        !atomic_load_explicit(&eng->eventfd_registered, memory_order_acquire)) {
         bool expected = false;
-        if (!atomic_compare_exchange_strong_explicit(&engine->eventfd_registered, &expected, true,
+        if (!atomic_compare_exchange_strong_explicit(&eng->eventfd_registered, &expected, true,
                                                      memory_order_acq_rel, memory_order_acquire)) {
-            return engine->event_fd; /* Another thread already registered */
+            return eng->event_fd; /* Another thread already registered */
         }
         /* We won the CAS — register eventfd with all rings */
-        for (int i = 0; i < engine->ring_count; i++) {
-            int ret = io_uring_register_eventfd(&engine->rings[i].ring, engine->event_fd);
+        for (int i = 0; i < eng->ring_count; i++) {
+            int ret = io_uring_register_eventfd(&eng->rings[i].ring, eng->event_fd);
             if (ret != 0) {
                 for (int j = 0; j < i; j++) {
-                    io_uring_unregister_eventfd(&engine->rings[j].ring);
+                    io_uring_unregister_eventfd(&eng->rings[j].ring);
                 }
-                atomic_store_explicit(&engine->eventfd_registered, false, memory_order_release);
+                atomic_store_explicit(&eng->eventfd_registered, false, memory_order_release);
                 errno = -ret;
                 return (-1);
             }
@@ -1875,7 +1879,7 @@ int aura_get_poll_fd(aura_engine_t *engine) {
     /* Return the unified eventfd that is registered with all io_uring rings.
      * When ANY ring completes an operation, this fd becomes readable.
      * This allows proper event loop integration in multi-core setups. */
-    return engine->event_fd;
+    return eng->event_fd;
 }
 
 int aura_flush(aura_engine_t *engine) {

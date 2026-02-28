@@ -1129,7 +1129,7 @@ AURA_API bool aura_request_is_linked(const aura_request_t *req);
  * @param engine Engine handle
  * @return Pollable fd, or -1 on error (errno set to EINVAL)
  */
-AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(aura_engine_t *engine);
+AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(const aura_engine_t *engine);
 
 /**
  * Process completed operations (non-blocking)
@@ -1145,7 +1145,7 @@ AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(aura_engine_t *engine);
  * @param engine Engine handle
  * @return Number of completions processed
  */
-AURA_API int aura_poll(aura_engine_t *engine);
+AURA_API AURA_WARN_UNUSED int aura_poll(aura_engine_t *engine);
 
 /**
  * Wait for at least one completion
@@ -1161,7 +1161,7 @@ AURA_API int aura_poll(aura_engine_t *engine);
  *         or -1 on error. On timeout with pending operations, returns -1
  *         with errno set to ETIMEDOUT.
  */
-AURA_API int aura_wait(aura_engine_t *engine, int timeout_ms);
+AURA_API AURA_WARN_UNUSED int aura_wait(aura_engine_t *engine, int timeout_ms);
 
 /**
  * Force-flush all pending SQEs across all rings
@@ -1234,7 +1234,7 @@ AURA_API void aura_stop(aura_engine_t *engine);
  * @return Total number of completions processed, or -1 on error/timeout
  *         (errno = ETIMEDOUT if deadline exceeded, EINVAL if engine is NULL)
  */
-AURA_API int aura_drain(aura_engine_t *engine, int timeout_ms);
+AURA_API AURA_WARN_UNUSED int aura_drain(aura_engine_t *engine, int timeout_ms);
 
 /* ============================================================================
  * Managed Buffers (Optional)
