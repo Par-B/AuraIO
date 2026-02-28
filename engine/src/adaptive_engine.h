@@ -35,8 +35,8 @@ static inline void atomic_store_double(_Atomic uint64_t *a, double v, memory_ord
     atomic_store_explicit(a, bits, order);
 }
 
-static inline double atomic_load_double(const _Atomic uint64_t *a, memory_order order) {
-    uint64_t bits = atomic_load_explicit((_Atomic uint64_t *)a, order);
+static inline double atomic_load_double(_Atomic uint64_t *a, memory_order order) {
+    uint64_t bits = atomic_load_explicit(a, order);
     double v;
     memcpy(&v, &bits, sizeof(v));
     return v;
@@ -210,6 +210,16 @@ static const latency_tier_t LATENCY_TIERS[LATENCY_TIER_COUNT] = {
     {.start_us = 5000, .width_us = 250, .bucket_count = 60, .base_bucket = 180},
     {.start_us = 20000, .width_us = 1000, .bucket_count = 80, .base_bucket = 240},
 };
+
+/* Compile-time check: tiers must be contiguous.
+ * C11 static const arrays are not integer constant expressions, so we
+ * spell out the values here.  Keep in sync with LATENCY_TIERS above. */
+_Static_assert(1000 == 0 + 10 * 100,
+               "Tier 0-1 gap"); /* tier1.start == tier0.start + tier0.width * tier0.count */
+_Static_assert(5000 == 1000 + 50 * 80,
+               "Tier 1-2 gap"); /* tier2.start == tier1.start + tier1.width * tier1.count */
+_Static_assert(20000 == 5000 + 250 * 60,
+               "Tier 2-3 gap"); /* tier3.start == tier2.start + tier2.width * tier2.count */
 
 /**
  * Map a latency in microseconds to a histogram bucket index.
