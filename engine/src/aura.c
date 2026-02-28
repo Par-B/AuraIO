@@ -646,28 +646,14 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
     ctx.req->uses_registered_buffer = true;
     ctx.req->uses_registered_file = use_registered_file;
 
-    if (st) {
-        atomic_store_explicit(
-            &ctx.ring->fixed_buf_inflight,
-            atomic_load_explicit(&ctx.ring->fixed_buf_inflight, memory_order_relaxed) + 1,
-            memory_order_relaxed);
-    } else {
-        atomic_fetch_add_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-    }
+    ATOMIC_ADD_ST(ctx.ring->fixed_buf_inflight, 1, st, memory_order_relaxed);
 
     ctx.req->buffer = (char *)reg_iov->iov_base + buf_offset;
     ctx.req->buf_index = buf_index;
     ctx.req->buf_offset = buf_offset;
 
     if (submit_fn(ctx.ring, ctx.req) != 0) {
-        if (st) {
-            atomic_store_explicit(
-                &ctx.ring->fixed_buf_inflight,
-                atomic_load_explicit(&ctx.ring->fixed_buf_inflight, memory_order_relaxed) - 1,
-                memory_order_relaxed);
-        } else {
-            atomic_fetch_sub_explicit(&ctx.ring->fixed_buf_inflight, 1, memory_order_relaxed);
-        }
+        ATOMIC_SUB_ST(ctx.ring->fixed_buf_inflight, 1, st, memory_order_relaxed);
         submit_abort(&ctx);
         if (!st) pthread_rwlock_unlock(&engine->reg_lock);
         return NULL;
@@ -864,13 +850,8 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
  */
 static void submit_end(submit_ctx_t *ctx) {
     if (ctx->req->uses_registered_file) {
-        if (ctx->engine->single_thread) {
-            uint32_t v =
-                atomic_load_explicit(&ctx->ring->fixed_file_inflight, memory_order_relaxed);
-            atomic_store_explicit(&ctx->ring->fixed_file_inflight, v + 1, memory_order_relaxed);
-        } else {
-            atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
-        }
+        ATOMIC_ADD_ST(ctx->ring->fixed_file_inflight, 1, ctx->engine->single_thread,
+                      memory_order_relaxed);
     }
 
     /* Single-owner fast path: no lock to release */

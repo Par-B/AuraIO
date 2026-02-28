@@ -454,18 +454,9 @@ static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     req->submit_time_ns = (sc & mask) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
-    /* Single-thread: use plain load+store instead of atomic RMW */
-    if (atomic_load_explicit(&ctx->single_thread, memory_order_relaxed)) {
-        atomic_store_explicit(&ctx->queued_sqes,
-                              atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
-                              memory_order_relaxed);
-        atomic_store_explicit(&ctx->pending_count,
-                              atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) + 1,
-                              memory_order_release);
-    } else {
-        queued_sqes_inc(ctx);
-        atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
-    }
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_relaxed);
+    ATOMIC_ADD_ST(ctx->queued_sqes, 1, st, memory_order_relaxed);
+    ATOMIC_ADD_ST(ctx->pending_count, 1, st, memory_order_release);
 }
 
 /** Common postamble for metadata submissions (skip AIMD sampling). */
@@ -474,8 +465,9 @@ static inline void meta_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     req->submit_time_ns = 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_relaxed);
+    ATOMIC_ADD_ST(ctx->queued_sqes, 1, st, memory_order_relaxed);
+    ATOMIC_ADD_ST(ctx->pending_count, 1, st, memory_order_release);
 }
 
 /**
@@ -815,24 +807,10 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
      * causing the final unregister to never fire.
      * Single-thread: plain load+store avoids lock-prefixed instructions. */
     if (uses_registered_buffer) {
-        if (st) {
-            atomic_store_explicit(
-                &ctx->fixed_buf_inflight,
-                atomic_load_explicit(&ctx->fixed_buf_inflight, memory_order_relaxed) - 1,
-                memory_order_relaxed);
-        } else {
-            atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
-        }
+        ATOMIC_SUB_ST(ctx->fixed_buf_inflight, 1, st, memory_order_relaxed);
     }
     if (uses_registered_file) {
-        if (st) {
-            atomic_store_explicit(
-                &ctx->fixed_file_inflight,
-                atomic_load_explicit(&ctx->fixed_file_inflight, memory_order_relaxed) - 1,
-                memory_order_relaxed);
-        } else {
-            atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
-        }
+        ATOMIC_SUB_ST(ctx->fixed_file_inflight, 1, st, memory_order_relaxed);
     }
 
     /* pending was already cleared by atomic_exchange in the double-completion
@@ -968,27 +946,17 @@ int ring_drain_cqes_fast(ring_ctx_t *ctx) {
 
         retire_entry_t retire = process_completion(ctx, req, result);
 
-        /* Inline retirement — single_thread: use plain stores instead of
-         * atomic RMW to avoid lock-prefixed instructions on x86. */
+        /* Inline retirement — single_thread: plain stores via ATOMIC_*_ST. */
         if (retire.op_idx >= 0) {
             if (retire.op_type != AURA_OP_CANCEL) {
-                atomic_store_explicit(
-                    &ctx->ops_completed,
-                    atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) + 1,
-                    memory_order_relaxed);
+                ATOMIC_ADD_ST(ctx->ops_completed, 1, true, memory_order_relaxed);
                 if (retire.result > 0 && op_is_data_transfer(retire.op_type)) {
-                    atomic_store_explicit(
-                        &ctx->bytes_completed,
-                        atomic_load_explicit(&ctx->bytes_completed, memory_order_relaxed) +
-                            (uint64_t)retire.result,
-                        memory_order_relaxed);
+                    ATOMIC_ADD_ST(ctx->bytes_completed, (uint64_t)retire.result, true,
+                                  memory_order_relaxed);
                 }
             }
             ring_put_request(ctx, retire.op_idx);
-            atomic_store_explicit(&ctx->pending_count,
-                                  atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) -
-                                      1,
-                                  memory_order_release);
+            ATOMIC_SUB_ST(ctx->pending_count, 1, true, memory_order_release);
         }
         completed++;
     }

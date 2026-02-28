@@ -417,6 +417,36 @@ int ring_enable(ring_ctx_t *ctx);
 int ring_drain_cqes_fast(ring_ctx_t *ctx);
 
 /* ============================================================================
+ * Single-Thread Atomic Helpers
+ *
+ * When single_thread is true, use plain load+store instead of atomic RMW
+ * (fetch_add/fetch_sub) to avoid lock-prefixed instructions on x86.
+ * Falls back to atomic RMW when multi-threaded.
+ * ============================================================================ */
+
+#define ATOMIC_ADD_ST(counter, delta, st, order)                                                   \
+    do {                                                                                           \
+        if (st) {                                                                                  \
+            atomic_store_explicit(                                                                 \
+                &(counter), atomic_load_explicit(&(counter), memory_order_relaxed) + (delta),      \
+                (order));                                                                          \
+        } else {                                                                                   \
+            atomic_fetch_add_explicit(&(counter), (delta), (order));                               \
+        }                                                                                          \
+    } while (0)
+
+#define ATOMIC_SUB_ST(counter, delta, st, order)                                                   \
+    do {                                                                                           \
+        if (st) {                                                                                  \
+            atomic_store_explicit(                                                                 \
+                &(counter), atomic_load_explicit(&(counter), memory_order_relaxed) - (delta),      \
+                (order));                                                                          \
+        } else {                                                                                   \
+            atomic_fetch_sub_explicit(&(counter), (delta), (order));                               \
+        }                                                                                          \
+    } while (0)
+
+/* ============================================================================
  * Inline Fast-Path Helpers
  * ============================================================================ */
 
