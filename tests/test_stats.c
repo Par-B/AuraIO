@@ -658,7 +658,7 @@ TEST(ring_select_thread_local) {
         callback_called = 0;
         lseek(test_fd, 0, SEEK_SET);
         aura_request_t *req =
-            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, test_callback, NULL);
+            aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
         aura_wait(engine, 1000);
         assert(callback_called == 1);

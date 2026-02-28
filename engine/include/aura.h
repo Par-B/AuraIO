@@ -198,6 +198,9 @@ typedef enum {
  */
 typedef unsigned int aura_submit_flags_t;
 
+/** No submit flags — pass to the flags parameter for default behavior. */
+#define AURA_NO_FLAGS 0u
+
 /** fd argument is a registered file index (from aura_register_files), not a raw fd.
  *  Skips auto-detection and sets IOSQE_FIXED_FILE directly. */
 #define AURA_FIXED_FILE (1u << 0)
@@ -301,13 +304,13 @@ _Static_assert(sizeof(aura_ring_stats_t) == 72, "aura_ring_stats_t ABI size chan
 #endif
 
 /** AIMD controller phase constants for aura_ring_stats_t.aimd_phase */
-#define AURA_PHASE_BASELINE 0  /**< Collecting baseline latency */
-#define AURA_PHASE_PROBING 1   /**< Increasing in-flight limit */
-#define AURA_PHASE_STEADY 2    /**< Maintaining optimal config */
-#define AURA_PHASE_BACKOFF 3   /**< Reducing due to latency spike */
-#define AURA_PHASE_SETTLING 4     /**< Waiting for metrics to stabilize */
-#define AURA_PHASE_CONVERGED 5    /**< Tuning complete */
-#define AURA_PHASE_PASSTHROUGH 6  /**< No AIMD gating (low-pressure default) */
+#define AURA_PHASE_BASELINE 0    /**< Collecting baseline latency */
+#define AURA_PHASE_PROBING 1     /**< Increasing in-flight limit */
+#define AURA_PHASE_STEADY 2      /**< Maintaining optimal config */
+#define AURA_PHASE_BACKOFF 3     /**< Reducing due to latency spike */
+#define AURA_PHASE_SETTLING 4    /**< Waiting for metrics to stabilize */
+#define AURA_PHASE_CONVERGED 5   /**< Tuning complete */
+#define AURA_PHASE_PASSTHROUGH 6 /**< No AIMD gating (low-pressure default) */
 
 /**
  * Latency histogram snapshot
@@ -497,16 +500,16 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 
 /** @name Open flags (for aura_openat flags parameter) */
 /**@{*/
-#define AURA_O_RDONLY 0x0000  /**< Open for reading only */
-#define AURA_O_WRONLY 0x0001  /**< Open for writing only */
-#define AURA_O_RDWR 0x0002    /**< Open for reading and writing */
-#define AURA_O_CREAT 0x0040   /**< Create file if it doesn't exist */
-#define AURA_O_TRUNC 0x0200   /**< Truncate file to zero length */
-#define AURA_O_APPEND 0x0400  /**< Append to end of file */
+#define AURA_O_RDONLY 0x0000 /**< Open for reading only */
+#define AURA_O_WRONLY 0x0001 /**< Open for writing only */
+#define AURA_O_RDWR 0x0002   /**< Open for reading and writing */
+#define AURA_O_CREAT 0x0040  /**< Create file if it doesn't exist */
+#define AURA_O_TRUNC 0x0200  /**< Truncate file to zero length */
+#define AURA_O_APPEND 0x0400 /**< Append to end of file */
 #ifdef O_DIRECT
-#define AURA_O_DIRECT O_DIRECT /**< Direct I/O (bypass page cache) */
+#    define AURA_O_DIRECT O_DIRECT /**< Direct I/O (bypass page cache) */
 #else
-#define AURA_O_DIRECT 0 /**< O_DIRECT not available on this platform */
+#    define AURA_O_DIRECT 0 /**< O_DIRECT not available on this platform */
 #endif
 /**@}*/
 

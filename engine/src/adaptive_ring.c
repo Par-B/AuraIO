@@ -295,9 +295,9 @@ void ring_destroy(ring_ctx_t *ctx) {
     /* Flush any batched-but-not-submitted SQEs before draining.
      * Without this, ring_wait() would block waiting for CQEs that
      * correspond to SQEs never submitted to the kernel. */
-    ring_lock(ctx);
+    bool st = ring_lock(ctx);
     (void)ring_flush(ctx);
-    ring_unlock(ctx);
+    ring_unlock(ctx, st);
 
     /* Wait for pending operations to complete with a timeout.
      * Benign race: pending_count read without lock. Worst case is one extra
@@ -308,9 +308,9 @@ void ring_destroy(ring_ctx_t *ctx) {
     while (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) > 0 &&
            drain_attempts < 100) {
         /* Retry flush in case an earlier submit failed transiently. */
-        ring_lock(ctx);
+        st = ring_lock(ctx);
         (void)ring_flush(ctx);
-        ring_unlock(ctx);
+        ring_unlock(ctx, st);
         ring_wait(ctx, 100);
         drain_attempts++;
     }
@@ -831,7 +831,7 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
 
     int pending_delta = 0;
 
-    ring_lock(ctx);
+    bool st = ring_lock(ctx);
     for (int i = 0; i < count; i++) {
         if (entries[i].op_idx < 0) {
             continue; /* NULL/unknown req — no matching submit, don't adjust pending */
@@ -852,7 +852,7 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
     /* Single atomic decrement for the entire batch instead of one per CQE.
      * Use release ordering to pair with acquire loads in ring_destroy/ring_wait. */
     atomic_fetch_sub_explicit(&ctx->pending_count, pending_delta, memory_order_release);
-    ring_unlock(ctx);
+    ring_unlock(ctx, st);
 }
 
 /**
@@ -880,7 +880,7 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
 
     while (1) {
         int n = 0;
-        ring_cq_lock(ctx);
+        bool cq_st = ring_cq_lock(ctx);
         while (n < batch_size) {
             struct io_uring_cqe *cqe;
             if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
@@ -892,7 +892,7 @@ static int ring_drain_cqes(ring_ctx_t *ctx) {
             if (batch[n].req) TSAN_ACQUIRE(batch[n].req);
             n++;
         }
-        ring_cq_unlock(ctx);
+        ring_cq_unlock(ctx, cq_st);
 
         if (n == 0) break;
 
@@ -971,7 +971,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
     /* Blocking wait: try non-blocking peek first, then block if needed. */
     struct io_uring_cqe *cqe;
 
-    ring_cq_lock(ctx);
+    bool cq_st = ring_cq_lock(ctx);
     if (io_uring_peek_cqe(&ctx->ring, &cqe) != 0) {
         /* Nothing available - release lock and do blocking wait.
          * We intentionally call io_uring_wait_cqe_timeout without
@@ -987,7 +987,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
          * which acquires cq_lock, handling the case where another
          * thread consumed the waking CQE first. */
         int ret;
-        ring_cq_unlock(ctx);
+        ring_cq_unlock(ctx, cq_st);
 
         if (timeout_ms < 0) {
             /* Use 1-second timeout chunks instead of infinite wait to avoid
@@ -1021,7 +1021,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
             }
         }
     } else {
-        ring_cq_unlock(ctx);
+        ring_cq_unlock(ctx, cq_st);
         return ring_drain_cqes(ctx);
     }
 

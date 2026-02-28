@@ -101,7 +101,7 @@ struct aura_engine {
     struct iovec *registered_buffers; /**< Copy of registered buffer iovecs */
     int *registered_files; /**< Copy of registered file descriptors */
     int registered_buffer_count; /**< Number of registered buffers */
-    int registered_file_count; /**< Number of registered files */
+    _Atomic int registered_file_count; /**< Number of registered files */
 
     /* === Cold: init-only or rarely accessed === */
     _Alignas(64) atomic_bool running; /**< Event loop active flag */
@@ -318,6 +318,7 @@ typedef struct {
     ring_ctx_t *ring;
     aura_request_t *req;
     int op_idx;
+    bool lock_st; /**< Snapshot of single_thread at ring_lock() time */
 } submit_ctx_t;
 
 /*
@@ -457,7 +458,8 @@ static bool validate_fixed_file(const aura_engine_t *engine, int index) {
         errno = EINVAL;
         return false;
     }
-    if (index < 0 || index >= engine->registered_file_count) {
+    if (index < 0 ||
+        index >= atomic_load_explicit(&engine->registered_file_count, memory_order_acquire)) {
         errno = EINVAL;
         return false;
     }
@@ -603,6 +605,10 @@ static aura_request_t *submit_registered_buffer_io(aura_engine_t *engine, int fd
     int submit_fd = fd;
     bool use_registered_file;
     if (flags & AURA_FIXED_FILE) {
+        /* AURA_FIXED_FILE: fd is the registered file index, used directly as
+         * submit_fd for IOSQE_FIXED_FILE. We skip resolve_registered_file_locked
+         * but still hold reg_lock (acquired by validate_registered_buffer) to
+         * protect the registered buffer state used below. */
         if (!validate_fixed_file(engine, fd)) {
             pthread_rwlock_unlock(&engine->reg_lock);
             return NULL;
@@ -732,7 +738,9 @@ static int maybe_finalize_deferred_unregistration(aura_engine_t *engine) {
  *         (ring NOT locked, errno set to ESHUTDOWN/EAGAIN/ENOMEM)
  */
 static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
-    submit_ctx_t ctx = { .engine = engine, .ring = NULL, .req = NULL, .op_idx = -1 };
+    submit_ctx_t ctx = {
+        .engine = engine, .ring = NULL, .req = NULL, .op_idx = -1, .lock_st = false
+    };
 
     if (check_fatal_submit_errno(engine)) {
         return ctx;
@@ -773,13 +781,13 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
         return ctx;
     }
 
-    ring_lock(ring);
+    bool st = ring_lock(ring);
 
     if (!ring_can_submit(ring)) {
         if (ring_flush(ring) < 0) {
             if (flush_error_is_fatal(errno)) {
                 latch_fatal_submit_errno(engine, errno);
-                ring_unlock(ring);
+                ring_unlock(ring, st);
                 return ctx;
             }
             errno = 0;
@@ -788,13 +796,13 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
         if (allow_poll) {
             /* Release lock before polling: process_completion() re-acquires ring->lock
              * to update counters, so holding it here would deadlock. */
-            ring_unlock(ring);
+            ring_unlock(ring, st);
             ring_poll(ring);
-            ring_lock(ring);
+            st = ring_lock(ring);
         }
 
         if (!ring_can_submit(ring)) {
-            ring_unlock(ring);
+            ring_unlock(ring, st);
             errno = EAGAIN;
             return ctx;
         }
@@ -803,7 +811,7 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
     int op_idx;
     aura_request_t *req = ring_get_request(ring, &op_idx);
     if (!req) {
-        ring_unlock(ring);
+        ring_unlock(ring, st);
         errno = ENOMEM;
         return ctx;
     }
@@ -811,6 +819,7 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
     ctx.ring = ring;
     ctx.req = req;
     ctx.op_idx = op_idx;
+    ctx.lock_st = st;
     return ctx;
 }
 
@@ -847,7 +856,7 @@ static void submit_end(submit_ctx_t *ctx) {
         tls_link_ring = NULL;
         tls_link_depth = 0;
         ring_clear_last_sqe();
-        ring_unlock(ctx->ring);
+        ring_unlock(ctx->ring, ctx->lock_st);
         return;
     }
 
@@ -856,7 +865,7 @@ static void submit_end(submit_ctx_t *ctx) {
             latch_fatal_submit_errno(ctx->engine, errno);
         }
     }
-    ring_unlock(ctx->ring);
+    ring_unlock(ctx->ring, ctx->lock_st);
 }
 
 /**
@@ -872,7 +881,7 @@ static void submit_abort(submit_ctx_t *ctx) {
         tls_link_ring = NULL;
         tls_link_depth = 0;
     }
-    ring_unlock(ctx->ring); /* No-op for single_thread rings */
+    ring_unlock(ctx->ring, ctx->lock_st);
 }
 
 /**
@@ -1729,11 +1738,11 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     }
 
     ring_ctx_t *ring = &engine->rings[req->ring_idx];
-    ring_lock(ring);
+    bool st = ring_lock(ring);
 
     /* Double-check it's still pending while holding lock */
     if (!atomic_load_explicit(&req->pending, memory_order_acquire)) {
-        ring_unlock(ring);
+        ring_unlock(ring, st);
         errno = EALREADY;
         return (-1);
     }
@@ -1742,7 +1751,7 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     int op_idx;
     aura_request_t *cancel_req = ring_get_request(ring, &op_idx);
     if (!cancel_req) {
-        ring_unlock(ring);
+        ring_unlock(ring, st);
         errno = ENOMEM;
         return (-1);
     }
@@ -1756,7 +1765,7 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     cancel_req->user_data = NULL;
     if (ring_submit_cancel(ring, cancel_req, req) != 0) {
         ring_put_request(ring, op_idx);
-        ring_unlock(ring);
+        ring_unlock(ring, st);
         if (errno == 0) errno = EIO;
         return (-1);
     }
@@ -1765,16 +1774,16 @@ int aura_cancel(aura_engine_t *engine, aura_request_t *req) {
     if (ring_flush(ring) < 0) {
         if (!flush_error_is_fatal(errno)) {
             errno = 0;
-            ring_unlock(ring);
+            ring_unlock(ring, st);
             return (0);
         }
         latch_fatal_submit_errno(engine, errno);
-        ring_unlock(ring);
+        ring_unlock(ring, st);
         errno = get_fatal_submit_errno(engine);
         return (-1);
     }
 
-    ring_unlock(ring);
+    ring_unlock(ring, st);
     return (0);
 }
 
@@ -1862,11 +1871,11 @@ int aura_flush(aura_engine_t *engine) {
 
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        ring_lock(ring);
+        bool st = ring_lock(ring);
         if (ring_flush(ring) < 0 && flush_error_is_fatal(errno)) {
             latch_fatal_submit_errno(engine, errno);
         }
-        ring_unlock(ring);
+        ring_unlock(ring, st);
     }
     return 0;
 }
@@ -1887,9 +1896,9 @@ int aura_poll(aura_engine_t *engine) {
         if (atomic_load_explicit(&ring->single_thread, memory_order_acquire)) {
             ring_flush_fast(ring);
         } else {
-            ring_lock(ring);
+            bool st = ring_lock(ring);
             flush_ring_checked(engine, ring);
-            ring_unlock(ring);
+            ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
         return n > 0 ? n : 0;
@@ -1912,9 +1921,10 @@ int aura_poll(aura_engine_t *engine) {
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
 
-        if (ring_trylock(ring)) {
+        bool try_st;
+        if (ring_trylock(ring, &try_st)) {
             if (flush_ring_checked(engine, ring)) fatal_latched = true;
-            ring_unlock(ring);
+            ring_unlock(ring, try_st);
 
             int completed = ring_poll(ring);
             if (completed > 0) total += completed;
@@ -1929,9 +1939,9 @@ int aura_poll(aura_engine_t *engine) {
         for (int i = 0; i < engine->ring_count; i++) {
             ring_ctx_t *ring = &engine->rings[i];
 
-            ring_lock(ring);
+            bool st = ring_lock(ring);
             if (flush_ring_checked(engine, ring)) fatal_latched = true;
-            ring_unlock(ring);
+            ring_unlock(ring, st);
 
             int completed = ring_poll(ring);
             if (completed > 0) total += completed;
@@ -1964,9 +1974,9 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         if (atomic_load_explicit(&ring->single_thread, memory_order_acquire)) {
             ring_flush_fast(ring);
         } else {
-            ring_lock(ring);
+            bool st = ring_lock(ring);
             flush_ring_checked(engine, ring);
-            ring_unlock(ring);
+            ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
         if (n > 0) return n;
@@ -1989,10 +1999,10 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
     int first_pending = -1; /* First ring with pending ops (for blocking) */
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
-        ring_lock(ring);
+        bool st = ring_lock(ring);
         if (flush_ring_checked(engine, ring)) fatal_latched = true;
         bool has_pending = (atomic_load_explicit(&ring->pending_count, memory_order_relaxed) > 0);
-        ring_unlock(ring);
+        ring_unlock(ring, st);
 
         int n = ring_poll(ring);
         if (n > 0) {
@@ -2030,9 +2040,9 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             int completed = 0;
             for (int j = 0; j < engine->ring_count; j++) {
                 ring_ctx_t *r = &engine->rings[j];
-                ring_lock(r);
+                bool rst = ring_lock(r);
                 (void)flush_ring_checked(engine, r);
-                ring_unlock(r);
+                ring_unlock(r, rst);
                 int n = ring_poll(r);
                 if (n > 0) completed += n;
             }
@@ -2560,7 +2570,7 @@ int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stat
 
         /* Lock ring while reading stats to prevent data races with
          * completion handlers and tick thread */
-        ring_lock(ring);
+        bool st = ring_lock(ring);
 
         tmp.ops_completed += ring->ops_completed;
         tmp.bytes_transferred += ring->bytes_completed;
@@ -2582,7 +2592,7 @@ int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stat
             max_p99 = p99;
         }
 
-        ring_unlock(ring);
+        ring_unlock(ring, st);
     }
 
     tmp.current_in_flight = total_in_flight;
@@ -2643,7 +2653,7 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
 
     /* Cast away const: locking a mutex is logically const */
     ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[ring_idx];
-    ring_lock(ring);
+    bool st = ring_lock(ring);
 
     tmp.ops_completed = ring->ops_completed;
     tmp.bytes_transferred = ring->bytes_completed;
@@ -2660,7 +2670,7 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
     tmp.throughput_bps = atomic_load_double(&ctrl->current_throughput_bps, memory_order_acquire);
     tmp.aimd_phase = atomic_load_explicit(&ctrl->phase, memory_order_acquire);
 
-    ring_unlock(ring);
+    ring_unlock(ring, st);
 
     size_t copy_size = stats_size < sizeof(tmp) ? stats_size : sizeof(tmp);
     memcpy(stats, &tmp, copy_size);
@@ -2684,7 +2694,7 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
 
     /* Cast away const: locking a mutex is logically const */
     ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[ring_idx];
-    ring_lock(ring);
+    bool st = ring_lock(ring);
 
     /* Read from the active histogram.  Individual bucket loads are atomic but
      * the overall snapshot is approximate — see aura_histogram_t docs. */
@@ -2703,7 +2713,7 @@ int aura_get_histogram(const aura_engine_t *engine, int ring_idx, aura_histogram
         tmp.tier_base_bucket[t] = LATENCY_TIERS[t].base_bucket;
     }
 
-    ring_unlock(ring);
+    ring_unlock(ring, st);
 
     /* Copy only as many bytes as the caller's struct can hold */
     size_t copy_size = hist_size < sizeof(tmp) ? hist_size : sizeof(tmp);

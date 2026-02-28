@@ -382,8 +382,9 @@ int ring_get_fd(ring_ctx_t *ctx);
 /* ============================================================================
  * Conditional Locking (inline for hot-path use in adaptive_ring.c + aura.c)
  *
- * When single_thread is set, all mutex ops are skipped. The flag is const
- * after init, so branch prediction eliminates overhead after warmup.
+ * When single_thread is set, all mutex ops are skipped. The flag may
+ * transition from true→false when a second thread claims the ring, so
+ * lock/unlock pairs snapshot the flag to avoid asymmetric mutex ops.
  * ============================================================================ */
 
 /**
@@ -436,25 +437,27 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
     return submitted;
 }
 
-static inline void ring_lock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
-        pthread_mutex_lock(&ctx->lock);
+static inline bool ring_lock(ring_ctx_t *ctx) {
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
+    if (!st) pthread_mutex_lock(&ctx->lock);
+    return st;
 }
-static inline bool ring_trylock(ring_ctx_t *ctx) {
-    if (atomic_load_explicit(&ctx->single_thread, memory_order_acquire)) return true;
+static inline bool ring_trylock(ring_ctx_t *ctx, bool *single_thread_out) {
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
+    *single_thread_out = st;
+    if (st) return true;
     return pthread_mutex_trylock(&ctx->lock) == 0;
 }
-static inline void ring_unlock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
-        pthread_mutex_unlock(&ctx->lock);
+static inline void ring_unlock(ring_ctx_t *ctx, bool single_thread) {
+    if (!single_thread) pthread_mutex_unlock(&ctx->lock);
 }
-static inline void ring_cq_lock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
-        pthread_mutex_lock(&ctx->cq_lock);
+static inline bool ring_cq_lock(ring_ctx_t *ctx) {
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_acquire);
+    if (!st) pthread_mutex_lock(&ctx->cq_lock);
+    return st;
 }
-static inline void ring_cq_unlock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
-        pthread_mutex_unlock(&ctx->cq_lock);
+static inline void ring_cq_unlock(ring_ctx_t *ctx, bool single_thread) {
+    if (!single_thread) pthread_mutex_unlock(&ctx->cq_lock);
 }
 
 #endif /* ADAPTIVE_RING_H */
