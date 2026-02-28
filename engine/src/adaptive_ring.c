@@ -1005,6 +1005,7 @@ int ring_wait(ring_ctx_t *ctx, int timeout_ms) {
                 if (ret != -ETIME && ret != -EAGAIN) break;
                 /* Timeout expired — retry if there are still pending ops */
                 if (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) == 0) break;
+                if (atomic_load_explicit(&ctx->shutting_down, memory_order_acquire)) break;
             }
         } else {
             struct __kernel_timespec ts;
