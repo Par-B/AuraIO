@@ -2782,6 +2782,7 @@ void aura_request_set_linked(aura_request_t *req) {
     }
     /* Pin subsequent submissions to the same ring so linked SQEs share
      * one submission queue. tls_link_ring is checked in submit_begin(). */
+    if (!tls_last_ring) return; /* No prior submission on this thread */
     tls_link_ring = tls_last_ring;
     tls_link_depth++;
 }
