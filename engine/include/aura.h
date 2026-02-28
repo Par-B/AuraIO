@@ -1094,6 +1094,9 @@ AURA_API int aura_request_op_type(const aura_request_t *req);
  * a chain. The final operation in a chain should NOT be marked as linked.
  *
  * @param req Request handle (returned by aura_read, aura_write, etc.)
+ * @note This function is only safe in AURA_SELECT_THREAD_LOCAL mode.
+ *       In other modes, another thread could flush the ring between submission
+ *       and this call, causing the SQE to be consumed before the link flag is set.
  */
 AURA_API void aura_request_set_linked(aura_request_t *req);
 

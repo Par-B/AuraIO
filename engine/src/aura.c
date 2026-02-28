@@ -157,6 +157,7 @@ static _Thread_local ring_ctx_t *tls_last_ring = NULL;
 /** Thread-local owned ring for THREAD_LOCAL mode.
  *  Once claimed, a thread always submits to and polls from this ring. */
 static _Thread_local ring_ctx_t *tls_owned_ring = NULL;
+static _Thread_local aura_engine_t *tls_engine = NULL;
 
 /**
  * Select the CPU-local ring.
@@ -218,7 +219,7 @@ static inline uint32_t xorshift_tls(void) {
 static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
     /* Validate tls_owned_ring belongs to this engine (handles stale TLS
      * from a previously destroyed engine in the same thread). */
-    if (tls_owned_ring && tls_owned_ring >= engine->rings &&
+    if (tls_owned_ring && tls_engine == engine && tls_owned_ring >= engine->rings &&
         tls_owned_ring < engine->rings + engine->ring_count) {
         return tls_owned_ring;
     }
@@ -240,6 +241,7 @@ static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
     }
 
     tls_owned_ring = ring;
+    tls_engine = engine;
     return ring;
 }
 
@@ -779,6 +781,7 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
         ctx.ring = ring;
         ctx.req = req;
         ctx.op_idx = op_idx;
+        ctx.lock_st = true; /* No lock was taken; ring_unlock will be a no-op */
         return ctx;
     }
 
@@ -1370,6 +1373,7 @@ void aura_destroy(aura_engine_t *engine) {
      * This only clears for the calling thread; other threads must not use the
      * engine after destroy per the threading model. */
     tls_owned_ring = NULL;
+    tls_engine = NULL;
     tls_last_ring = NULL;
     tls_link_ring = NULL;
     tls_link_depth = 0;
@@ -1870,13 +1874,19 @@ int aura_flush(aura_engine_t *engine) {
         return (-1);
     }
 
+    int fatal = 0;
     for (int i = 0; i < engine->ring_count; i++) {
         ring_ctx_t *ring = &engine->rings[i];
         bool st = ring_lock(ring);
         if (ring_flush(ring) < 0 && flush_error_is_fatal(errno)) {
             latch_fatal_submit_errno(engine, errno);
+            fatal = 1;
         }
         ring_unlock(ring, st);
+    }
+    if (fatal) {
+        errno = get_fatal_submit_errno(engine);
+        return (-1);
     }
     return 0;
 }
@@ -1891,7 +1901,7 @@ int aura_poll(aura_engine_t *engine) {
      * select_ring_thread_local validates ownership; if tls_owned_ring is stale
      * it gets reassigned. After the first submit, tls_owned_ring is guaranteed
      * valid for this engine. If no submit happened yet, we fall through. */
-    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring &&
+    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring && tls_engine == engine &&
         tls_owned_ring >= engine->rings && tls_owned_ring < engine->rings + engine->ring_count) {
         ring_ctx_t *ring = tls_owned_ring;
         if (atomic_load_explicit(&ring->single_thread, memory_order_acquire)) {
@@ -1902,6 +1912,8 @@ int aura_poll(aura_engine_t *engine) {
             ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
+        if (engine->buffers_unreg_pending || engine->files_unreg_pending)
+            maybe_finalize_deferred_unregistration(engine);
         return n > 0 ? n : 0;
     }
 
@@ -1969,7 +1981,7 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
 
     /* Thread-local fast path: flush, poll, and if needed block on own ring.
      * Validate ownership with bounds check to handle stale TLS. */
-    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring &&
+    if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring && tls_engine == engine &&
         tls_owned_ring >= engine->rings && tls_owned_ring < engine->rings + engine->ring_count) {
         ring_ctx_t *ring = tls_owned_ring;
         if (atomic_load_explicit(&ring->single_thread, memory_order_acquire)) {
@@ -1980,6 +1992,8 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
+        if (engine->buffers_unreg_pending || engine->files_unreg_pending)
+            maybe_finalize_deferred_unregistration(engine);
         if (n > 0) return n;
         return ring_wait(ring, timeout_ms);
     }
