@@ -61,7 +61,8 @@ static size_t get_page_size(void) {
     return val;
 }
 #define BUFFER_ALIGNMENT get_page_size() /**< Page alignment for O_DIRECT */
-#define TICK_INTERVAL_MS 10 /**< Adaptive tick interval */
+#define TICK_INTERVAL_MS ADAPTIVE_SAMPLE_INTERVAL_MS /**< Must match adaptive tick */
+_Static_assert(TICK_INTERVAL_MS > 0 && TICK_INTERVAL_MS <= 1000, "Tick interval must be 1-1000ms");
 /**
  * Maximum number of io_uring rings (1 ring per CPU core).
  *

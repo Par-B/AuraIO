@@ -304,9 +304,11 @@ void ring_destroy(ring_ctx_t *ctx) {
      * ring_wait() iteration, which is acceptable during shutdown.
      * Timeout after 10 seconds to avoid infinite hang on stuck ops
      * (e.g., hung NFS mount, stuck SCSI device). */
+    /** Maximum drain attempts before giving up (100 * 100ms = 10s timeout). */
+#define RING_DESTROY_MAX_DRAIN_ATTEMPTS 100
     int drain_attempts = 0;
     while (atomic_load_explicit(&ctx->pending_count, memory_order_acquire) > 0 &&
-           drain_attempts < 100) {
+           drain_attempts < RING_DESTROY_MAX_DRAIN_ATTEMPTS) {
         /* Retry flush in case an earlier submit failed transiently. */
         st = ring_lock(ctx);
         (void)ring_flush(ctx);
