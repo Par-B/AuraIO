@@ -354,6 +354,7 @@ static int worker_run(worker_ctx_t *wctx, double total_duration_sec) {
     opts.queue_depth = PIPELINE_DEPTH * 4;
     opts.single_thread = true;
     opts.ring_count = 1;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
     if (wctx->max_p99_latency_ms > 0) opts.max_p99_latency_ms = wctx->max_p99_latency_ms;
 
     aura_engine_t *engine = aura_create_with_options(&opts);

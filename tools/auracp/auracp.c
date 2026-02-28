@@ -951,6 +951,8 @@ int main(int argc, char **argv) {
     opts.queue_depth = config.pipeline_depth * 4;
     if (opts.queue_depth < 64) opts.queue_depth = 64;
     opts.single_thread = true;
+    opts.ring_count = 1;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {

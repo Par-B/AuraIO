@@ -1031,6 +1031,7 @@ static void *worker_fn(void *arg) {
     opts.queue_depth = STATX_BATCH_MAX * 2;
     opts.single_thread = true;
     opts.ring_count = 1;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {
@@ -1111,6 +1112,7 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
     opts.queue_depth = STATX_BATCH_MAX * 2;
     opts.single_thread = true;
     opts.ring_count = 1;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
 
     aura_engine_t *engine = aura_create_with_options(&opts);
     if (!engine) {

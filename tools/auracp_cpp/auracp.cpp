@@ -874,7 +874,8 @@ int main(int argc, char **argv) {
         aura::Options opts;
         int qd = config.pipeline_depth * 4;
         if (qd < 64) qd = 64;
-        opts.queue_depth(qd).single_thread(true);
+        opts.queue_depth(qd).single_thread(true).ring_count(1).ring_select(
+            aura::RingSelect::ThreadLocal);
 
         aura::Engine engine(opts);
 
