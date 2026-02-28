@@ -732,6 +732,10 @@ static int run_multithreaded(const config_t *config, task_queue_t *master_queue)
 
     /* Track which threads have been joined by tryjoin */
     bool *joined = calloc(num_workers, sizeof(bool));
+    if (!joined) {
+        fprintf(stderr, "aura-hash: failed to allocate thread tracking\n");
+        return 1;
+    }
 
     /* Progress updates from main thread while workers run */
     bool all_done = false;

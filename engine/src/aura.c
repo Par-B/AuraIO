@@ -697,7 +697,7 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
 
         free(engine->registered_files);
         engine->registered_files = NULL;
-        engine->registered_file_count = 0;
+        atomic_store_explicit(&engine->registered_file_count, 0, memory_order_release);
         atomic_store_explicit(&engine->files_registered, false, memory_order_release);
         engine->files_unreg_pending = false;
     }
@@ -2448,7 +2448,7 @@ int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int coun
         return (-1);
     }
     memcpy(engine->registered_files, fds, (size_t)count * sizeof(int));
-    engine->registered_file_count = count;
+    atomic_store_explicit(&engine->registered_file_count, count, memory_order_release);
 
     /* Register with all rings — no ring_lock needed (same rationale as
      * aura_register_buffers: reg_lock(write) blocks submissions, and the
@@ -2464,7 +2464,7 @@ int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int coun
             }
             free(engine->registered_files);
             engine->registered_files = NULL;
-            engine->registered_file_count = 0;
+            atomic_store_explicit(&engine->registered_file_count, 0, memory_order_release);
             pthread_rwlock_unlock(&engine->reg_lock);
             errno = -ret;
             return (-1);
