@@ -437,23 +437,23 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
 }
 
 static inline void ring_lock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
         pthread_mutex_lock(&ctx->lock);
 }
 static inline bool ring_trylock(ring_ctx_t *ctx) {
-    if (atomic_load_explicit(&ctx->single_thread, memory_order_relaxed)) return true;
+    if (atomic_load_explicit(&ctx->single_thread, memory_order_acquire)) return true;
     return pthread_mutex_trylock(&ctx->lock) == 0;
 }
 static inline void ring_unlock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
         pthread_mutex_unlock(&ctx->lock);
 }
 static inline void ring_cq_lock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
         pthread_mutex_lock(&ctx->cq_lock);
 }
 static inline void ring_cq_unlock(ring_ctx_t *ctx) {
-    if (!atomic_load_explicit(&ctx->single_thread, memory_order_relaxed))
+    if (!atomic_load_explicit(&ctx->single_thread, memory_order_acquire))
         pthread_mutex_unlock(&ctx->cq_lock);
 }
 

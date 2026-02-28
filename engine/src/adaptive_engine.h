@@ -273,19 +273,19 @@ static inline int bucket_upper_bound_us(int bucket) {
  */
 
 /** Consecutive ticks of growing pending before engaging AIMD (80ms) */
-#define AIMD_ENGAGE_TICKS              8
+#define AIMD_ENGAGE_TICKS 8
 
 /** Minimum pending growth per tick to count as "growing" */
-#define AIMD_ENGAGE_PENDING_DELTA      16
+#define AIMD_ENGAGE_PENDING_DELTA 16
 
 /** Consecutive flat-pending ticks after CONVERGED to re-enter passthrough (100ms) */
-#define PASSTHROUGH_REENTER_TICKS      10
+#define PASSTHROUGH_REENTER_TICKS 10
 
 /** Maximum |pending delta| per tick to count as "flat" for re-entry */
-#define PASSTHROUGH_REENTER_DELTA_MAX  2
+#define PASSTHROUGH_REENTER_DELTA_MAX 2
 
 /** Latency sample mask in passthrough mode: 1-in-64 */
-#define PASSTHROUGH_SAMPLE_MASK        0x3F
+#define PASSTHROUGH_SAMPLE_MASK 0x3F
 
 /* ============================================================================
  * Types
@@ -295,13 +295,13 @@ static inline int bucket_upper_bound_us(int bucket) {
  * Adaptive phase
  */
 typedef enum {
-    ADAPTIVE_PHASE_BASELINE,    /**< Collecting baseline latency */
-    ADAPTIVE_PHASE_PROBING,     /**< Increasing in-flight limit */
-    ADAPTIVE_PHASE_STEADY,      /**< Maintaining optimal config */
-    ADAPTIVE_PHASE_BACKOFF,     /**< Reducing due to latency spike */
-    ADAPTIVE_PHASE_SETTLING,    /**< Waiting for metrics to stabilize */
-    ADAPTIVE_PHASE_CONVERGED,   /**< Tuning complete */
-    ADAPTIVE_PHASE_PASSTHROUGH  /**< No AIMD gating (default start state) */
+    ADAPTIVE_PHASE_BASELINE,   /**< Collecting baseline latency */
+    ADAPTIVE_PHASE_PROBING,    /**< Increasing in-flight limit */
+    ADAPTIVE_PHASE_STEADY,     /**< Maintaining optimal config */
+    ADAPTIVE_PHASE_BACKOFF,    /**< Reducing due to latency spike */
+    ADAPTIVE_PHASE_SETTLING,   /**< Waiting for metrics to stabilize */
+    ADAPTIVE_PHASE_CONVERGED,  /**< Tuning complete */
+    ADAPTIVE_PHASE_PASSTHROUGH /**< No AIMD gating (default start state) */
 } adaptive_phase_t;
 
 /**
@@ -359,20 +359,21 @@ typedef struct {
     int prev_in_flight_limit;                /**< Previous limit for efficiency ratio */
 
     /* === Cache line 1+: Tick-only state (cold, accessed every 10ms) === */
-    double baseline_p99_ms;        /**< Minimum observed P99 */
-    double latency_rise_threshold; /**< Threshold for latency backoff */
-    double max_p99_ms;             /**< Hard ceiling on P99 (0 = none) */
-    double prev_throughput_bps;    /**< Previous throughput for efficiency ratio */
-    int warmup_count;              /**< Samples collected in warmup */
-    int plateau_count;             /**< Consecutive plateau samples */
-    int steady_count;              /**< Time in STEADY phase */
-    int spike_count;               /**< Consecutive latency spikes */
-    int settling_timer;            /**< Time in SETTLING phase */
-    bool entered_via_backoff;      /**< STEADY was reached via BACKOFF (not plateau) */
-    int passthrough_qualify_count; /**< Consecutive flat-pending ticks toward re-entry */
-    int pressure_qualify_count;    /**< Consecutive pressure ticks toward AIMD engage */
-    int prev_pending_snapshot;     /**< Previous tick's pending_count for delta */
-    bool batch_threshold_fixed;    /**< True = skip AIMD batch optimizer */
+    double baseline_p99_ms;             /**< Minimum observed P99 */
+    double latency_rise_threshold;      /**< Threshold for latency backoff */
+    double max_p99_ms;                  /**< Hard ceiling on P99 (0 = none) */
+    double prev_throughput_bps;         /**< Previous throughput for efficiency ratio */
+    int warmup_count;                   /**< Samples collected in warmup */
+    int plateau_count;                  /**< Consecutive plateau samples */
+    int steady_count;                   /**< Time in STEADY phase */
+    int spike_count;                    /**< Consecutive latency spikes */
+    int settling_timer;                 /**< Time in SETTLING phase */
+    bool entered_via_backoff;           /**< STEADY was reached via BACKOFF (not plateau) */
+    int passthrough_qualify_count;      /**< Consecutive flat-pending ticks toward re-entry */
+    int pressure_qualify_count;         /**< Consecutive pressure ticks toward AIMD engage */
+    int prev_pending_snapshot;          /**< Previous tick's pending_count for delta */
+    _Atomic bool batch_threshold_fixed; /**< True = skip AIMD batch optimizer (write-once at init,
+                                           read by tick thread) */
     int p99_head, p99_count;
     int throughput_head, throughput_count;
     int baseline_head, baseline_count;

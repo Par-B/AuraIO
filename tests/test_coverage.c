@@ -1101,6 +1101,27 @@ TEST(fixed_file_fallocate) {
     io_teardown();
 }
 
+TEST(fixed_file_ftruncate) {
+    io_setup();
+    aura_engine_t *engine = make_engine(1, 64);
+    assert(engine);
+
+    int rc = aura_register_files(engine, &test_fd, 1);
+    assert(rc == 0);
+
+    cb_called = 0;
+    aura_request_t *req = aura_ftruncate(engine, 0, 4096, AURA_FIXED_FILE, basic_cb, NULL);
+    assert(req);
+    assert(req->uses_registered_file == true);
+    aura_wait(engine, 1000);
+    assert(cb_called == 1);
+    assert(cb_result >= 0);
+
+    aura_unregister(engine, AURA_REG_FILES);
+    aura_destroy(engine);
+    io_teardown();
+}
+
 TEST(fixed_file_sync_file_range) {
     io_setup();
     aura_engine_t *engine = make_engine(1, 64);
@@ -1293,6 +1314,7 @@ TEST(options_defaults) {
     assert(opts.disable_adaptive == false);
     assert(opts.enable_sqpoll == false);
     assert(opts.ring_select == AURA_SELECT_ADAPTIVE);
+    assert(opts.batch_threshold == -1); /* auto-tune by default */
 }
 
 TEST(create_with_disable_adaptive) {
@@ -1305,6 +1327,36 @@ TEST(create_with_disable_adaptive) {
     aura_engine_t *engine = aura_create_with_options(&opts);
     assert(engine);
     aura_destroy(engine);
+}
+
+TEST(batch_threshold_modes) {
+    /* -1 = auto-tune (default) */
+    aura_options_t opts;
+    aura_options_init(&opts);
+    assert(opts.batch_threshold == -1);
+    opts.ring_count = 1;
+    opts.queue_depth = 32;
+    aura_engine_t *e1 = aura_create_with_options(&opts);
+    assert(e1);
+    aura_destroy(e1);
+
+    /* 0 = never auto-flush */
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 32;
+    opts.batch_threshold = 0;
+    aura_engine_t *e2 = aura_create_with_options(&opts);
+    assert(e2);
+    aura_destroy(e2);
+
+    /* >0 = fixed threshold */
+    aura_options_init(&opts);
+    opts.ring_count = 1;
+    opts.queue_depth = 32;
+    opts.batch_threshold = 16;
+    aura_engine_t *e3 = aura_create_with_options(&opts);
+    assert(e3);
+    aura_destroy(e3);
 }
 
 /* ============================================================================
@@ -2589,6 +2641,7 @@ int main(void) {
     RUN_TEST(fixed_file_readv);
     RUN_TEST(fixed_file_writev);
     RUN_TEST(fixed_file_fallocate);
+    RUN_TEST(fixed_file_ftruncate);
     RUN_TEST(fixed_file_sync_file_range);
     RUN_TEST(fixed_file_rejected_by_openat);
     RUN_TEST(fixed_file_rejected_by_close);
@@ -2608,6 +2661,7 @@ int main(void) {
     RUN_TEST(options_init_null);
     RUN_TEST(options_defaults);
     RUN_TEST(create_with_disable_adaptive);
+    RUN_TEST(batch_threshold_modes);
 
     /* Version */
     RUN_TEST(version_string);
