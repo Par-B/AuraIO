@@ -678,6 +678,7 @@ int ring_flush(ring_ctx_t *ctx) {
     if (queued == 0) {
         return (0);
     }
+    tls_last_sqe = NULL; /* Prevent stale SQE access after flush */
 
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted < 0) {

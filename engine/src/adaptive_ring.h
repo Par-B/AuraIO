@@ -427,6 +427,7 @@ int ring_drain_cqes_fast(ring_ctx_t *ctx);
 static inline int ring_flush_fast(ring_ctx_t *ctx) {
     int queued = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
     if (queued == 0) return 0;
+    ring_clear_last_sqe(); /* Prevent stale SQE access after flush */
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted > 0) {
         int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
