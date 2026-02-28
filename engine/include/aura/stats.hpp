@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file stats.hpp
  * @brief Statistics class for AuraIO C++ bindings
@@ -140,17 +139,14 @@ class Histogram {
         if (idx < 0 || idx >= bucket_count) return 0;
         // Find which tier this bucket belongs to
         for (int i = 0; i < hist_.tier_count; i++) {
-            int next_tier_base = (i + 1 < hist_.tier_count) ? hist_.tier_base_bucket[i + 1] : bucket_count;
+            int next_tier_base =
+                (i + 1 < hist_.tier_count) ? hist_.tier_base_bucket[i + 1] : bucket_count;
             if (idx >= hist_.tier_base_bucket[i] && idx < next_tier_base) {
                 int bucket_in_tier = idx - hist_.tier_base_bucket[i];
                 return hist_.tier_start_us[i] + bucket_in_tier * hist_.tier_width_us[i];
             }
         }
         return 0;
-    }
-
-    [[nodiscard]] int bucket_upper_us(int idx) const noexcept {
-        return aura_histogram_bucket_upper_bound_us(&hist_, idx);
     }
 
     [[nodiscard]] int bucket_upper_bound_us(int idx) const noexcept {
@@ -160,7 +156,7 @@ class Histogram {
     /**
      * Compute a latency percentile from the histogram
      * @param pct Percentile to compute (0.0 to 100.0, e.g. 99.0 for p99)
-     * @return Latency in microseconds, or -1.0 if histogram is empty or
+     * @return Latency in milliseconds, or -1.0 if histogram is empty or
      *         percentile is out of range
      */
     [[nodiscard]] double percentile(double pct) const noexcept {

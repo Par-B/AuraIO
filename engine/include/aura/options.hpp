@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file options.hpp
  * @brief Options builder class for AuraIO C++ bindings
@@ -20,9 +19,10 @@ namespace aura {
  * Controls how submissions are distributed across io_uring rings.
  */
 enum class RingSelect {
-    Adaptive = AURA_SELECT_ADAPTIVE,     ///< CPU-local with overflow spilling (default)
-    CpuLocal = AURA_SELECT_CPU_LOCAL,    ///< CPU-affinity only (best NUMA locality)
-    RoundRobin = AURA_SELECT_ROUND_ROBIN ///< Atomic round-robin (max single-thread scaling)
+    Adaptive = AURA_SELECT_ADAPTIVE,       ///< CPU-local with overflow spilling (default)
+    CpuLocal = AURA_SELECT_CPU_LOCAL,      ///< CPU-affinity only (best NUMA locality)
+    RoundRobin = AURA_SELECT_ROUND_ROBIN,  ///< Atomic round-robin (max single-thread scaling)
+    ThreadLocal = AURA_SELECT_THREAD_LOCAL ///< Thread-local ring ownership (zero contention)
 };
 
 /**
@@ -185,7 +185,7 @@ class Options {
     [[nodiscard]] int batch_threshold() const noexcept { return opts_.batch_threshold; }
     [[nodiscard]] RingSelect ring_select() const noexcept {
         auto raw = opts_.ring_select;
-        if (raw >= AURA_SELECT_ADAPTIVE && raw <= AURA_SELECT_ROUND_ROBIN) {
+        if (raw >= AURA_SELECT_ADAPTIVE && raw <= AURA_SELECT_THREAD_LOCAL) {
             return static_cast<RingSelect>(raw);
         }
         return RingSelect::Adaptive; // Defensive fallback
