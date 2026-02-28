@@ -145,9 +145,9 @@ typedef struct {
     _Atomic unsigned int sample_counter; /**< Submission counter for sampling */
 
     /* Completion-path counters (written during process_completion) */
-    _Alignas(64) int64_t
+    _Alignas(64) _Atomic int64_t
         bytes_completed;                 /**< Total bytes actually transferred (from CQE results) */
-    int64_t ops_completed;               /**< Total ops completed */
+    _Atomic int64_t ops_completed;       /**< Total ops completed */
     _Atomic uint32_t fixed_buf_inflight; /**< Registered-buffer ops currently in-flight */
     _Atomic uint32_t fixed_file_inflight; /**< Registered-file ops currently in-flight */
 

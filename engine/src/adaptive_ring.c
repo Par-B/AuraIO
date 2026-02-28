@@ -841,11 +841,12 @@ static void ring_retire_batch(ring_ctx_t *ctx, const retire_entry_t *entries, in
         /* Don't count cancel operations in ops_completed — they are
          * internal bookkeeping, not user I/O operations. */
         if (entries[i].op_type != AURA_OP_CANCEL) {
-            ctx->ops_completed++;
+            atomic_fetch_add_explicit(&ctx->ops_completed, 1, memory_order_relaxed);
             /* Only accumulate bytes for actual data transfer ops.
              * Non-transfer ops like openat return fd numbers, not byte counts. */
             if (entries[i].result > 0 && op_is_data_transfer(entries[i].op_type)) {
-                ctx->bytes_completed += entries[i].result;
+                atomic_fetch_add_explicit(&ctx->bytes_completed, entries[i].result,
+                                          memory_order_relaxed);
             }
         }
         ring_put_request(ctx, entries[i].op_idx);
@@ -932,9 +933,10 @@ int ring_drain_cqes_fast(ring_ctx_t *ctx) {
         /* Inline retirement (no lock needed for single_thread) */
         if (retire.op_idx >= 0) {
             if (retire.op_type != AURA_OP_CANCEL) {
-                ctx->ops_completed++;
+                atomic_fetch_add_explicit(&ctx->ops_completed, 1, memory_order_relaxed);
                 if (retire.result > 0 && op_is_data_transfer(retire.op_type)) {
-                    ctx->bytes_completed += retire.result;
+                    atomic_fetch_add_explicit(&ctx->bytes_completed, retire.result,
+                                              memory_order_relaxed);
                 }
             }
             ring_put_request(ctx, retire.op_idx);

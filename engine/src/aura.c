@@ -2587,8 +2587,8 @@ int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stat
          * completion handlers and tick thread */
         bool st = ring_lock(ring);
 
-        tmp.ops_completed += ring->ops_completed;
-        tmp.bytes_transferred += ring->bytes_completed;
+        tmp.ops_completed += atomic_load_explicit(&ring->ops_completed, memory_order_relaxed);
+        tmp.bytes_transferred += atomic_load_explicit(&ring->bytes_completed, memory_order_relaxed);
         total_in_flight += atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
         total_peak_in_flight +=
             atomic_load_explicit(&ring->peak_pending_count, memory_order_relaxed);
@@ -2670,8 +2670,8 @@ int aura_get_ring_stats(const aura_engine_t *engine, int ring_idx, aura_ring_sta
     ring_ctx_t *ring = (ring_ctx_t *)&engine->rings[ring_idx];
     bool st = ring_lock(ring);
 
-    tmp.ops_completed = ring->ops_completed;
-    tmp.bytes_transferred = ring->bytes_completed;
+    tmp.ops_completed = atomic_load_explicit(&ring->ops_completed, memory_order_relaxed);
+    tmp.bytes_transferred = atomic_load_explicit(&ring->bytes_completed, memory_order_relaxed);
     tmp.pending_count = atomic_load_explicit(&ring->pending_count, memory_order_relaxed);
     tmp.peak_in_flight = atomic_load_explicit(&ring->peak_pending_count, memory_order_relaxed);
     tmp.queue_depth = ring->max_requests;
