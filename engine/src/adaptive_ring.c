@@ -533,6 +533,7 @@ int ring_submit_cancel(ring_ctx_t *ctx, aura_request_t *req, aura_request_t *tar
     io_uring_prep_cancel(sqe, target, 0);
     io_uring_sqe_set_data(sqe, req);
     meta_finish(ctx, req, AURA_OP_CANCEL);
+    tls_last_sqe = NULL; /* Prevent stale SQE from being linked after cancel */
     return (0);
 }
 
@@ -756,7 +757,7 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
      * is a duplicate (e.g., io_uring can deliver both a cancel CQE and the
      * original op's CQE).  Skip processing to avoid double-decrementing
      * inflight counters and double-freeing the request slot. */
-    if (!atomic_load_explicit(&req->pending, memory_order_acquire)) {
+    if (!atomic_exchange_explicit(&req->pending, false, memory_order_acquire)) {
         return retire;
     }
 
@@ -793,10 +794,8 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
     }
 
-    /* Mark as no longer pending just before callback invocation.
-     * This ensures aura_request_pending() returns false only when
-     * the callback is about to fire (not earlier). */
-    atomic_store_explicit(&req->pending, false, memory_order_release);
+    /* pending was already cleared by atomic_exchange in the double-completion
+     * guard above.  No separate store needed. */
 
     /* Invoke callback WITHOUT holding lock to prevent deadlock.
      * If the callback calls aura_read/write, it will try to acquire

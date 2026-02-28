@@ -706,29 +706,29 @@ static void cleanup_phase_1_mark_destroyed(buffer_pool_t *pool) {
      * be published after the final atomic_exchange(NULL) in the drain loop.
      * Bounded to avoid infinite hang if a worker thread misbehaves. */
     int yield_count = 0;
-    while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0 &&
-           yield_count < 10000) {
+    while (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
         sched_yield();
-        yield_count++;
-    }
-    if (atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire) > 0) {
-        aura_log(AURA_LOG_WARN,
-                 "buffer_pool cleanup: timed out waiting for registrations_inflight (%d)",
-                 (int)atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire));
+        if (++yield_count % 10000 == 0) {
+            aura_log(
+                AURA_LOG_WARN,
+                "buffer_pool cleanup: still waiting for registrations_inflight (%d), yields=%d",
+                (int)atomic_load_explicit(&pool->registrations_inflight, memory_order_acquire),
+                yield_count);
+        }
     }
 
     /* Wait for threads in the shard slow path (alloc/free) to finish.
      * These threads have already passed the destroyed check and are
      * accessing pool->shards — we must not free shards until they exit. */
     yield_count = 0;
-    while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0 &&
-           yield_count < 10000) {
+    while (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
         sched_yield();
-        yield_count++;
-    }
-    if (atomic_load_explicit(&pool->active_users, memory_order_acquire) > 0) {
-        aura_log(AURA_LOG_WARN, "buffer_pool cleanup: timed out waiting for active_users (%d)",
-                 (int)atomic_load_explicit(&pool->active_users, memory_order_acquire));
+        if (++yield_count % 10000 == 0) {
+            aura_log(AURA_LOG_WARN,
+                     "buffer_pool cleanup: still waiting for active_users (%d), yields=%d",
+                     (int)atomic_load_explicit(&pool->active_users, memory_order_acquire),
+                     yield_count);
+        }
     }
 }
 
@@ -938,6 +938,7 @@ void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     if (size == 0) {
         /* Caller error: size=0 buffers can't be pool-allocated, so we can't
          * update stats or return to a bucket.  Free directly. */
+        aura_log(AURA_LOG_WARN, "buffer_pool_free called with size=0");
         assert(0 && "buffer_pool_free called with size=0");
         free(buf);
         return;

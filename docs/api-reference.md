@@ -853,7 +853,7 @@ Check if a request is marked as linked.
 ##### `aura_get_poll_fd`
 
 ```c
-int aura_get_poll_fd(const aura_engine_t *engine);
+int aura_get_poll_fd(aura_engine_t *engine);
 ```
 
 Get a pollable file descriptor for event loop integration. Becomes readable when completions are available. Uses level-triggered semantics: remains readable as long as unprocessed completions exist. Compatible with epoll (`EPOLLIN`), poll (`POLLIN`), and select.

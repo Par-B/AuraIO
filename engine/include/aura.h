@@ -53,8 +53,12 @@
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
 #define AURA_VERSION (AURA_VERSION_MAJOR * 10000 + AURA_VERSION_MINOR * 100 + AURA_VERSION_PATCH)
 
-/** Version as a string */
-#define AURA_VERSION_STRING "0.6.0"
+/** Version as a string (auto-generated from components) */
+#define AURA_STRINGIFY_(x) #x
+#define AURA_STRINGIFY(x) AURA_STRINGIFY_(x)
+#define AURA_VERSION_STRING                                                                        \
+    AURA_STRINGIFY(AURA_VERSION_MAJOR)                                                             \
+    "." AURA_STRINGIFY(AURA_VERSION_MINOR) "." AURA_STRINGIFY(AURA_VERSION_PATCH)
 
 /* Ensure version components stay within packed integer limits */
 #if AURA_VERSION_MINOR > 99 || AURA_VERSION_PATCH > 99
@@ -188,6 +192,7 @@ typedef enum {
     AURA_OP_SYNC_FILE_RANGE = 14,
     AURA_OP__RESERVED_15 = 15, /**< Reserved for future ops */
     AURA_OP__RESERVED_16 = 16,
+    AURA_OP__COUNT, /**< Number of op types (for dispatch tables) */
 } aura_op_type_t;
 
 /**
@@ -485,6 +490,7 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 
 /** @name Statx field mask (for aura_statx mask parameter) */
 /**@{*/
+#define AURA_STATX_TYPE 0x01U    /**< Request stx_type (file type) */
 #define AURA_STATX_MODE 0x02U    /**< Request stx_mode */
 #define AURA_STATX_NLINK 0x04U   /**< Request stx_nlink */
 #define AURA_STATX_UID 0x08U     /**< Request stx_uid */
@@ -495,6 +501,7 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 #define AURA_STATX_INO 0x100U    /**< Request stx_ino */
 #define AURA_STATX_SIZE 0x200U   /**< Request stx_size */
 #define AURA_STATX_BLOCKS 0x400U /**< Request stx_blocks */
+#define AURA_STATX_BTIME 0x800U  /**< Request stx_btime (birth/creation time) */
 #define AURA_STATX_ALL 0xFFFU    /**< Request all basic fields */
 /**@}*/
 
@@ -556,6 +563,12 @@ typedef struct {
         } fixed;           /**< Registered buffer reference (AURA_BUF_REGISTERED) */
     } u;
 } aura_buf_t;
+
+#ifdef __cplusplus
+static_assert(sizeof(aura_buf_t) == 24, "aura_buf_t ABI size check");
+#else
+_Static_assert(sizeof(aura_buf_t) == 24, "aura_buf_t ABI size check");
+#endif
 
 /**
  * Create a buffer descriptor for an unregistered (regular) buffer
@@ -1113,7 +1126,7 @@ AURA_API bool aura_request_is_linked(const aura_request_t *req);
  * @param engine Engine handle
  * @return Pollable fd, or -1 on error (errno set to EINVAL)
  */
-AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(const aura_engine_t *engine);
+AURA_API AURA_WARN_UNUSED int aura_get_poll_fd(aura_engine_t *engine);
 
 /**
  * Process completed operations (non-blocking)
@@ -1503,8 +1516,8 @@ AURA_API int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stat
 /**
  * Get human-readable name for an AIMD phase value
  *
- * Valid phase values are 0-5 (AURA_PHASE_BASELINE through
- * AURA_PHASE_CONVERGED).  Returns "UNKNOWN" for out-of-range values.
+ * Valid phase values are 0-6 (AURA_PHASE_BASELINE through
+ * AURA_PHASE_PASSTHROUGH).  Returns "UNKNOWN" for out-of-range values.
  * Thread-safe: returns a pointer to a static string.
  *
  * @param phase Phase value (from aura_ring_stats_t.aimd_phase)

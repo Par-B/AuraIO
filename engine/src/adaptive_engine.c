@@ -621,8 +621,9 @@ static inline bool handle_converged_phase(adaptive_controller_t *ctrl, const tic
  */
 static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
     atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_BASELINE, memory_order_release);
-    atomic_store_explicit(&ctrl->current_in_flight_limit, ctrl->max_queue_depth / 2,
-                          memory_order_relaxed);
+    int initial = ctrl->max_queue_depth / 2;
+    if (initial < ctrl->min_in_flight) initial = ctrl->min_in_flight;
+    atomic_store_explicit(&ctrl->current_in_flight_limit, initial, memory_order_relaxed);
     ctrl->warmup_count = 0;
     ctrl->plateau_count = 0;
     ctrl->steady_count = 0;
@@ -701,18 +702,15 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
         /* P99 target check: if user set max_p99_ms, check sparse samples */
         if (!pressure && ctrl->max_p99_ms > 0) {
             tick_stats_t pt_stats = tick_swap_and_compute_stats(ctrl, elapsed_ns);
-            if (pt_stats.have_valid_p99 && pt_stats.p99_ms > ctrl->max_p99_ms)
-                pressure = true;
+            if (pt_stats.have_valid_p99 && pt_stats.p99_ms > ctrl->max_p99_ms) pressure = true;
 
-            atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(),
-                                  memory_order_release);
+            atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
         }
 
         if (pressure) {
             ctrl->pressure_qualify_count++;
             if (ctrl->pressure_qualify_count >= AIMD_ENGAGE_TICKS) {
-                atomic_store_explicit(&ctrl->passthrough_mode, false,
-                                      memory_order_relaxed);
+                atomic_store_explicit(&ctrl->passthrough_mode, false, memory_order_relaxed);
                 adaptive_reset_to_baseline(ctrl);
                 ctrl->pressure_qualify_count = 0;
                 params_changed = true;
@@ -735,7 +733,8 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
     /* =========== INNER LOOP: Batch Optimizer =========== */
     int batch_threshold =
         atomic_load_explicit(&ctrl->current_batch_threshold, memory_order_relaxed);
-    if (!ctrl->batch_threshold_fixed && stats.sqe_ratio > 0) {
+    if (!atomic_load_explicit(&ctrl->batch_threshold_fixed, memory_order_relaxed) &&
+        stats.sqe_ratio > 0) {
         if (stats.sqe_ratio < ADAPTIVE_TARGET_SQE_RATIO &&
             batch_threshold < ADAPTIVE_MAX_BATCH_THRESHOLD) {
             batch_threshold++;
@@ -797,12 +796,11 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
         if (abs(pending_delta) <= PASSTHROUGH_REENTER_DELTA_MAX) {
             ctrl->passthrough_qualify_count++;
             if (ctrl->passthrough_qualify_count >= PASSTHROUGH_REENTER_TICKS) {
-                atomic_store_explicit(&ctrl->passthrough_mode, true,
-                                      memory_order_relaxed);
+                atomic_store_explicit(&ctrl->passthrough_mode, true, memory_order_relaxed);
                 atomic_store_explicit(&ctrl->phase, ADAPTIVE_PHASE_PASSTHROUGH,
                                       memory_order_release);
-                atomic_store_explicit(&ctrl->current_in_flight_limit,
-                                      ctrl->max_queue_depth, memory_order_relaxed);
+                atomic_store_explicit(&ctrl->current_in_flight_limit, ctrl->max_queue_depth,
+                                      memory_order_relaxed);
                 ctrl->passthrough_qualify_count = 0;
                 params_changed = true;
             }
