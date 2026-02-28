@@ -501,8 +501,8 @@ static inline int adaptive_get_batch_threshold(adaptive_controller_t *ctrl) {
  * @param ctrl Controller
  * @return true if passthrough (no AIMD gating)
  */
-static inline bool adaptive_is_passthrough(const adaptive_controller_t *ctrl) {
-    return atomic_load_explicit((_Atomic bool *)&ctrl->passthrough_mode, memory_order_relaxed);
+static inline bool adaptive_is_passthrough(adaptive_controller_t *ctrl) {
+    return atomic_load_explicit(&ctrl->passthrough_mode, memory_order_relaxed);
 }
 
 /**
