@@ -760,6 +760,16 @@ class Engine {
     // =========================================================================
 
     /**
+     * Get the total number of in-flight operations across all rings
+     *
+     * A lightweight alternative to get_stats() when you only need the
+     * pending count (e.g., for wait/drain loops or shutdown checks).
+     *
+     * @return Total pending operations (>= 0)
+     */
+    [[nodiscard]] int pending_count() const noexcept { return aura_pending_count(handle_); }
+
+    /**
      * Get engine statistics snapshot
      *
      * @return Stats object with current metrics

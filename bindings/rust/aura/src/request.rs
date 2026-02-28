@@ -143,12 +143,20 @@ impl RequestHandle {
     /// The chained operation won't start until this one completes successfully.
     /// If this operation fails, the chained operation receives `-ECANCELED`.
     ///
+    /// Requires `AURA_SELECT_THREAD_LOCAL` ring selection mode. Returns `Err`
+    /// if the engine is not in THREAD_LOCAL mode.
+    ///
     /// # Safety
     ///
     /// The caller must ensure the handle is still valid (the completion
     /// callback has not yet been invoked).
-    pub unsafe fn set_linked(&self) {
-        unsafe { aura_sys::aura_request_set_linked(self.inner) };
+    pub unsafe fn set_linked(&self) -> Result<(), std::io::Error> {
+        let rc = unsafe { aura_sys::aura_request_set_linked(self.inner) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
     }
 
     /// Check if this request is marked as linked

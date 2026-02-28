@@ -94,6 +94,19 @@ The controller starts in PASSTHROUGH. When pressure is detected, it transitions 
 
 ## 5. Performance Tips for Users
 
+### Tuning Levels
+
+AuraIO is designed so that most workloads need no tuning at all. Think of configuration as a ladder you climb only if needed:
+
+| Level | What you do | Who needs it |
+|-------|-------------|--------------|
+| **0 — Zero config** | `aura_create()` — defaults handle everything | Most workloads |
+| **1 — Latency target** | Set `opts.max_p99_latency_ms` | Latency-sensitive apps |
+| **2 — Registration** | `aura_register_files()` / `aura_register_buffers()` | High-IOPS, many-core |
+| **3 — Full tuning** | SQPOLL, thread pinning, `O_DIRECT`, custom ring count | NVMe at millions of IOPS |
+
+If you are unsure, start at Level 0. The AIMD controller self-tunes queue depth; manual intervention is only needed to unlock kernel-side optimizations (Levels 2–3).
+
 To fully leverage this architecture:
 1.  **Pin Your Threads**: Use `pthread_setaffinity_np` in your worker threads. AuraIO routes I/O to per-core rings via `sched_getcpu()`. Pinning ensures stable core affinity, keeping ring data and CQE memory hot in L1/L2 cache.
 2.  **Use `O_DIRECT`**: This bypasses the kernel page cache, allowing AuraIO's adaptive controller to see the *true* device latency and tune accurately.
@@ -204,7 +217,7 @@ engine.unregister(AURA_REG_FILES);
 - Registration is applied to all rings and requires a brief lock per ring — do it once, not per-request.
 - The `aura_update_file()` function allows replacing individual file descriptors without unregistering the entire set (useful for log rotation or connection recycling).
 - There is no AuraIO-imposed limit on registered file count; the limit comes from the kernel (typically 64K+ on modern kernels).
-- **Auto-detection vs direct-index**: By default, the engine scans the registered file table on each submission to auto-detect registered fds (O(n) in the number of registered files). For hot paths with many registered files, pass `AURA_FIXED_FILE` in the `flags` parameter with the registered index directly to skip this lookup.
+- **Auto-detection vs direct-index**: By default, the engine auto-detects registered fds on each submission by scanning the registered file table (O(n) linear scan) under an rwlock. When no files are registered, an atomic flag check (`memory_order_acquire`) short-circuits the entire lookup — near-zero cost. Once files are registered, the scan cost grows with the number of registered fds. For hot paths with many registered files, pass `AURA_FIXED_FILE` in the `flags` parameter with the registered index directly: this bypasses both the scan and the rwlock entirely (O(1)).
 
 ### Registered Buffers — Zero-Copy I/O
 

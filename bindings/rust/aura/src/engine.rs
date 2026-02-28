@@ -891,6 +891,14 @@ impl Engine {
     // Statistics
     // =========================================================================
 
+    /// Get the total number of in-flight operations across all rings.
+    ///
+    /// A lightweight alternative to [`stats()`](Self::stats) when you only need
+    /// the pending count (e.g., for wait/drain loops or shutdown checks).
+    pub fn pending_count(&self) -> i32 {
+        unsafe { aura_sys::aura_pending_count(self.inner.raw()) }
+    }
+
     /// Get current engine statistics
     pub fn stats(&self) -> Result<Stats> {
         let mut inner: aura_sys::aura_stats_t = unsafe { std::mem::zeroed() };

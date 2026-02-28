@@ -87,8 +87,8 @@
  *   concurrently). See the aura_callback_t documentation for what is safe to
  *   call from within a callback.
  *
- * STATISTICS (aura_get_stats, aura_get_ring_stats, aura_get_histogram,
- * aura_get_buffer_stats):
+ * STATISTICS (aura_pending_count, aura_get_stats, aura_get_ring_stats,
+ * aura_get_histogram, aura_get_buffer_stats):
  *   Thread-safe. Reads atomic counters and briefly locks each ring.
  *
  * REGISTRATION (aura_register_buffers, aura_register_files, aura_update_file,
@@ -409,6 +409,18 @@ typedef enum {
  *
  * Used with aura_create_with_options() for custom configuration.
  * Initialize with aura_options_init() before modifying.
+ *
+ * Most workloads need only aura_create() — the engine auto-tunes everything.
+ * When you do need to customize, options are organized by tuning level:
+ *
+ *   Level 0 (default):  aura_create() — auto-tunes queue depth, batch size,
+ *                        and concurrency limits. No configuration required.
+ *   Level 1 (workload): queue_depth, ring_count, max_p99_latency_ms —
+ *                        match resource allocation to your workload shape.
+ *   Level 2 (threading): ring_select, single_thread — match the ring
+ *                        topology to your threading model.
+ *   Level 3 (kernel):   enable_sqpoll, batch_threshold, disable_adaptive —
+ *                        direct control over io_uring and AIMD behavior.
  */
 typedef struct {
     size_t struct_size;        /**< Set by aura_options_init(); for ABI
@@ -643,6 +655,11 @@ AURA_API void aura_options_init(aura_options_t *options);
 
 /**
  * Create a new async I/O engine with default options
+ *
+ * Suitable for most workloads. The engine auto-tunes queue depth, batch
+ * size, concurrency limits, and ring topology. Use aura_create_with_options()
+ * only when you need SQPOLL, single-thread mode, a specific ring count, or
+ * a custom latency target.
  *
  * Automatically detects CPU cores, creates io_uring rings, and initializes
  * adaptive controllers. One ring is created per CPU core.
@@ -1093,12 +1110,16 @@ AURA_API int aura_request_op_type(const aura_request_t *req);
  * Call this between aura_read/write/fsync and the next submission to build
  * a chain. The final operation in a chain should NOT be marked as linked.
  *
+ * Requires AURA_SELECT_THREAD_LOCAL ring selection mode. In other modes,
+ * another thread could flush the ring between submission and this call,
+ * causing the SQE to be consumed before the link flag is set. Returns
+ * -1 with errno=EINVAL if the engine is not in THREAD_LOCAL mode.
+ *
  * @param req Request handle (returned by aura_read, aura_write, etc.)
- * @note This function is only safe in AURA_SELECT_THREAD_LOCAL mode.
- *       In other modes, another thread could flush the ring between submission
- *       and this call, causing the SQE to be consumed before the link flag is set.
+ * @return 0 on success, -1 on error (errno set to EINVAL if req is NULL
+ *         or engine is not in AURA_SELECT_THREAD_LOCAL mode)
  */
-AURA_API void aura_request_set_linked(aura_request_t *req);
+AURA_API AURA_WARN_UNUSED int aura_request_set_linked(aura_request_t *req);
 
 /**
  * Check if a request is marked as linked
@@ -1153,6 +1174,17 @@ AURA_API AURA_WARN_UNUSED int aura_poll(aura_engine_t *engine);
  * Blocks until at least one operation completes or timeout expires.
  * Must NOT be called concurrently with aura_poll() or aura_run()
  * on the same engine (see aura_poll() threading model note).
+ *
+ * Typical wait loop:
+ * @code
+ *   while (aura_pending_count(engine) > 0) {
+ *       int n = aura_wait(engine, 1000);
+ *       if (n > 0) continue;               // processed completions
+ *       if (n == 0) break;                  // nothing in flight
+ *       if (errno == ETIMEDOUT) continue;   // timed out, retry
+ *       break;                              // real error
+ *   }
+ * @endcode
  *
  * @param engine     Engine handle
  * @param timeout_ms Maximum wait time in milliseconds (-1 = forever, 0 = don't
@@ -1337,6 +1369,14 @@ AURA_API AURA_WARN_UNUSED int aura_register_buffers(aura_engine_t *engine, const
  * (aura_read/aura_write/readv/writev/fsync) automatically use the
  * registered-file table when the submitted fd is found there.
  *
+ * AUTO-DETECTION COST: Each I/O submission performs a linear scan of
+ * the registered file array (O(n) where n is the number of registered
+ * fds) under a read-side rwlock. When no files are registered, the
+ * scan is skipped entirely via a fast atomic check. For workloads with
+ * many registered fds where lookup cost matters, pass AURA_FIXED_FILE
+ * in the flags parameter to bypass auto-detection and use the fixed
+ * file index directly.
+ *
  * Not thread-safe with other registration operations. I/O submissions
  * may proceed concurrently.
  *
@@ -1430,6 +1470,18 @@ AURA_API int aura_request_unregister(aura_engine_t *engine, aura_reg_type_t type
  * Statistics (Optional)
  * ============================================================================
  */
+
+/**
+ * Get the total number of in-flight operations across all rings
+ *
+ * A lightweight alternative to aura_get_stats() when you only need the
+ * pending count (e.g., for wait/drain loops or shutdown checks).
+ * Thread-safe: reads per-ring atomic counters without locking.
+ *
+ * @param engine Engine handle
+ * @return Total pending operations (>= 0), or -1 if engine is NULL
+ */
+AURA_API int aura_pending_count(const aura_engine_t *engine);
 
 /**
  * Get current engine statistics

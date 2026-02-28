@@ -110,6 +110,8 @@ void on_read(aura_request_t *req, ssize_t result, void *user_data) {
 
 int main(void) {
     // 1. Create engine
+    // For most workloads, aura_create() is all you need — the engine
+    // auto-tunes queue depth, batch size, and concurrency limits.
     aura_engine_t *engine = aura_create();
     if (!engine) { perror("aura_create"); return 1; }
 
@@ -122,6 +124,8 @@ int main(void) {
     aura_read(engine, fd, aura_buf(buf), 4096, 0, on_read, buf);
 
     // 4. Wait for completion
+    // aura_pending_count() is a lightweight way to check in-flight ops
+    // without entering the completion path. Useful for backpressure checks.
     while (!done)
         aura_wait(engine, 100);
 
@@ -132,6 +136,17 @@ int main(void) {
     return 0;
 }
 ```
+
+### Tuning Levels
+
+AuraIO options are organized into four levels of increasing specificity. Use the lowest level that satisfies your requirements:
+
+| Level | API / Options | When to use |
+|-------|--------------|-------------|
+| **0** | `aura_create()` | Default — auto-tunes everything. Correct for most workloads. |
+| **1** | `queue_depth`, `ring_count`, `max_p99_latency_ms` | You have a known throughput target, ring count preference, or latency SLA. |
+| **2** | `ring_select`, `single_thread` | You need explicit ring selection or want to skip mutex overhead in a single-threaded tool. |
+| **3** | `enable_sqpoll`, `batch_threshold`, `disable_adaptive` | Kernel-side polling, manual batch tuning, or fixed-concurrency benchmarking. |
 
 ### When to Override Defaults
 
@@ -494,8 +509,13 @@ Chain dependent operations so the kernel executes them in order without round-tr
 
 ```c
 // Write data — mark as linked so fsync waits for it
+// Note: aura_request_set_linked() returns int (0 on success, -1 if the
+// request is NULL). It also requires THREAD_LOCAL ring-select mode when
+// using multiple rings — in that mode each thread owns its ring, so the
+// linked SQE is guaranteed to land on the same ring as the original op.
 aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), 4096, 0, write_cb, ud);
-aura_request_set_linked(wreq);
+int rc = aura_request_set_linked(wreq);
+(void)rc; // check rc in production code
 
 // Fsync — chained to the write, NOT marked as linked (end of chain)
 aura_request_t *freq = aura_fsync(engine, fd, 0, fsync_cb, ud);
@@ -540,6 +560,8 @@ aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
 // Unregister when done
 aura_unregister(engine, AURA_REG_BUFFERS);
 ```
+
+> **Auto-detection cost**: When you call `aura_read()` or `aura_write()` with a plain `aura_buf()` pointer, the engine performs a quick range-check against the registered buffer table to detect whether the buffer is already registered. This check is O(registered_count) and is negligible for small tables. If you want to bypass this auto-detection entirely — for example in a tight loop where you know the buffer is always fixed — pass `AURA_FIXED_FILE` in the flags or use `aura_buf_fixed()` directly, which skips the range scan.
 
 ### Logging
 

@@ -64,7 +64,10 @@ static void run_until_done(aura_engine_t *engine, cb_state_t *st) {
 }
 
 static aura_engine_t *make_engine(void) {
-    aura_engine_t *engine = aura_create();
+    aura_options_t opts;
+    aura_options_init(&opts);
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
+    aura_engine_t *engine = aura_create_with_options(&opts);
     assert(engine);
     return engine;
 }
@@ -73,6 +76,7 @@ static aura_engine_t *make_engine_multi_ring(void) {
     aura_options_t opts;
     aura_options_init(&opts);
     opts.ring_count = 4;
+    opts.ring_select = AURA_SELECT_THREAD_LOCAL;
     aura_engine_t *engine = aura_create_with_options(&opts);
     assert(engine);
     return engine;
@@ -115,7 +119,7 @@ TEST(write_fsync_chain) {
     aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), sizeof(buf), 0, 0, basic_cb, &ws);
     assert(wreq);
     assert(!aura_request_is_linked(wreq));
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
     assert(aura_request_is_linked(wreq));
 
     /* Submit fsync — end of chain (not linked) */
@@ -162,7 +166,7 @@ TEST(chain_failure_cancels) {
     aura_request_t *wreq =
         aura_write(engine, bad_fd, aura_buf(buf), sizeof(buf), 0, 0, basic_cb, &ws);
     assert(wreq);
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
 
     /* Submit fsync — should get canceled because write fails */
     aura_request_t *freq = aura_fsync(engine, bad_fd, 0, 0, basic_cb, &fs);
@@ -199,13 +203,13 @@ TEST(three_op_chain) {
     /* Op 1: write at offset 0, linked */
     aura_request_t *r1 = aura_write(engine, fd, aura_buf(buf1), sizeof(buf1), 0, 0, basic_cb, &s1);
     assert(r1);
-    aura_request_set_linked(r1);
+    assert(aura_request_set_linked(r1) == 0);
 
     /* Op 2: write at offset 1024, linked */
     aura_request_t *r2 =
         aura_write(engine, fd, aura_buf(buf2), sizeof(buf2), 1024, 0, basic_cb, &s2);
     assert(r2);
-    aura_request_set_linked(r2);
+    assert(aura_request_set_linked(r2) == 0);
 
     /* Op 3: fsync, end of chain */
     aura_request_t *r3 = aura_fsync(engine, fd, 0, 0, basic_cb, &s3);
@@ -288,7 +292,7 @@ TEST(ring_pinning) {
     aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), sizeof(buf), 0, 0, basic_cb, &ws);
     assert(wreq);
     int write_ring = wreq->ring_idx;
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
 
     /* Submit fsync — should be on the same ring */
     aura_request_t *freq = aura_fsync(engine, fd, 0, 0, basic_cb, &fs);
@@ -326,7 +330,7 @@ TEST(chain_abort_recovery) {
     /* Submit a write and mark as linked */
     aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), sizeof(buf), 0, 0, basic_cb, &ws);
     assert(wreq);
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
 
     /* The write was linked but we don't submit another linked op — instead,
      * we complete the chain normally by submitting an unlinked op */
@@ -375,7 +379,7 @@ TEST(linked_with_registered_files) {
     /* Submit write using registered file, mark as linked */
     aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), sizeof(buf), 0, 0, basic_cb, &ws);
     assert(wreq);
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
 
     /* Submit fsync */
     aura_request_t *freq = aura_fsync(engine, fd, 0, 0, basic_cb, &fs);
@@ -431,7 +435,7 @@ static void *chain_thread_func(void *arg) {
         ta->passed = 0;
         return NULL;
     }
-    aura_request_set_linked(wreq);
+    assert(aura_request_set_linked(wreq) == 0);
 
     aura_request_t *freq = aura_fsync(engine, fd, 0, 0, basic_cb, &fs);
     if (!freq) {

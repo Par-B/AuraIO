@@ -112,6 +112,15 @@ typedef struct {
 
 Always initialize with `aura_options_init()` before modifying fields.
 
+**Tuning levels** — fields are organized by how rarely they need to change:
+
+| Level | Fields | When to set |
+|-------|--------|-------------|
+| Level 0 (default) | *(none — use `aura_create()`)* | Auto-tunes everything; suitable for most workloads |
+| Level 1 (workload) | `queue_depth`, `ring_count`, `max_p99_latency_ms` | Custom ring topology or explicit latency target |
+| Level 2 (threading) | `ring_select`, `single_thread` | Single-thread event loops or NUMA-sensitive placement |
+| Level 3 (kernel) | `enable_sqpoll`, `batch_threshold`, `disable_adaptive` | SQPOLL polling, manual batch control, or disabling AIMD |
+
 #### `aura_ring_select_t`
 
 ```c
@@ -415,6 +424,8 @@ aura_engine_t *aura_create(void);
 ```
 
 Create a new engine with default options. Detects CPU cores, creates one io_uring ring per core, and initializes AIMD controllers.
+
+Suitable for most workloads. The engine auto-tunes queue depth, batch size, concurrency limits, and ring topology. Use `aura_create_with_options()` only when you need SQPOLL, single-thread mode, a specific ring count, or a custom latency target.
 
 **Returns:** Engine handle, or `NULL` on failure (errno set).
 
@@ -815,12 +826,16 @@ Get the operation type of a request. Useful in generic completion handlers to di
 ##### `aura_request_set_linked`
 
 ```c
-void aura_request_set_linked(aura_request_t *req);
+int aura_request_set_linked(aura_request_t *req);
 ```
 
 Mark a request as linked. The next submission on the same thread will be chained via io_uring's `IOSQE_IO_LINK` mechanism. The chained operation will not start until this one completes successfully. If this operation fails, the chained operation receives `-ECANCELED`.
 
 Linked requests are automatically pinned to the same ring. The final operation in a chain should NOT be marked as linked.
+
+Requires `AURA_SELECT_THREAD_LOCAL` ring selection mode. Returns -1 with `errno = EINVAL` if the engine is not in `THREAD_LOCAL` mode.
+
+**Returns:** 0 on success, -1 on error (errno set).
 
 ---
 
@@ -900,6 +915,18 @@ Block until at least one operation completes or timeout expires.
 | `timeout_ms` | `int` | Max wait: -1 = forever, 0 = non-blocking |
 
 **Returns:** Number of completions processed, or -1 on error (errno set). Returns -1 with `errno = ETIMEDOUT` when the timeout expires with pending operations remaining.
+
+**Canonical wait loop:**
+
+```c
+while (aura_pending_count(engine) > 0) {
+    int n = aura_wait(engine, 1000);
+    if (n > 0) continue;               // processed completions
+    if (n == 0) break;                  // nothing in flight
+    if (errno == ETIMEDOUT) continue;   // timed out, retry
+    break;                              // real error
+}
+```
 
 ---
 
@@ -1020,6 +1047,8 @@ Pre-register file descriptors with the kernel to eliminate lookup overhead.
 
 **Returns:** 0 on success, -1 on error (errno set).
 
+**AUTO-DETECTION COST:** Each I/O submission performs a linear scan of the registered file array (O(n)) under a read-side rwlock. When no files are registered, the scan is skipped via a fast atomic check. For workloads with many registered fds, pass `AURA_FIXED_FILE` to bypass auto-detection.
+
 ---
 
 ##### `aura_update_file`
@@ -1083,6 +1112,18 @@ When no in-flight operations are present at call time, the kernel unregistration
 #### Statistics
 
 All stats functions are thread-safe and safe to call during active I/O.
+
+##### `aura_pending_count`
+
+```c
+int aura_pending_count(const aura_engine_t *engine);
+```
+
+Get the total number of in-flight operations across all rings. A lightweight alternative to `aura_get_stats()` when you only need the pending count. Thread-safe.
+
+**Returns:** Total pending ops (>= 0), or -1 if engine is `NULL`.
+
+---
 
 ##### `aura_get_stats`
 

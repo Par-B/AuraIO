@@ -2634,6 +2634,15 @@ int aura_version_int(void) {
     return AURA_VERSION;
 }
 
+int aura_pending_count(const aura_engine_t *engine) {
+    if (!engine) return -1;
+    int total = 0;
+    for (int i = 0; i < engine->ring_count; i++) {
+        total += atomic_load_explicit(&engine->rings[i].pending_count, memory_order_relaxed);
+    }
+    return total;
+}
+
 int aura_get_stats(const aura_engine_t *engine, aura_stats_t *stats, size_t stats_size) {
     if (!engine || !stats || stats_size == 0) {
         errno = EINVAL;
@@ -2834,8 +2843,17 @@ int aura_request_op_type(const aura_request_t *req) {
     return (int)req->op_type;
 }
 
-void aura_request_set_linked(aura_request_t *req) {
-    if (!req) return;
+int aura_request_set_linked(aura_request_t *req) {
+    if (!req) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Linking is only safe in THREAD_LOCAL mode where no other thread can
+     * flush the ring between submission and this call. */
+    if (!tls_engine || tls_engine->ring_select != AURA_SELECT_THREAD_LOCAL) {
+        errno = EINVAL;
+        return -1;
+    }
     req->linked = true;
     /* Retroactively set IOSQE_IO_LINK on the SQE that was already prepped
      * during submission. The SQE is still in the SQ ring because
@@ -2847,9 +2865,10 @@ void aura_request_set_linked(aura_request_t *req) {
     }
     /* Pin subsequent submissions to the same ring so linked SQEs share
      * one submission queue. tls_link_ring is checked in submit_begin(). */
-    if (!tls_last_ring) return; /* No prior submission on this thread */
+    if (!tls_last_ring) return 0; /* No prior submission on this thread */
     tls_link_ring = tls_last_ring;
     tls_link_depth++;
+    return 0;
 }
 
 bool aura_request_is_linked(const aura_request_t *req) {

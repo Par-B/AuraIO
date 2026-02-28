@@ -116,7 +116,11 @@ File descriptor registration follows the same pattern as buffer registration, wi
 ## Recommended Pattern
 
 1. Submit operations and handle immediate errors (NULL return + errno).
-2. Use `poll`/`wait` loop to process completions.
+2. Use `aura_pending_count()` to drive wait loops — it returns the number of in-flight operations across all rings, making termination conditions explicit:
+   ```c
+   while (aura_pending_count(engine) > 0)
+       aura_wait(engine, 100);
+   ```
 3. Treat callback result as source of truth for operation success/failure.
 4. For shutdown: `aura_drain(engine, -1)` ensures all pending I/O completes.
 5. For registered buffers: use deferred unregister from callbacks, synchronous from main thread.

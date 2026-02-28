@@ -212,7 +212,7 @@ int main(void) {
     int fd = open("/etc/hostname", O_RDONLY);
     aura_read(engine, fd, aura_buf(buf), 4096, 0, on_read, NULL);
 
-    while (!done) aura_wait(engine, 100);
+    while (aura_pending_count(engine) > 0) aura_wait(engine, 100);
 
     printf("Content: %s", (char *)buf);
 
@@ -416,8 +416,9 @@ Run `make deps` to install all build and test dependencies, or `make deps-check`
 
 | Function | Description |
 |----------|-------------|
-| `aura_create()` | Create engine with auto-detected settings |
+| `aura_create()` | Create engine with auto-detected settings — ring count, queue depth, and AIMD tuning are all configured automatically. Suitable for most workloads with no further configuration. |
 | `aura_read()` / `aura_write()` | Submit async I/O |
+| `aura_pending_count()` | Return number of in-flight operations (useful for wait loops) |
 | `aura_wait()` | Wait for completions |
 | `aura_destroy()` | Clean up (waits for pending ops) |
 

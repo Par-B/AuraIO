@@ -125,6 +125,8 @@ free(buf2);
 
 File descriptor registration (`aura_register_files`) follows the same lifecycle pattern, eliminating kernel fd-table lookups on every I/O submission. Registered files additionally support `aura_update_file(engine, index, new_fd)` for hot-swapping individual slots without unregistering the entire set.
 
+**Auto-detection cost**: When files are registered, `aura_read()`/`aura_write()` auto-detect registered fds by scanning the fixed file table (O(n) linear scan) under an rwlock on each submission. When no files are registered at all, an atomic flag (`memory_order_acquire`) short-circuits the entire lookup. To avoid the scan on hot paths, pass `AURA_FIXED_FILE` in the flags parameter along with the registered index directly — this skips both the scan and the rwlock (O(1)).
+
 ## Concurrency Model
 
 AuraIO employs a **Shared-Nothing (mostly)** architecture.

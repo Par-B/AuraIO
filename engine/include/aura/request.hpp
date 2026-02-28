@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file request.hpp
  * @brief Request wrapper class for AuraIO C++ bindings
@@ -24,22 +23,18 @@ namespace aura {
  * by the Engine internally.
  */
 class Request {
-public:
+  public:
     /**
      * Check if request is still pending
      * @return True if request is still in-flight
      */
-    [[nodiscard]] bool pending() const noexcept {
-        return handle_ && aura_request_pending(handle_);
-    }
+    [[nodiscard]] bool pending() const noexcept { return handle_ && aura_request_pending(handle_); }
 
     /**
      * Get file descriptor associated with request
      * @return File descriptor, or -1 if invalid
      */
-    [[nodiscard]] int fd() const noexcept {
-        return handle_ ? aura_request_fd(handle_) : -1;
-    }
+    [[nodiscard]] int fd() const noexcept { return handle_ ? aura_request_fd(handle_) : -1; }
 
     /**
      * Get operation type of request
@@ -54,9 +49,13 @@ public:
      *
      * The next submission on this thread will be chained via IOSQE_IO_LINK.
      * The chained op won't start until this one completes successfully.
+     * Requires AURA_SELECT_THREAD_LOCAL ring selection mode.
+     *
+     * @return true on success, false if engine is not in THREAD_LOCAL mode
      */
-    void set_linked() noexcept {
-        if (handle_) aura_request_set_linked(handle_);
+    [[nodiscard]] bool set_linked() noexcept {
+        if (!handle_) return false;
+        return aura_request_set_linked(handle_) == 0;
     }
 
     /**
@@ -71,13 +70,13 @@ public:
      * Get underlying C request handle
      * @return Pointer to aura_request_t
      */
-    [[nodiscard]] aura_request_t* handle() noexcept { return handle_; }
+    [[nodiscard]] aura_request_t *handle() noexcept { return handle_; }
 
     /**
      * Get underlying C request handle (const)
      * @return Pointer to const aura_request_t
      */
-    [[nodiscard]] const aura_request_t* handle() const noexcept { return handle_; }
+    [[nodiscard]] const aura_request_t *handle() const noexcept { return handle_; }
 
     /**
      * Check if request handle is valid
@@ -93,12 +92,12 @@ public:
      *
      * @param h C request handle
      */
-    explicit Request(aura_request_t* h) noexcept : handle_(h) {}
+    explicit Request(aura_request_t *h) noexcept : handle_(h) {}
 
-private:
+  private:
     friend class Engine;
 
-    aura_request_t* handle_ = nullptr;
+    aura_request_t *handle_ = nullptr;
 };
 
 } // namespace aura
