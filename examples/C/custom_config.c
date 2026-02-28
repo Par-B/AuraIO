@@ -90,11 +90,13 @@ void run_workload(aura_engine_t *engine, int fd, const char *config_name) {
         }
 
         /* Poll for completions */
-        aura_poll(engine);
+        int poll_rc_ = aura_poll(engine);
+        (void)poll_rc_;
 
         /* If we're done submitting, wait for remaining completions */
         if (submitted >= NUM_OPS && completed < NUM_OPS) {
-            aura_wait(engine, 1);
+            int wait_rc_ = aura_wait(engine, 1);
+            (void)wait_rc_;
         }
     }
 

@@ -123,7 +123,8 @@ int main(int argc, char *argv[]) {
 
         /* Wait for read to complete */
         while (!read_state.done) {
-            aura_wait(engine, 100);
+            int wait_rc_ = aura_wait(engine, 100);
+            (void)wait_rc_;
         }
 
         if (read_state.result <= 0) {
@@ -148,7 +149,8 @@ int main(int argc, char *argv[]) {
 
         /* Wait for write to complete */
         while (!write_state.done) {
-            aura_wait(engine, 100);
+            int wait_rc_ = aura_wait(engine, 100);
+            (void)wait_rc_;
         }
 
         if (write_state.result < 0) {
@@ -184,7 +186,8 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "fsync submission failed: %s\n", strerror(errno));
         } else {
             while (!fsync_state.done) {
-                aura_wait(engine, 100);
+                int wait_rc_ = aura_wait(engine, 100);
+                (void)wait_rc_;
             }
             if (fsync_state.result < 0) {
                 fprintf(stderr, "fsync failed: %s\n", strerror(-(int)fsync_state.result));

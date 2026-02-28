@@ -103,7 +103,8 @@ int main(int argc, char **argv) {
     /* Wait for completion */
     printf("Waiting for completion...\n");
     while (!state.done) {
-        aura_wait(engine, 100); /* 100ms timeout */
+        int wait_rc_ = aura_wait(engine, 100); /* 100ms timeout */
+        (void)wait_rc_;
     }
 
     /* Show first few bytes of data */

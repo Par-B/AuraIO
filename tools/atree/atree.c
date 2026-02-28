@@ -878,7 +878,8 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
     /* Drain openat completions */
     while (atomic_load(&obatch.remaining) > 0 && !g_interrupted) {
         if (aura_poll(engine) == 0) {
-            aura_wait(engine, 1);
+            int wait_rc_ = aura_wait(engine, 1);
+            (void)wait_rc_;
         }
     }
 
@@ -976,7 +977,8 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
             /* Drain statx completions */
             while (atomic_load(&batch->remaining) > 0 && !g_interrupted) {
                 if (aura_poll(engine) == 0) {
-                    aura_wait(engine, 1);
+                    int wait_rc_ = aura_wait(engine, 1);
+                    (void)wait_rc_;
                 }
             }
             free(batch);
@@ -1013,7 +1015,8 @@ static void process_dir_batch(tree_node_t **dirs, size_t ndirs, aura_engine_t *e
     /* Drain async close completions */
     while (atomic_load(&cbatch.remaining) > 0 && !g_interrupted) {
         if (aura_poll(engine) == 0) {
-            aura_wait(engine, 1);
+            int wait_rc_ = aura_wait(engine, 1);
+            (void)wait_rc_;
         }
     }
 }

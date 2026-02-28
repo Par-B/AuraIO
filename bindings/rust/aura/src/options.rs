@@ -15,6 +15,8 @@ pub enum RingSelect {
     CpuLocal,
     /// Atomic round-robin across all rings (max single-thread scaling)
     RoundRobin,
+    /// Thread-local ring assignment (one ring per thread, no contention)
+    ThreadLocal,
 }
 
 impl RingSelect {
@@ -23,6 +25,7 @@ impl RingSelect {
             RingSelect::Adaptive => aura_sys::aura_ring_select_t_AURA_SELECT_ADAPTIVE,
             RingSelect::CpuLocal => aura_sys::aura_ring_select_t_AURA_SELECT_CPU_LOCAL,
             RingSelect::RoundRobin => aura_sys::aura_ring_select_t_AURA_SELECT_ROUND_ROBIN,
+            RingSelect::ThreadLocal => aura_sys::aura_ring_select_t_AURA_SELECT_THREAD_LOCAL,
         }
     }
 }

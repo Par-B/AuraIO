@@ -87,7 +87,8 @@ int main(void) {
 
     /* Wait for completion */
     while (!done) {
-        aura_wait(engine, 100);
+        int wait_rc_ = aura_wait(engine, 100);
+        (void)wait_rc_;
     }
 
     /* Verify result */

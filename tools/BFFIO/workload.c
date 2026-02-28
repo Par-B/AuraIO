@@ -661,13 +661,15 @@ static void *worker_thread(void *arg) {
          * The first callback in this poll cycle will call now_ns() once;
          * subsequent callbacks reuse that timestamp. */
         tls_completion_ns = 0;
-        aura_poll(engine);
+        int poll_rc_ = aura_poll(engine);
+        (void)poll_rc_;
     }
 
     /* Drain remaining inflight I/O for this thread */
     while (atomic_load(&stats->inflight) > 0) {
         tls_completion_ns = 0;
-        aura_wait(engine, 1);
+        int wait_rc_ = aura_wait(engine, 1);
+        (void)wait_rc_;
     }
 
     /* Pool destruction is deferred to workload_run (after aura_drain)
@@ -898,7 +900,8 @@ int workload_run(const job_config_t *config, aura_engine_t *engine, thread_stats
     }
 
     /* Final drain to ensure all completions are processed */
-    aura_drain(engine, 5000);
+    int drain_rc_ = aura_drain(engine, 5000);
+    (void)drain_rc_;
 
     /* Free pre-allocated buffers, per-file offsets, then destroy pools */
     for (int i = 0; i < num_threads; i++) {

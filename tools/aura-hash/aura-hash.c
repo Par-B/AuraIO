@@ -569,7 +569,8 @@ static int hash_pipeline(hash_ctx_t *ctx) {
 
     /* Drain remaining ops */
     while (ctx->active_ops > 0) {
-        aura_wait(ctx->engine, 100);
+        int wait_rc_ = aura_wait(ctx->engine, 100);
+        (void)wait_rc_;
     }
 
     return ctx->error;

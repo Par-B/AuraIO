@@ -783,7 +783,8 @@ static int copy_pipeline(copy_ctx_t *ctx) {
     /* Drain remaining ops if we're exiting due to error/interrupt */
     if (ctx->active_ops > 0) {
         while (ctx->active_ops > 0) {
-            aura_wait(ctx->engine, 100);
+            int wait_rc_ = aura_wait(ctx->engine, 100);
+            (void)wait_rc_;
         }
     }
 

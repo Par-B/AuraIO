@@ -93,7 +93,8 @@ int main(int argc, char *argv[]) {
 
     /* Wait for the completion callback */
     while (!completed) {
-        aura_wait(engine, 100);
+        int wait_rc_ = aura_wait(engine, 100);
+        (void)wait_rc_;
     }
 
     printf("Final result: %zd (%s)\n", read_result,

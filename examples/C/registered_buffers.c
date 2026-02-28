@@ -77,11 +77,13 @@ double run_benchmark(aura_engine_t *engine, int fd, int use_registered, void *un
         }
 
         /* Poll for completions */
-        aura_poll(engine);
+        int poll_rc_ = aura_poll(engine);
+        (void)poll_rc_;
 
         /* If we're done submitting, wait for remaining completions */
         if (submitted >= NUM_OPS && completed < NUM_OPS) {
-            aura_wait(engine, 1);
+            int wait_rc_ = aura_wait(engine, 1);
+            (void)wait_rc_;
         }
     }
 
@@ -246,7 +248,8 @@ int main(void) {
     }
 
     /* Wait a bit to ensure unregister completes */
-    aura_wait(engine_reg, 100);
+    int wait_rc_ = aura_wait(engine_reg, 100);
+    (void)wait_rc_;
 
     printf("  Buffers unregistered.\n");
 

@@ -130,7 +130,8 @@ int run_write_test(const char *filename, int use_direct) {
 
     /* Wait for all completions */
     while (state.completed < state.total) {
-        aura_wait(engine, 100);
+        int wait_rc_ = aura_wait(engine, 100);
+        (void)wait_rc_;
     }
 
     /* Calculate results */
@@ -154,7 +155,8 @@ int run_write_test(const char *filename, int use_direct) {
         aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, 0, on_write_done, &fsync_state);
     if (fsync_req) {
         while (fsync_state.completed < fsync_state.total) {
-            aura_wait(engine, 100);
+            int wait_rc_ = aura_wait(engine, 100);
+            (void)wait_rc_;
         }
     } else {
         fprintf(stderr, "Fsync submission failed: %s\n", strerror(errno));

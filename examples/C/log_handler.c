@@ -175,7 +175,10 @@ int main(void) {
     if (!req) {
         aura_log_emit(AURA_LOG_ERR, "aura_read failed: %s", strerror(errno));
     } else {
-        while (!io_completed) aura_wait(engine, 100);
+        while (!io_completed) {
+            int wait_rc_ = aura_wait(engine, 100);
+            (void)wait_rc_;
+        }
         aura_log_emit(AURA_LOG_INFO, "read completed successfully");
     }
 

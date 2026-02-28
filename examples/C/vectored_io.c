@@ -124,7 +124,8 @@ int main(void) {
 
     /* Wait for write completion */
     while (!write_ctx.done) {
-        aura_wait(engine, 10);
+        int wait_rc_ = aura_wait(engine, 10);
+        (void)wait_rc_;
     }
 
     printf("  Header (%zu bytes): %s\n", write_iov[0].iov_len, header);
@@ -189,7 +190,8 @@ int main(void) {
 
     /* Wait for read completion */
     while (!read_ctx.done) {
-        aura_wait(engine, 10);
+        int wait_rc_ = aura_wait(engine, 10);
+        (void)wait_rc_;
     }
 
     printf("  Header (%zu bytes): %s\n", read_iov[0].iov_len, read_header);
