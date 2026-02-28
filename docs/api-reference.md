@@ -91,7 +91,8 @@ typedef struct {
   int sqpoll_idle_ms;
   aura_ring_select_t ring_select;
   bool single_thread;
-  uint32_t _reserved[7];
+  int batch_threshold;
+  uint32_t _reserved[6];
 } aura_options_t;
 ```
 
@@ -109,6 +110,7 @@ typedef struct {
 | `sqpoll_idle_ms` | `int` | 1000 | SQPOLL idle timeout before kernel thread sleeps |
 | `ring_select` | `aura_ring_select_t` | `AURA_SELECT_ADAPTIVE` | Ring selection mode (see below) |
 | `single_thread` | `bool` | false | Skip ring mutexes (caller guarantees single-thread access) |
+| `batch_threshold` | `int` | -1 | Batch flush threshold: -1 = auto-tune (default), 0 = never auto-flush, >0 = fixed threshold |
 
 Always initialize with `aura_options_init()` before modifying fields.
 
@@ -127,7 +129,8 @@ Always initialize with `aura_options_init()` before modifying fields.
 typedef enum {
   AURA_SELECT_ADAPTIVE = 0,
   AURA_SELECT_CPU_LOCAL,
-  AURA_SELECT_ROUND_ROBIN
+  AURA_SELECT_ROUND_ROBIN,
+  AURA_SELECT_THREAD_LOCAL
 } aura_ring_select_t;
 ```
 
@@ -136,6 +139,7 @@ typedef enum {
 | `AURA_SELECT_ADAPTIVE` | Default. Uses CPU-local ring until congested (>75% of in-flight limit). If local load > 2x average, stays local (outlier). Otherwise, spills via power-of-two random choice to the lighter of two non-local rings. Best for most workloads. |
 | `AURA_SELECT_CPU_LOCAL` | Strict CPU affinity. Best for NUMA-sensitive workloads where cross-node traffic is expensive. Single-thread throughput is limited to one ring. |
 | `AURA_SELECT_ROUND_ROBIN` | Always distributes via atomic round-robin. Best for single-thread event loops or benchmarks that need maximum ring utilization from fewer threads. |
+| `AURA_SELECT_THREAD_LOCAL` | Thread-local ring ownership. Each thread claims a ring on first submission and reuses it exclusively. Rings use SINGLE_ISSUER for kernel optimization. Eliminates all mutex contention and eventfd overhead. Best for fixed thread pools where each thread does its own submit+poll. Not suitable for dynamic thread pools or cross-thread completion harvesting. |
 
 ### Buffer Descriptor
 
@@ -187,6 +191,7 @@ Submit flags control I/O submission behavior. Pass `0` for default behavior (aut
 
 | Flag | Value | Description |
 |------|-------|-------------|
+| `AURA_NO_FLAGS` | `0` | No submit flags; pass for default behavior. |
 | `AURA_FIXED_FILE` | `1 << 0` | The `fd` argument is a registered file index, not a raw fd. Skips auto-detection and sets `IOSQE_FIXED_FILE` directly. |
 
 ### Flag Constants
@@ -223,6 +228,7 @@ Submit flags control I/O submission behavior. Pass `0` for default behavior (aut
 
 | Constant | Value | Description |
 |----------|-------|-------------|
+| `AURA_STATX_TYPE` | `0x01` | Request stx_type (file type) |
 | `AURA_STATX_MODE` | `0x02` | Request `stx_mode` |
 | `AURA_STATX_NLINK` | `0x04` | Request `stx_nlink` |
 | `AURA_STATX_UID` | `0x08` | Request `stx_uid` |
@@ -230,8 +236,10 @@ Submit flags control I/O submission behavior. Pass `0` for default behavior (aut
 | `AURA_STATX_ATIME` | `0x20` | Request `stx_atime` |
 | `AURA_STATX_MTIME` | `0x40` | Request `stx_mtime` |
 | `AURA_STATX_CTIME` | `0x80` | Request `stx_ctime` |
+| `AURA_STATX_INO` | `0x100` | Request stx_ino |
 | `AURA_STATX_SIZE` | `0x200` | Request `stx_size` |
 | `AURA_STATX_BLOCKS` | `0x400` | Request `stx_blocks` |
+| `AURA_STATX_BTIME` | `0x800` | Request stx_btime (birth/creation time) |
 | `AURA_STATX_ALL` | `0xFFF` | Request all basic fields |
 
 #### Open Flags (for `aura_openat` flags parameter)
@@ -360,10 +368,10 @@ The histogram uses a tiered bucket layout to provide fine-grained resolution at 
 | Macro | Value | Description |
 |-------|-------|-------------|
 | `AURA_VERSION_MAJOR` | 0 | Major version |
-| `AURA_VERSION_MINOR` | 4 | Minor version |
+| `AURA_VERSION_MINOR` | 6 | Minor version |
 | `AURA_VERSION_PATCH` | 0 | Patch version |
-| `AURA_VERSION` | 400 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURA_VERSION_STRING` | `"0.5.0"` | Version string |
+| `AURA_VERSION` | 600 | Combined: `major * 10000 + minor * 100 + patch` |
+| `AURA_VERSION_STRING` | `"0.6.0"` | Version string |
 
 #### AIMD Phase Constants
 
@@ -643,7 +651,7 @@ Submit an async close. Callback receives 0 on success, negative errno on failure
 
 ```c
 aura_request_t *aura_statx(aura_engine_t *engine, int dirfd,
-                            const char *pathname, int lookup_flags,
+                            const char *pathname, int statx_flags,
                             unsigned int mask, struct statx *statxbuf,
                             aura_submit_flags_t flags,
                             aura_callback_t callback, void *user_data);
@@ -656,7 +664,7 @@ Submit an async statx. Retrieves file metadata into the caller-provided statx bu
 | `engine` | `aura_engine_t *` | Engine handle |
 | `dirfd` | `int` | Directory fd (`AT_FDCWD` for current directory) |
 | `pathname` | `const char *` | Path (relative to `dirfd`; `""` with `AURA_AT_EMPTY_PATH` for fd-based stat) |
-| `lookup_flags` | `int` | Lookup flags (`AURA_AT_EMPTY_PATH`, `AURA_AT_SYMLINK_NOFOLLOW`) |
+| `statx_flags` | `int` | Lookup flags (`AURA_AT_EMPTY_PATH`, `AURA_AT_SYMLINK_NOFOLLOW`) |
 | `mask` | `unsigned int` | Requested fields (`AURA_STATX_SIZE`, `AURA_STATX_MTIME`, `AURA_STATX_ALL`, etc.) |
 | `statxbuf` | `struct statx *` | Output buffer -- kernel writes directly here |
 | `flags` | `aura_submit_flags_t` | Submit flags (`0` for default, `AURA_FIXED_FILE` for registered index) |
@@ -868,7 +876,7 @@ Check if a request is marked as linked.
 ##### `aura_get_poll_fd`
 
 ```c
-int aura_get_poll_fd(aura_engine_t *engine);
+int aura_get_poll_fd(const aura_engine_t *engine);
 ```
 
 Get a pollable file descriptor for event loop integration. Becomes readable when completions are available. Uses level-triggered semantics: remains readable as long as unprocessed completions exist. Compatible with epoll (`EPOLLIN`), poll (`POLLIN`), and select.
@@ -1333,7 +1341,7 @@ Emit a log message through the registered handler. No-op when no handler is regi
 const char *aura_version(void);
 ```
 
-**Returns:** Version string (e.g., `"0.5.0"`).
+**Returns:** Version string (e.g., `"0.6.0"`).
 
 ---
 
@@ -1343,7 +1351,7 @@ const char *aura_version(void);
 int aura_version_int(void);
 ```
 
-**Returns:** Version as integer: `major * 10000 + minor * 100 + patch` (e.g., 400).
+**Returns:** Version as integer: `major * 10000 + minor * 100 + patch` (e.g., 600).
 
 ---
 
@@ -1740,7 +1748,7 @@ When `co_await`ed, submits the fsync and suspends. Resumes with `void`. Throws `
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `aura::version()` | `const char*` | Library version string (e.g., `"0.5.0"`) |
+| `aura::version()` | `const char*` | Library version string (e.g., `"0.6.0"`) |
 | `aura::version_int()` | `int` | Version as integer (`major * 10000 + minor * 100 + patch`) |
 
 ---
@@ -2151,6 +2159,15 @@ AuraIO uses a **multi-submitter, single-poller** threading model:
 ## Callback Rules
 
 Rules that apply to completion callbacks across all API surfaces:
+
+#### Auto-deferred in callbacks
+
+The following functions detect when called from a completion callback context and automatically degrade to the deferred (non-blocking) path:
+
+| Function | Behavior in callback context |
+|----------|------------------------------|
+| `aura_unregister()` | Detects callback context and automatically degrades to the deferred (non-blocking) path. Equivalent to calling `aura_request_unregister()`. |
+
 
 1. **Callbacks may submit new I/O.** It is safe to call `aura_read()`, `aura_write()`, `aura_fsync()`, `aura_openat()`, `aura_close()`, and other submission functions from within a callback.
 

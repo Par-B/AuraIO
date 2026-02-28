@@ -24,15 +24,15 @@ Output matches the coreutils format:
 <hex_digest>  <filename>
 ```
 
-Two spaces separate the digest from the filename.
+Two spaces separate the digest from the filename. When hashing multiple files concurrently, output order is non-deterministic — use `sort` if a stable ordering is required (see the verification example below).
 
 ## OPTIONS
 
 | Option | Description |
 |--------|-------------|
 | `-a`, `--algorithm ALG` | Hash algorithm: `sha256` (default), `sha1`, `md5` |
-| `-r`, `--recursive` | Hash directories recursively (follows symlinks) |
-| `-d`, `--direct` | Use O_DIRECT to bypass the page cache |
+| `-r`, `--recursive` | Hash directories recursively (follows symlinks). Follows symlinks during traversal; symlink cycles are not detected. |
+| `-d`, `--direct` | Use O_DIRECT to bypass the page cache. Requires buffer-aligned block sizes (default 256K satisfies this). Non-aligned block sizes may cause I/O errors with O_DIRECT. |
 | `-b`, `--block-size N` | Read chunk size. Default: `256K`. Suffixes: `K`, `M`, `G` |
 | `-p`, `--pipeline N` | In-flight read slots per worker. Default: `8`, max: `64` |
 | `-q`, `--quiet` | Suppress progress output on stderr |

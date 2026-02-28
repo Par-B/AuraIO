@@ -90,7 +90,7 @@ cd examples/rust && cargo build --examples
 
 ### Advanced Features
 
-**[custom_config.c](C/custom_config.c)** ⭐ NEW - Configuration tuning
+**[custom_config.c](C/custom_config.c)** - Configuration tuning
 - Shows `aura_create_with_options()` for custom engine configuration
 - Demonstrates 5 different configurations:
   - **Default**: Auto-configured for system
@@ -101,13 +101,13 @@ cd examples/rust && cargo build --examples
 - Includes performance comparison between configurations
 - **When to use**: Production deployments, workload-specific tuning
 
-**[vectored_io.c](C/vectored_io.c)** ⭐ NEW - Scatter-gather I/O
+**[vectored_io.c](C/vectored_io.c)** - Scatter-gather I/O
 - Demonstrates `aura_readv()` and `aura_writev()`
 - Shows efficient multi-buffer operations in single syscall
 - Example use case: Database page operations (header + data in separate buffers)
 - **When to use**: Reading/writing structured file formats, log files with separate metadata/payload sections, reducing syscall overhead when accessing non-contiguous data regions
 
-**[registered_buffers.c](C/registered_buffers.c)** ⭐ NEW - Zero-copy optimization
+**[registered_buffers.c](C/registered_buffers.c)** - Zero-copy optimization
 - Pre-registers buffers with `aura_register_buffers()`
 - Uses `aura_buf_fixed()` for zero-copy I/O
 - Demonstrates deferred unregister pattern (`aura_request_unregister(engine, AURA_REG_BUFFERS)`)
@@ -179,7 +179,7 @@ cd examples/rust && cargo build --examples
 
 ### Advanced Features
 
-**[custom_config.cpp](cpp/custom_config.cpp)** ⭐ NEW - Configuration tuning (C++)
+**[custom_config.cpp](cpp/custom_config.cpp)** - Configuration tuning (C++)
 - Uses `auraio::Options` builder pattern for custom engine configuration
 - Demonstrates 5 different configurations:
   - **Default**: Auto-configured for system
@@ -190,14 +190,14 @@ cd examples/rust && cargo build --examples
 - Includes performance comparison between configurations
 - **When to use**: Production deployments, workload-specific tuning
 
-**[vectored_io.cpp](cpp/vectored_io.cpp)** ⭐ NEW - Scatter-gather I/O (C++)
+**[vectored_io.cpp](cpp/vectored_io.cpp)** - Scatter-gather I/O (C++)
 - Demonstrates `engine.readv()` and `engine.writev()` with `std::span<const iovec>`
 - Shows efficient multi-buffer operations in single syscall
 - Example use case: Database page operations (header + data in separate buffers)
 - Uses `std::array` and `std::vector` for buffer management
 - **When to use**: Reading/writing structured file formats, log files with separate metadata/payload sections
 
-**[registered_buffers.cpp](cpp/registered_buffers.cpp)** ⭐ NEW - Zero-copy optimization (C++)
+**[registered_buffers.cpp](cpp/registered_buffers.cpp)** - Zero-copy optimization (C++)
 - Pre-registers buffers with `engine.register_buffers(std::span<const iovec>)`
 - Uses `auraio::buf_fixed(idx, offset)` for zero-copy I/O
 - Demonstrates deferred unregister pattern (`engine.request_unregister(AURA_REG_BUFFERS)`)
@@ -263,7 +263,7 @@ cd examples/rust && cargo build --examples
 
 ### Advanced Features
 
-**[custom_config.rs](rust/examples/custom_config.rs)** ⭐ NEW - Configuration tuning (Rust)
+**[custom_config.rs](rust/examples/custom_config.rs)** - Configuration tuning (Rust)
 - Uses `Options::new()` builder pattern for custom engine configuration
 - Demonstrates 5 different configurations:
   - **Default**: Auto-configured for system
@@ -274,14 +274,14 @@ cd examples/rust && cargo build --examples
 - Includes performance comparison between configurations
 - **When to use**: Production deployments, workload-specific tuning
 
-**[vectored_io.rs](rust/examples/vectored_io.rs)** ⭐ NEW - Scatter-gather I/O (Rust)
+**[vectored_io.rs](rust/examples/vectored_io.rs)** - Scatter-gather I/O (Rust)
 - Demonstrates `engine.readv()` and `engine.writev()` with `&[libc::iovec]`
 - Shows efficient multi-buffer operations in single syscall
 - Example use case: Database page operations (header + data in separate buffers)
 - Uses `Vec<u8>` for buffer management
 - **When to use**: Reading/writing structured file formats, log files with separate metadata/payload sections
 
-**[registered_buffers.rs](rust/examples/registered_buffers.rs)** ⭐ NEW - Zero-copy optimization (Rust)
+**[registered_buffers.rs](rust/examples/registered_buffers.rs)** - Zero-copy optimization (Rust)
 - Pre-registers buffers with `engine.register_buffers(&[&mut [u8]])`
 - Uses `BufferRef::fixed(idx, offset)` for zero-copy I/O
 - Demonstrates deferred unregister pattern (`engine.request_unregister_buffers()`)
@@ -380,14 +380,13 @@ The **file copy** examples demonstrate each language's idiomatic approach to asy
 
 ## Performance Notes
 
-All examples automatically benefit from recent performance optimizations in AuraIO v0.1.0:
+AuraIO is designed to deliver high performance through several architectural choices:
 
 - **Cache-line alignment** eliminates false sharing between concurrent operations
 - **Atomic fast-paths** skip lock overhead when features are unused
 - **Thread-local caching** improves buffer allocation performance
-- **Result**: ~16% higher throughput with zero code changes
 
-**No API changes required** - existing code runs faster automatically.
+**No API changes required** - the library's internals handle performance optimization automatically.
 
 ---
 
@@ -465,10 +464,10 @@ All examples automatically benefit from recent performance optimizations in Aura
 
 ## Additional Resources
 
-- **API Reference**: See [include/auraio.h](../include/auraio.h) for complete API documentation
-- **Architecture**: See [docs/CODEBASE_MAP.md](../docs/CODEBASE_MAP.md) for internal design
+- **API Reference**: See [engine/include/aura.h](../engine/include/aura.h) for complete API documentation
+- **Architecture**: See [docs/architecture.md](../docs/architecture.md) for internal design
 - **Performance**: See [docs/performance.md](../docs/performance.md) for benchmarks and tuning guide
 
 ---
 
-**Questions or Issues?** Check `/help` in Claude Code or report issues at https://github.com/anthropics/claude-code/issues
+**Questions or Issues?** Report issues at https://github.com/Par-B/AuraIO/issues

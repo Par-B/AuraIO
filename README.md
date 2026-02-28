@@ -49,8 +49,9 @@ process_data(buf, n);
 
 **After (async):**
 ```c
-aura_read(engine, fd, aura_buf(buf), len, offset, on_complete, ctx);
-aura_wait(engine, -1);  // Or integrate with your event loop
+aura_read(engine, fd, aura_buf(buf), len, offset, 0, on_complete, ctx);
+while (aura_pending_count(engine) > 0)
+    aura_wait(engine, 100);  // Or integrate with your event loop
 
 void on_complete(aura_request_t *req, ssize_t n, void *ctx) {
     if (n < 0) handle_error(-n);
@@ -69,6 +70,10 @@ void on_complete(aura_request_t *req, ssize_t n, void *ctx) {
 | **Multi-core scaling** | Manual ring-per-core setup | Automatic per-CPU rings with CPU-aware routing |
 | **Changing conditions** | Re-benchmark when storage or load changes | Adapts in seconds — noisy neighbors, phase changes, thermal throttling |
 | **Buffer management** | Roll your own allocator | Built-in scalable pool with thread-local caching |
+| **Overhead** | Always-on bookkeeping | Passthrough-first: near-zero overhead until pressure is detected |
+| **Language support** | C-only or manual bindings | Triple API: C11, C++20 (with coroutines), and Rust (with async/await) |
+| **Observability** | DIY metrics | Built-in Prometheus, OpenTelemetry, and syslog exporters |
+| **Thread safety** | External locking | Thread-safe submission; event-loop integration via pollable fd |
 
 ## Three APIs: C, C++, and Rust
 
@@ -82,7 +87,7 @@ For databases, storage engines, proxies, and infrastructure:
 aura_engine_t *engine = aura_create();
 void *buf = aura_buffer_alloc(engine, 4096);
 
-aura_read(engine, fd, aura_buf(buf), 4096, 0, callback, user_data);
+aura_read(engine, fd, aura_buf(buf), 4096, 0, 0, callback, user_data);
 aura_wait(engine, -1);
 
 aura_buffer_free(engine, buf);
@@ -130,6 +135,8 @@ use std::os::unix::io::AsRawFd;
 fn main() -> Result<()> {
     let engine = Engine::new()?;
     let buf = engine.allocate_buffer(4096)?;
+    let file = std::fs::File::open("/etc/hostname").unwrap();
+    let fd = file.as_raw_fd();
 
     unsafe {
         engine.read(fd, (&buf).into(), 4096, 0, |result| {
@@ -175,19 +182,6 @@ async fn copy_file(engine: &Engine, src: i32, dst: i32) -> aura::Result<()> {
 | Rust application | **Rust** | Memory safety, async/await, cargo integration |
 | Uncertain | **C++** or **Rust** | Both offer RAII and modern patterns |
 
-## Features
-
-- **Passthrough-First AIMD** — Starts with zero overhead; engages AIMD only when I/O pressure is detected
-- **Zero Configuration** — Automatically detects cores, allocates rings, sizes queues
-- **Per-Core Rings** — One io_uring per CPU eliminates cross-core contention
-- **Smart Ring Selection** — Three modes: ADAPTIVE (CPU-local with overflow spilling), CPU_LOCAL (strict affinity), ROUND_ROBIN (max scaling)
-- **Scalable Buffer Pool** — Thread-local caches, auto-scaling shards
-- **Triple API** — C for systems, C++ for applications, Rust for safety
-- **Coroutine Support** — C++20 `co_await` and Rust async/await
-- **Thread-Safe** — Multiple threads can submit concurrently
-- **Event Loop Integration** — Pollable fd for epoll
-- **Prometheus Metrics** — Built-in exporter with per-ring stats, latency histograms, AIMD phase
-
 ## Quick Start
 
 ### C Example
@@ -210,7 +204,7 @@ int main(void) {
     void *buf = aura_buffer_alloc(engine, 4096);
 
     int fd = open("/etc/hostname", O_RDONLY);
-    aura_read(engine, fd, aura_buf(buf), 4096, 0, on_read, NULL);
+    aura_read(engine, fd, aura_buf(buf), 4096, 0, 0, on_read, NULL);
 
     while (aura_pending_count(engine) > 0) aura_wait(engine, 100);
 
@@ -318,20 +312,6 @@ is more predictable than network RTT — fewer oscillations, faster convergence.
 
 **Result:** Page-cache and low-latency workloads run at near-raw io_uring speed. Workloads under pressure get automatic AIMD tuning. The transition is seamless and bidirectional.
 
-## Proving It: Adaptive Value Benchmark
-
-AuraIO includes a benchmark (`tests/adaptive_value`) that demonstrates where adaptive AIMD outperforms static depth tuning on real block devices:
-
-```bash
-make bench-adaptive                              # Full run on default temp file
-make bench-adaptive ADAPTIVE_BENCH_ARGS="--file /dev/nvme0n1 --duration 30"  # Real device
-```
-
-Three scenarios:
-1. **Noisy Neighbor** — Background writes create variable I/O pressure. Static depth either over-commits (P99 spikes) or under-commits (wastes IOPS). Adaptive backs off during noise, probes back up during quiet.
-2. **P99-Constrained Throughput** — Find max IOPS under a latency ceiling. Static requires sweeping across depths. Adaptive converges to the right depth automatically.
-3. **Workload Phase Change** — Sequential reads switch to random reads mid-run. Optimal depth changes dramatically. Adaptive reconverges in seconds.
-
 ## Installation
 
 ### C/C++ Library
@@ -354,30 +334,42 @@ g++ -std=c++20 myapp.cpp -laura -luring -lpthread -o myapp
 
 ### CMake
 
-**As a subdirectory** (git submodule or vendored copy):
-```cmake
-add_subdirectory(deps/auraio)
-target_link_libraries(myapp PRIVATE aura)
+AuraIO provides a `CMakeLists.txt` that builds **only the engine library** (no tools, bindings, or examples). This is the recommended integration path for C/C++ projects.
+
+**As a git submodule** (recommended for projects that vendor dependencies):
+
+```bash
+git submodule add https://github.com/Par-B/AuraIO.git extern/auraio
 ```
 
-**Via FetchContent** (downloaded at configure time):
+```cmake
+# Your project's CMakeLists.txt
+add_subdirectory(extern/auraio)
+target_link_libraries(myapp PRIVATE aura)
+# Header: <aura.h> (C) or <aura.hpp> / <aura/*.hpp> (C++)
+# Dependencies (liburing, pthreads) are linked transitively.
+```
+
+**Via FetchContent** (downloads at configure time):
+
 ```cmake
 include(FetchContent)
-FetchContent_Declare(aura
+FetchContent_Declare(auraio
     GIT_REPOSITORY https://github.com/Par-B/AuraIO.git
     GIT_TAG        main
 )
-FetchContent_MakeAvailable(aura)
+FetchContent_MakeAvailable(auraio)
 target_link_libraries(myapp PRIVATE aura)
 ```
 
-**Via find_package** (after `sudo make install`):
+**Via pkg-config** (after `sudo make install`):
 ```cmake
-find_package(aura REQUIRED)
-target_link_libraries(myapp PRIVATE aura::aura)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(AURA REQUIRED IMPORTED_TARGET libaura)
+target_link_libraries(myapp PRIVATE PkgConfig::AURA)
 ```
 
-Headers and link flags propagate automatically in all three cases. The library builds as static by default; pass `-DBUILD_SHARED_LIBS=ON` for a shared library.
+> **Note:** The submodule and FetchContent approaches require `liburing` to be installed on the system (`apt install liburing-dev` or equivalent). AuraIO's CMake build finds it via pkg-config.
 
 ### Rust Crate
 
@@ -386,10 +378,13 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Callback-based API (default):
-aura = { path = "path/to/auraio/bindings/rust/aura" }
+aura = { git = "https://github.com/Par-B/AuraIO.git", subdirectory = "bindings/rust/aura" }
 
 # Or with async/await support (enables Future-based async_read/async_write):
-aura = { path = "path/to/auraio/bindings/rust/aura", features = ["async"] }
+aura = { git = "https://github.com/Par-B/AuraIO.git", subdirectory = "bindings/rust/aura", features = ["async"] }
+
+# For local development, use a path dependency instead:
+# aura = { path = "../AuraIO/bindings/rust/aura" }
 ```
 
 Or build the Rust bindings from the repository:
@@ -410,16 +405,36 @@ make rust-examples  # Build Rust examples
 
 Run `make deps` to install all build and test dependencies, or `make deps-check` to verify what's installed.
 
+## Proving It: Adaptive Value Benchmark
+
+AuraIO includes a benchmark (`tests/adaptive_value`) that demonstrates where adaptive AIMD outperforms static depth tuning on real block devices:
+
+```bash
+make bench-adaptive                              # Full run on default temp file
+make bench-adaptive ADAPTIVE_BENCH_ARGS="--file /dev/nvme0n1 --duration 30"  # Real device
+```
+
+Three scenarios:
+1. **Noisy Neighbor** — Background writes create variable I/O pressure. Static depth either over-commits (P99 spikes) or under-commits (wastes IOPS). Adaptive backs off during noise, probes back up during quiet.
+2. **P99-Constrained Throughput** — Find max IOPS under a latency ceiling. Static requires sweeping across depths. Adaptive converges to the right depth automatically.
+3. **Workload Phase Change** — Sequential reads switch to random reads mid-run. Optimal depth changes dramatically. Adaptive reconverges in seconds.
+
 ## API Overview
 
 ### Core Operations (C)
 
 | Function | Description |
 |----------|-------------|
-| `aura_create()` | Create engine with auto-detected settings — ring count, queue depth, and AIMD tuning are all configured automatically. Suitable for most workloads with no further configuration. |
-| `aura_read()` / `aura_write()` | Submit async I/O |
+| `aura_create()` | Create engine with auto-detected settings — ring count, queue depth, and AIMD tuning are all configured automatically. |
+| `aura_read()` / `aura_write()` | Submit async read or write |
+| `aura_readv()` / `aura_writev()` | Submit vectored (scatter/gather) async I/O |
+| `aura_fsync()` | Submit async fsync/fdatasync |
+| `aura_cancel()` | Cancel a pending request |
 | `aura_pending_count()` | Return number of in-flight operations (useful for wait loops) |
-| `aura_wait()` | Wait for completions |
+| `aura_poll()` | Process completions without blocking |
+| `aura_wait()` | Wait for completions (with timeout) |
+| `aura_drain()` | Wait until all pending operations complete |
+| `aura_buffer_alloc()` / `aura_buffer_free()` | Allocate/free aligned I/O buffers from the built-in pool |
 | `aura_destroy()` | Clean up (waits for pending ops) |
 
 ### C++ Equivalents
@@ -440,7 +455,7 @@ Run `make deps` to install all build and test dependencies, or `make deps-check`
 | `engine.async_read(...).await` | Future-based async (requires `async` feature) |
 | `drop(engine)` | `aura_destroy()` |
 
-Full API documentation: [`docs/`](docs/)
+Full API documentation: [`docs/api-reference.md`](docs/api-reference.md)
 
 ## Incremental Adoption
 
@@ -459,7 +474,7 @@ Synchronous and async code coexist — call `aura_wait()` immediately after subm
 2. **Reuse buffers** — Freed buffers go to thread-local cache
 3. **Passthrough is instant** — No warmup needed for page-cache workloads; AIMD engages automatically only when pressure is detected
 4. **Batch submissions** — Submit multiple ops before waiting
-5. **Use vectored I/O** — Combine buffers with `readv`/`writev`
+5. **Use vectored I/O** — Combine buffers with `aura_readv`/`aura_writev`
 
 ## Tools
 
@@ -472,6 +487,7 @@ Build all tools with `make tools`, or individually:
 | **auracp** | `make auracp` | High-performance async file copy (C version). | — |
 | **auracp-cpp** | `make auracp-cpp` | High-performance async file copy (C++ version). | — |
 | **aura-hash** | `make aura-hash` | Parallel file checksum tool (SHA-256, SHA-1, MD5). | [docs/aura-hash.md](docs/aura-hash.md) |
+| **atree** | `make atree` | Directory tree with per-file stats (`tree` replacement using batched statx). | [tools/atree/](tools/atree/) |
 
 ## Integrations
 

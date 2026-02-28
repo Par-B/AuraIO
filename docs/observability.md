@@ -394,7 +394,7 @@ Buffer pool stats are fully lockless — they read atomics that are updated duri
 The latency histogram uses a **double-buffer swap** strategy. The AIMD controller periodically swaps the active and inactive histogram windows. `aura_get_histogram()` copies the *active* window, so:
 
 - You always get the most recent complete measurement window
-- The copy is ~1,280 bytes (320 buckets x 4 bytes) and takes ~200-500 ns under lock
+- The copy is 1,352 bytes and takes ~200-500 ns under lock
 - The swap itself is a single pointer exchange and does not affect I/O
 
 ---

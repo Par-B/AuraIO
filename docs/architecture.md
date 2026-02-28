@@ -20,6 +20,7 @@ A 1:1 mapping to a kernel `io_uring` submission/completion queue pair.
   - **ADAPTIVE** (default): Uses CPU-local ring normally. When the local ring is congested (>75% of in-flight limit), a two-gate check decides whether to spill: if the local ring's load is within 2x of the global average, pressure is broadly distributed and spilling won't help, so the thread stays local for cache benefits. If the local ring's load exceeds 2x the global average, the local ring is an outlier, so a power-of-two random choice picks the lighter of two random non-local rings. The tick thread computes average ring pending every 10ms. Zero overhead when load is balanced.
   - **CPU_LOCAL**: Strict CPU affinity via TLS-cached `sched_getcpu()` (refreshed every 32 submissions). Fallback: `pthread_self() % ring_count`. Best for NUMA-sensitive workloads.
   - **ROUND_ROBIN**: Always selects via `atomic_fetch_add(&next_ring) % ring_count`. Maximum single-thread scaling across all rings.
+  - **AURA_SELECT_THREAD_LOCAL**: Thread-local ring ownership. Each thread claims a ring on first submission and reuses it exclusively. Rings use SINGLE_ISSUER for kernel optimization. Eliminates all mutex contention and eventfd overhead. Best for fixed thread pools where each thread does submit+poll.
 
 ### 3. Adaptive Controller (`adaptive_controller_t`)
 A robust control system embedded within each ring that tunes in-flight limits and batching behavior in real-time.
@@ -61,8 +62,8 @@ struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
 aura_register_buffers(engine, iovs, 2);
 
 // Use by index — kernel skips page mapping
-aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
-aura_write(engine, fd, aura_buf_fixed(1, 0), 4096, offset, cb, ud);
+aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, 0, cb, ud);
+aura_write(engine, fd, aura_buf_fixed(1, 0), 4096, offset, 0, cb, ud);
 ```
 
 This is a separate system from the buffer pool:
@@ -172,6 +173,8 @@ AIMD finds the "Knee of the Curve" dynamically, adjusting to noisy neighbors or 
 
 ## Adoption Guide
 
+> For getting started, see [API-Quickstart.md](API-Quickstart.md). The examples below focus on architectural patterns.
+
 AuraIO is designed for **drop-in adoption** with minimal code changes. The library handles all the complexity of io_uring, adaptive tuning, and multi-core scheduling internally—your application just submits I/O and processes callbacks.
 
 ### Integration Points
@@ -209,7 +212,7 @@ process_data(buf, n);
 **After (AuraIO async I/O):**
 ```c
 // Non-blocking submission - thread continues immediately
-aura_read(engine, fd, aura_buf(buf), len, offset,
+aura_read(engine, fd, aura_buf(buf), len, offset, 0,
     my_callback, user_context);
 
 // Later: process completions (can batch hundreds)

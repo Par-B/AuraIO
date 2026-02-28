@@ -262,19 +262,19 @@ main.c
 
 ## File Reference
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `main.c` | ~265 | CLI parsing, help text, engine lifecycle |
-| `job_parser.h` | ~105 | `job_config_t`, `bench_config_t`, parse declarations |
-| `job_parser.c` | ~740 | .fio INI parser + CLI arg parser |
-| `workload.h` | ~100 | `io_ctx_t`, `io_ctx_pool_t`, `thread_ctx_t`, `file_set_t` |
-| `workload.c` | ~930 | I/O loop, callbacks, worker threads, file management |
-| `stats.h` | ~140 | `thread_stats_t`, `direction_result_t`, `job_result_t` |
-| `stats.c` | ~460 | Histogram, percentiles, BW/IOPS sampling, aggregation |
-| `output.h` | ~40 | `output_normal()`, `output_json()` declarations |
-| `output.c` | ~670 | FIO-compatible text + JSON formatters |
-| `test_BFFIO.sh` | ~300 | Functional test suite |
-| `run_baseline.sh` | ~550 | FIO comparison with delta report |
+| File | Purpose |
+|------|---------|
+| `main.c` | CLI parsing, help text, engine lifecycle |
+| `job_parser.h` | `job_config_t`, `bench_config_t`, parse declarations |
+| `job_parser.c` | .fio INI parser + CLI arg parser |
+| `workload.h` | `io_ctx_t`, `io_ctx_pool_t`, `thread_ctx_t`, `file_set_t` |
+| `workload.c` | I/O loop, callbacks, worker threads, file management |
+| `stats.h` | `thread_stats_t`, `direction_result_t`, `job_result_t` |
+| `stats.c` | Histogram, percentiles, BW/IOPS sampling, aggregation |
+| `output.h` | `output_normal()`, `output_json()` declarations |
+| `output.c` | FIO-compatible text + JSON formatters |
+| `test_BFFIO.sh` | Functional test suite |
+| `run_baseline.sh` | FIO comparison with delta report |
 
 ---
 

@@ -67,7 +67,7 @@ struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
 aura_register_buffers(engine, iovs, 2);
 
 // Use registered buffers by index
-aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
+aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, 0, cb, ud);
 ```
 
 ### Deferred Unregister (callback-safe)

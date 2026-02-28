@@ -42,6 +42,7 @@ AuraIO provides three ring selection modes to balance cache locality against thr
 - Many threads, each doing moderate I/O → **ADAPTIVE** (default)
 - NUMA system, locality-critical → **CPU_LOCAL**
 - Few threads, high per-thread IOPS → **ROUND_ROBIN**
+- Single thread, pinned, zero ring-selection overhead → **THREAD_LOCAL** (`AURA_SELECT_THREAD_LOCAL`): uses a dedicated ring per thread, allocated once on first use and stored in TLS. No `sched_getcpu()` call, no atomic selection — the lowest-overhead option for fully pinned single-thread-per-ring designs.
 
 **Startup behavior**: During the first ~10ms (before the tick thread computes `avg_ring_pending`), ADAPTIVE mode skips the outlier check and spills purely on the congestion threshold. This is conservative — if a ring fills quickly at startup, it spills to genuinely idle rings.
 
@@ -90,7 +91,7 @@ When AIMD is engaged, the full two-loop control system operates:
 
 The controller starts in PASSTHROUGH. When pressure is detected, it transitions to BASELINE and progresses through: BASELINE → PROBING → SETTLING → STEADY → CONVERGED → PASSTHROUGH. CONVERGED is **not terminal** in either direction — spike detection can trigger BACKOFF → SETTLING → STEADY at any time, and stable conditions trigger a return to PASSTHROUGH. From STEADY, if the ring entered via BACKOFF (tracked via `entered_via_backoff`), the controller automatically re-enters PROBING after `ADAPTIVE_REPROBE_INTERVAL` (100 ticks ≈ 1 second), allowing re-adaptation when workload characteristics change.
 
-**Time-to-convergence**: STEADY state requires `ADAPTIVE_STEADY_THRESHOLD` = 500 ticks (× 10ms tick interval = ~5 seconds) of stable operation before transitioning to CONVERGED. Total ramp time from AIMD engagement is approximately **7–15 seconds** depending on workload variability — faster on stable, consistent workloads; slower on highly variable or latency-sensitive ones. Workloads that never trigger pressure remain in passthrough indefinitely with near-zero overhead.
+**Time-to-convergence**: STEADY state requires `ADAPTIVE_STEADY_THRESHOLD` = 500 ticks (× 10ms tick interval = ~5 seconds; at the default 10ms tick interval — longer at low IOPS where the tick interval adapts up to 1000ms) of stable operation before transitioning to CONVERGED. Total ramp time from AIMD engagement is approximately **7–15 seconds** depending on workload variability — faster on stable, consistent workloads; slower on highly variable or latency-sensitive ones. Workloads that never trigger pressure remain in passthrough indefinitely with near-zero overhead.
 
 ## 5. Performance Tips for Users
 
@@ -328,6 +329,10 @@ AuraIO's internal architecture avoids global contention points:
 - **Per-thread buffer cache**: Buffer allocation is lock-free on the fast path (TLS cache hit). The sharded global pool (up to 256 shards) handles cache misses with minimal contention.
 - **CPU-local ring selection**: Submissions are routed to the ring for the current CPU via a TLS-cached `sched_getcpu()` call (refreshed every 32 submissions). No atomic operations on the ring selection path.
 - **Cooperative completions**: `IORING_SETUP_COOP_TASKRUN` (kernel 5.19+) is enabled automatically, delivering completions cooperatively rather than via interrupts. This reduces context switches and latency jitter.
+
+## For Contributors
+
+The sections below cover internal implementation details and regression test design. They are intended for contributors working on the AuraIO engine, not end users.
 
 ## 7. Internal Optimization Techniques
 

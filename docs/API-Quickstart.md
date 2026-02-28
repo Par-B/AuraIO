@@ -121,7 +121,7 @@ int main(void) {
 
     // 3. Open file and submit async read
     int fd = open("/etc/hostname", O_RDONLY);
-    aura_read(engine, fd, aura_buf(buf), 4096, 0, on_read, buf);
+    aura_read(engine, fd, aura_buf(buf), 4096, 0, 0, on_read, buf);
 
     // 4. Wait for completion
     // aura_pending_count() is a lightweight way to check in-flight ops
@@ -204,7 +204,7 @@ memcpy(buf, data, strlen(data));
 
 int fd = open("/tmp/output.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-aura_write(engine, fd, aura_buf(buf), strlen(data), 0, on_write_done, NULL);
+aura_write(engine, fd, aura_buf(buf), strlen(data), 0, 0, on_write_done, NULL);
 
 // Don't forget: buf must stay alive until callback fires!
 ```
@@ -221,7 +221,7 @@ void *bufs[SLOTS];
 for (int i = 0; i < SLOTS; i++) {
     bufs[i] = aura_buffer_alloc(engine, CHUNK);
     aura_read(engine, fd, aura_buf(bufs[i]), CHUNK,
-              (off_t)i * CHUNK, on_chunk_done, bufs[i]);
+              (off_t)i * CHUNK, 0, on_chunk_done, bufs[i]);
 }
 
 // Process completions; callbacks resubmit or mark done
@@ -466,7 +466,7 @@ int main(void) {
     pthread_create(&tid, NULL, io_thread, NULL);
 
     // Submit I/O from any thread; callbacks fire on io_thread
-    aura_read(g_engine, fd, aura_buf(buf), len, 0, on_done, NULL);
+    aura_read(g_engine, fd, aura_buf(buf), len, 0, 0, on_done, NULL);
 
     // Shutdown
     aura_stop(g_engine);   // signals aura_run() to return
@@ -507,18 +507,17 @@ aura_destroy(engine);
 
 Chain dependent operations so the kernel executes them in order without round-tripping back to user space. For example, write-then-fsync:
 
+**THREAD_LOCAL requirement**: `aura_request_set_linked()` requires THREAD_LOCAL ring-select mode when using multiple rings. In that mode each thread owns its ring, so the linked SQE is guaranteed to land on the same ring as the original op. Do not use linked ops with round-robin ring selection across multiple rings.
+
 ```c
 // Write data — mark as linked so fsync waits for it
-// Note: aura_request_set_linked() returns int (0 on success, -1 if the
-// request is NULL). It also requires THREAD_LOCAL ring-select mode when
-// using multiple rings — in that mode each thread owns its ring, so the
-// linked SQE is guaranteed to land on the same ring as the original op.
-aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), 4096, 0, write_cb, ud);
+// aura_request_set_linked() returns 0 on success, -1 if request is NULL.
+aura_request_t *wreq = aura_write(engine, fd, aura_buf(buf), 4096, 0, 0, write_cb, ud);
 int rc = aura_request_set_linked(wreq);
 (void)rc; // check rc in production code
 
 // Fsync — chained to the write, NOT marked as linked (end of chain)
-aura_request_t *freq = aura_fsync(engine, fd, 0, fsync_cb, ud);
+aura_request_t *freq = aura_fsync(engine, fd, 0, 0, fsync_cb, ud);
 
 // Both are submitted together; fsync starts only after write succeeds.
 // If write fails, fsync callback receives -ECANCELED.
@@ -528,14 +527,14 @@ aura_wait(engine, -1);
 Multi-op chains work too — just mark every op except the last as linked:
 
 ```c
-aura_request_t *w1 = aura_write(engine, fd, aura_buf(b1), 4096, 0, cb, ud);
+aura_request_t *w1 = aura_write(engine, fd, aura_buf(b1), 4096, 0, 0, cb, ud);
 aura_request_set_linked(w1);
 
-aura_request_t *w2 = aura_write(engine, fd, aura_buf(b2), 4096, 4096, cb, ud);
+aura_request_t *w2 = aura_write(engine, fd, aura_buf(b2), 4096, 4096, 0, cb, ud);
 aura_request_set_linked(w2);
 
 // Final op: not linked
-aura_fsync(engine, fd, 0, cb, ud);
+aura_fsync(engine, fd, 0, 0, cb, ud);
 
 aura_wait(engine, -1);
 ```
@@ -555,7 +554,7 @@ struct iovec iovs[2] = {
 aura_register_buffers(engine, iovs, 2);
 
 // Use aura_buf_fixed() instead of aura_buf()
-aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, cb, ud);
+aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, 0, cb, ud);
 
 // Unregister when done
 aura_unregister(engine, AURA_REG_BUFFERS);
@@ -584,12 +583,12 @@ The idiomatic pattern is: submit, check for `EAGAIN`, poll completions to free s
 
 ```c
 // C: Check every return value
-aura_request_t *req = aura_read(engine, fd, aura_buf(buf), len, off, cb, ud);
+aura_request_t *req = aura_read(engine, fd, aura_buf(buf), len, off, 0, cb, ud);
 if (!req) {
     if (errno == EAGAIN) {
         // Ring full -- poll completions and retry
         aura_poll(engine);
-        req = aura_read(engine, fd, aura_buf(buf), len, off, cb, ud);
+        req = aura_read(engine, fd, aura_buf(buf), len, off, 0, cb, ud);
     } else {
         // Fatal error
         fprintf(stderr, "aura_read: %s\n", strerror(errno));
@@ -614,7 +613,7 @@ try {
 
 ## What's Next
 
-- **[API Reference](api_reference.md)** -- Complete function signatures and type documentation
+- **[API Reference](api-reference.md)** -- Complete function signatures and type documentation
 - **`examples/C/`** -- C examples (simple_read, file_copy, vectored_io, registered_buffers, etc.)
 - **`examples/cpp/`** -- C++ examples (coroutine_copy, bulk_reader, custom_config, etc.)
 - **`examples/rust/`** -- Rust examples (async_copy, file_copy, registered_buffers, etc.)
