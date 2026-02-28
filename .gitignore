@@ -106,6 +106,7 @@ core.*
 *.tmp
 *.log
 tests/coverage/
+coverage/
 
 # Rust build artifacts
 **/target/
