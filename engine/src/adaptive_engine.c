@@ -309,6 +309,10 @@ int adaptive_init(adaptive_controller_t *ctrl, int max_queue_depth, int initial_
     if (initial_inflight < min_inflight) initial_inflight = min_inflight;
     if (initial_inflight > max_queue_depth) initial_inflight = max_queue_depth;
 
+    /* Note: initial_inflight is validated but not stored — passthrough mode
+     * starts at max_queue_depth, and AIMD engagement resets to max/2 via
+     * adaptive_reset_to_baseline(). Kept for API compatibility. */
+
     /* Initialize atomics BEFORE zeroing non-atomic fields to avoid UB.
      * On platforms where _Atomic types use internal locks, memset would
      * destroy the lock state. Instead, init atomics first, then zero
@@ -643,6 +647,19 @@ static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
     ctrl->baseline_p99_ms = 0.0;
     ctrl->prev_throughput_bps = 0.0;
     ctrl->prev_in_flight_limit = 0;
+
+    /* Flush stale histogram data accumulated during passthrough so the
+     * first AIMD tick starts with a clean slate. */
+    if (ctrl->hist_pair.pending_reset) {
+        adaptive_hist_reset(ctrl->hist_pair.pending_reset);
+        ctrl->hist_pair.pending_reset = NULL;
+    }
+    adaptive_histogram_t *old = adaptive_hist_swap(&ctrl->hist_pair);
+    adaptive_hist_reset(old);
+    atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
+    atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
+    atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
+    atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
 }
 
 /* ============================================================================
