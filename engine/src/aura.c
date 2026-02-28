@@ -857,13 +857,19 @@ static void submit_end(submit_ctx_t *ctx) {
          * since set_linked() was not called on *this* request yet—
          * it was called on the *previous* one. Force flush to submit the
          * entire chain together, then clear TLS state. */
+        bool st = ctx->lock_st;
+        if (!st) {
+            /* Entered without lock (single-thread path); acquire now
+             * in case single_thread transitioned to false. */
+            st = ring_lock(ctx->ring);
+        }
         if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
             latch_fatal_submit_errno(ctx->engine, errno);
         }
         tls_link_ring = NULL;
         tls_link_depth = 0;
         ring_clear_last_sqe();
-        ring_unlock(ctx->ring, ctx->lock_st);
+        ring_unlock(ctx->ring, st);
         return;
     }
 
