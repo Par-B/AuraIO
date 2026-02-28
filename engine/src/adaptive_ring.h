@@ -430,13 +430,10 @@ static inline int ring_flush_fast(ring_ctx_t *ctx) {
     ring_clear_last_sqe(); /* Prevent stale SQE access after flush */
     int submitted = io_uring_submit(&ctx->ring);
     if (submitted > 0) {
+        /* Single-thread: plain store. No CAS loop needed. */
         int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
-        for (;;) {
-            int sub = submitted < old ? submitted : old;
-            if (atomic_compare_exchange_weak_explicit(&ctx->queued_sqes, &old, old - sub,
-                                                      memory_order_relaxed, memory_order_relaxed))
-                break;
-        }
+        int sub = submitted < old ? submitted : old;
+        atomic_store_explicit(&ctx->queued_sqes, old - sub, memory_order_relaxed);
         adaptive_record_submit(&ctx->adaptive, submitted);
     }
     return submitted;

@@ -452,8 +452,18 @@ static inline void data_finish(ring_ctx_t *ctx, aura_request_t *req, aura_op_typ
     req->submit_time_ns = (sc & mask) == 0 ? get_time_ns() : 0;
     atomic_store_explicit(&req->pending, true, memory_order_release);
     TSAN_RELEASE(req);
-    queued_sqes_inc(ctx);
-    atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
+    /* Single-thread: use plain load+store instead of atomic RMW */
+    if (atomic_load_explicit(&ctx->single_thread, memory_order_relaxed)) {
+        atomic_store_explicit(&ctx->queued_sqes,
+                              atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&ctx->pending_count,
+                              atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) + 1,
+                              memory_order_release);
+    } else {
+        queued_sqes_inc(ctx);
+        atomic_fetch_add_explicit(&ctx->pending_count, 1, memory_order_release);
+    }
 }
 
 /** Common postamble for metadata submissions (skip AIMD sampling). */
@@ -748,6 +758,9 @@ typedef struct {
  * Does adaptive recording, sets pending=false, invokes user callback.
  * Returns the retirement info needed for deferred counter updates.
  * Must be called before ring_retire_batch().
+ *
+ * When single_thread is true, uses plain load+store instead of atomic RMW
+ * (atomic_exchange, atomic_fetch_sub) to avoid lock-prefixed instructions.
  */
 static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, ssize_t result) {
     retire_entry_t retire = { .op_idx = -1, .result = result, .op_type = AURA_OP_CANCEL };
@@ -756,12 +769,20 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
         return retire;
     }
 
+    bool st = atomic_load_explicit(&ctx->single_thread, memory_order_relaxed);
+
     /* Guard against double-completion: if pending is already false, this CQE
      * is a duplicate (e.g., io_uring can deliver both a cancel CQE and the
      * original op's CQE).  Skip processing to avoid double-decrementing
      * inflight counters and double-freeing the request slot. */
-    if (!atomic_exchange_explicit(&req->pending, false, memory_order_acquire)) {
-        return retire;
+    if (st) {
+        /* Single-thread: plain load+store avoids lock-prefixed xchg */
+        if (!atomic_load_explicit(&req->pending, memory_order_relaxed)) return retire;
+        atomic_store_explicit(&req->pending, false, memory_order_relaxed);
+    } else {
+        if (!atomic_exchange_explicit(&req->pending, false, memory_order_acquire)) {
+            return retire;
+        }
     }
 
     /* Save callback info and retirement data BEFORE any state changes.
@@ -789,12 +810,27 @@ static retire_entry_t process_completion(ring_ctx_t *ctx, aura_request_t *req, s
      * If the callback calls aura_request_unregister(), it checks inflight == 0
      * to decide whether to finalize unregistration.  Decrementing after the
      * callback would leave the count stale during the check, potentially
-     * causing the final unregister to never fire. */
+     * causing the final unregister to never fire.
+     * Single-thread: plain load+store avoids lock-prefixed instructions. */
     if (uses_registered_buffer) {
-        atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
+        if (st) {
+            atomic_store_explicit(
+                &ctx->fixed_buf_inflight,
+                atomic_load_explicit(&ctx->fixed_buf_inflight, memory_order_relaxed) - 1,
+                memory_order_relaxed);
+        } else {
+            atomic_fetch_sub_explicit(&ctx->fixed_buf_inflight, 1, memory_order_relaxed);
+        }
     }
     if (uses_registered_file) {
-        atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
+        if (st) {
+            atomic_store_explicit(
+                &ctx->fixed_file_inflight,
+                atomic_load_explicit(&ctx->fixed_file_inflight, memory_order_relaxed) - 1,
+                memory_order_relaxed);
+        } else {
+            atomic_fetch_sub_explicit(&ctx->fixed_file_inflight, 1, memory_order_relaxed);
+        }
     }
 
     /* pending was already cleared by atomic_exchange in the double-completion
@@ -930,17 +966,27 @@ int ring_drain_cqes_fast(ring_ctx_t *ctx) {
 
         retire_entry_t retire = process_completion(ctx, req, result);
 
-        /* Inline retirement (no lock needed for single_thread) */
+        /* Inline retirement — single_thread: use plain stores instead of
+         * atomic RMW to avoid lock-prefixed instructions on x86. */
         if (retire.op_idx >= 0) {
             if (retire.op_type != AURA_OP_CANCEL) {
-                atomic_fetch_add_explicit(&ctx->ops_completed, 1, memory_order_relaxed);
+                atomic_store_explicit(
+                    &ctx->ops_completed,
+                    atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) + 1,
+                    memory_order_relaxed);
                 if (retire.result > 0 && op_is_data_transfer(retire.op_type)) {
-                    atomic_fetch_add_explicit(&ctx->bytes_completed, retire.result,
-                                              memory_order_relaxed);
+                    atomic_store_explicit(
+                        &ctx->bytes_completed,
+                        atomic_load_explicit(&ctx->bytes_completed, memory_order_relaxed) +
+                            (uint64_t)retire.result,
+                        memory_order_relaxed);
                 }
             }
             ring_put_request(ctx, retire.op_idx);
-            atomic_fetch_sub_explicit(&ctx->pending_count, 1, memory_order_release);
+            atomic_store_explicit(&ctx->pending_count,
+                                  atomic_load_explicit(&ctx->pending_count, memory_order_relaxed) -
+                                      1,
+                                  memory_order_release);
         }
         completed++;
     }

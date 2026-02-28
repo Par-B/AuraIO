@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file stats.h
  * @brief Stats collection and result types for BFFIO
@@ -122,6 +121,72 @@ void stats_record_io(thread_stats_t *s, uint64_t latency_ns, size_t bytes, int i
 
 /* Record IOPS/BW counters only (no latency — for non-sampled I/Os) */
 void stats_record_io_count(thread_stats_t *s, size_t bytes, int is_write);
+
+/* Fast non-atomic versions for single-thread-per-stats usage.
+ * Uses plain load+store instead of atomic RMW (lock-prefixed on x86).
+ * Safe when only one thread writes to the stats struct. */
+static inline void stats_record_io_fast(thread_stats_t *s, uint64_t latency_ns, size_t bytes,
+                                        int is_write) {
+    if (is_write) {
+        atomic_store_explicit(&s->write_ops,
+                              atomic_load_explicit(&s->write_ops, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&s->write_bytes,
+                              atomic_load_explicit(&s->write_bytes, memory_order_relaxed) + bytes,
+                              memory_order_relaxed);
+    } else {
+        atomic_store_explicit(&s->read_ops,
+                              atomic_load_explicit(&s->read_ops, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&s->read_bytes,
+                              atomic_load_explicit(&s->read_bytes, memory_order_relaxed) + bytes,
+                              memory_order_relaxed);
+    }
+
+    uint64_t latency_us = latency_ns / 1000;
+    int bucket = (int)(latency_us / LAT_HIST_BUCKET_US);
+    if (bucket >= LAT_HIST_BUCKETS) {
+        atomic_store_explicit(&s->lat_overflow,
+                              atomic_load_explicit(&s->lat_overflow, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+    } else {
+        atomic_store_explicit(&s->lat_hist[bucket],
+                              atomic_load_explicit(&s->lat_hist[bucket], memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+    }
+
+    uint64_t cur_min = atomic_load_explicit(&s->lat_min_ns, memory_order_relaxed);
+    if (latency_ns < cur_min)
+        atomic_store_explicit(&s->lat_min_ns, latency_ns, memory_order_relaxed);
+    uint64_t cur_max = atomic_load_explicit(&s->lat_max_ns, memory_order_relaxed);
+    if (latency_ns > cur_max)
+        atomic_store_explicit(&s->lat_max_ns, latency_ns, memory_order_relaxed);
+
+    atomic_store_explicit(&s->lat_sum_ns,
+                          atomic_load_explicit(&s->lat_sum_ns, memory_order_relaxed) + latency_ns,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s->lat_count,
+                          atomic_load_explicit(&s->lat_count, memory_order_relaxed) + 1,
+                          memory_order_relaxed);
+}
+
+static inline void stats_record_io_count_fast(thread_stats_t *s, size_t bytes, int is_write) {
+    if (is_write) {
+        atomic_store_explicit(&s->write_ops,
+                              atomic_load_explicit(&s->write_ops, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&s->write_bytes,
+                              atomic_load_explicit(&s->write_bytes, memory_order_relaxed) + bytes,
+                              memory_order_relaxed);
+    } else {
+        atomic_store_explicit(&s->read_ops,
+                              atomic_load_explicit(&s->read_ops, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+        atomic_store_explicit(&s->read_bytes,
+                              atomic_load_explicit(&s->read_bytes, memory_order_relaxed) + bytes,
+                              memory_order_relaxed);
+    }
+}
 
 /* Take a BW/IOPS sample (called every 1s from main thread) */
 void stats_take_sample(thread_stats_t *s);

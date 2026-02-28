@@ -370,6 +370,15 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
 }
 
 /**
+ * Check if a ring qualifies for the lockless single-thread fast path.
+ * True for THREAD_LOCAL mode, or when ring_count == 1 with single_thread set.
+ */
+static inline bool ring_is_sole_owner(aura_engine_t *engine, ring_ctx_t *ring) {
+    return atomic_load_explicit(&ring->single_thread, memory_order_acquire) &&
+           (engine->ring_select == AURA_SELECT_THREAD_LOCAL || engine->ring_count == 1);
+}
+
+/**
  * Drain eventfd to clear POLLIN state after completions.
  * Without this, poll/epoll would immediately return again even though
  * we've processed all available CQEs.  Must be called in ALL modes
@@ -761,10 +770,9 @@ static submit_ctx_t submit_begin(aura_engine_t *engine, bool allow_poll) {
      * share one submission queue. */
     ring_ctx_t *ring = tls_link_ring ? tls_link_ring : select_ring(engine);
 
-    /* Thread-local single-thread fast path: no lock, inline capacity check.
-     * select_ring_thread_local() has validated tls_owned_ring ownership. */
-    if (atomic_load_explicit(&ring->single_thread, memory_order_acquire) &&
-        engine->ring_select == AURA_SELECT_THREAD_LOCAL && !tls_link_ring) {
+    /* Single-owner fast path: no lock, inline capacity check.
+     * Applies to THREAD_LOCAL mode and single-ring single-thread engines. */
+    if (ring_is_sole_owner(engine, ring) && !tls_link_ring) {
         if (!ring_can_submit(ring)) {
             ring_flush_fast(ring);
             ring_drain_cqes_fast(ring);
@@ -839,9 +847,8 @@ static void submit_end(submit_ctx_t *ctx) {
         atomic_fetch_add_explicit(&ctx->ring->fixed_file_inflight, 1, memory_order_relaxed);
     }
 
-    /* Thread-local single-thread fast path: no lock to release */
-    if (atomic_load_explicit(&ctx->ring->single_thread, memory_order_acquire) &&
-        tls_link_ring == NULL) {
+    /* Single-owner fast path: no lock to release */
+    if (ring_is_sole_owner(ctx->engine, ctx->ring) && tls_link_ring == NULL) {
         tls_last_ring = ctx->ring;
         if (ring_should_flush(ctx->ring)) {
             ring_flush_fast(ctx->ring);
@@ -1912,10 +1919,19 @@ int aura_poll(aura_engine_t *engine) {
         return (-1);
     }
 
-    /* Thread-local fast path: skip eventfd drain, skip two-pass loop.
-     * select_ring_thread_local validates ownership; if tls_owned_ring is stale
-     * it gets reassigned. After the first submit, tls_owned_ring is guaranteed
-     * valid for this engine. If no submit happened yet, we fall through. */
+    /* Single-owner fast path: skip eventfd drain, skip two-pass loop.
+     * Applies to THREAD_LOCAL mode and single-ring single-thread engines.
+     * For THREAD_LOCAL, tls_owned_ring is validated by select_ring_thread_local;
+     * for single-ring, we can always use rings[0] directly. */
+    if (engine->ring_count == 1 && ring_is_sole_owner(engine, &engine->rings[0])) {
+        ring_ctx_t *ring = &engine->rings[0];
+        ring_flush_fast(ring);
+        int n = ring_poll(ring);
+        if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) ||
+            atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed))
+            maybe_finalize_deferred_unregistration(engine);
+        return n > 0 ? n : 0;
+    }
     if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring && tls_engine == engine &&
         tls_owned_ring >= engine->rings && tls_owned_ring < engine->rings + engine->ring_count) {
         ring_ctx_t *ring = tls_owned_ring;
@@ -1995,8 +2011,17 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
         return (-1);
     }
 
-    /* Thread-local fast path: flush, poll, and if needed block on own ring.
-     * Validate ownership with bounds check to handle stale TLS. */
+    /* Single-owner fast path: flush, poll, and if needed block on own ring. */
+    if (engine->ring_count == 1 && ring_is_sole_owner(engine, &engine->rings[0])) {
+        ring_ctx_t *ring = &engine->rings[0];
+        ring_flush_fast(ring);
+        int n = ring_poll(ring);
+        if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) ||
+            atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed))
+            maybe_finalize_deferred_unregistration(engine);
+        if (n > 0) return n;
+        return ring_wait(ring, timeout_ms);
+    }
     if (engine->ring_select == AURA_SELECT_THREAD_LOCAL && tls_owned_ring && tls_engine == engine &&
         tls_owned_ring >= engine->rings && tls_owned_ring < engine->rings + engine->ring_count) {
         ring_ctx_t *ring = tls_owned_ring;

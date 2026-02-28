@@ -361,27 +361,33 @@ static void io_callback(aura_request_t *req, ssize_t result, void *user_data) {
     (void)req;
     io_ctx_t *ctx = user_data;
 
-    /* Record stats only outside the ramp period */
-    if (!atomic_load(ctx->ramping)) {
+    /* Record stats only outside the ramp period.
+     * Use non-atomic fast path: each thread owns its stats exclusively,
+     * so lock-prefixed atomic RMW is unnecessary overhead. */
+    if (!atomic_load_explicit(ctx->ramping, memory_order_relaxed)) {
         if (ctx->submit_time_ns != 0) {
             if (tls_completion_ns == 0) tls_completion_ns = now_ns();
             uint64_t latency = tls_completion_ns - ctx->submit_time_ns;
-            stats_record_io(ctx->stats, latency, ctx->io_size, ctx->is_write);
+            stats_record_io_fast(ctx->stats, latency, ctx->io_size, ctx->is_write);
         } else {
-            stats_record_io_count(ctx->stats, ctx->io_size, ctx->is_write);
+            stats_record_io_count_fast(ctx->stats, ctx->io_size, ctx->is_write);
         }
     }
 
     if (result < 0) {
-        atomic_fetch_add(&ctx->stats->errors, 1);
+        atomic_store_explicit(&ctx->stats->errors,
+                              atomic_load_explicit(&ctx->stats->errors, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
     }
 
     /* Buffer is pre-allocated per slot and reused — not freed here. */
 
-    /* Decrement inflight counter */
-    atomic_fetch_sub(&ctx->stats->inflight, 1);
+    /* Decrement inflight counter (plain store: single-thread-per-stats) */
+    atomic_store_explicit(&ctx->stats->inflight,
+                          atomic_load_explicit(&ctx->stats->inflight, memory_order_relaxed) - 1,
+                          memory_order_relaxed);
 
-    /* Return context to its owning pool */
+    /* Return context to its owning pool (plain store: single consumer) */
     io_ctx_pool_put((io_ctx_pool_t *)ctx->pool, ctx);
 }
 
@@ -393,23 +399,27 @@ static void fsync_callback(aura_request_t *req, ssize_t result, void *user_data)
     (void)req;
     io_ctx_t *ctx = user_data;
 
-    if (!atomic_load(ctx->ramping)) {
+    if (!atomic_load_explicit(ctx->ramping, memory_order_relaxed)) {
         if (ctx->submit_time_ns != 0) {
             if (tls_completion_ns == 0) tls_completion_ns = now_ns();
             uint64_t latency = tls_completion_ns - ctx->submit_time_ns;
-            stats_record_io(ctx->stats, latency, 0, 1);
+            stats_record_io_fast(ctx->stats, latency, 0, 1);
         } else {
-            stats_record_io_count(ctx->stats, 0, 1);
+            stats_record_io_count_fast(ctx->stats, 0, 1);
         }
     }
 
     if (result < 0) {
-        atomic_fetch_add(&ctx->stats->errors, 1);
+        atomic_store_explicit(&ctx->stats->errors,
+                              atomic_load_explicit(&ctx->stats->errors, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
     }
 
     /* fsync has no buffer to free */
 
-    atomic_fetch_sub(&ctx->stats->inflight, 1);
+    atomic_store_explicit(&ctx->stats->inflight,
+                          atomic_load_explicit(&ctx->stats->inflight, memory_order_relaxed) - 1,
+                          memory_order_relaxed);
     io_ctx_pool_put((io_ctx_pool_t *)ctx->pool, ctx);
 }
 
@@ -585,7 +595,9 @@ static void *worker_thread(void *arg) {
             ctx->pool = &tctx->pool;
 
             /* Submit the I/O */
-            atomic_fetch_add(&stats->inflight, 1);
+            atomic_store_explicit(&stats->inflight,
+                                  atomic_load_explicit(&stats->inflight, memory_order_relaxed) + 1,
+                                  memory_order_relaxed);
 
             aura_buf_t abuf =
                 (ctx->reg_buf_index >= 0) ? aura_buf_fixed(ctx->reg_buf_index, 0) : aura_buf(buf);
@@ -601,7 +613,10 @@ static void *worker_thread(void *arg) {
             }
 
             if (!req) {
-                atomic_fetch_sub(&stats->inflight, 1);
+                atomic_store_explicit(&stats->inflight,
+                                      atomic_load_explicit(&stats->inflight, memory_order_relaxed) -
+                                          1,
+                                      memory_order_relaxed);
                 io_ctx_pool_put(&tctx->pool, ctx);
                 break;
             }
@@ -625,22 +640,25 @@ static void *worker_thread(void *arg) {
                         fsync_ctx->ramping = tctx->ramping;
                         fsync_ctx->pool = &tctx->pool;
 
-                        atomic_fetch_add(&stats->inflight, 1);
+                        atomic_store_explicit(
+                            &stats->inflight,
+                            atomic_load_explicit(&stats->inflight, memory_order_relaxed) + 1,
+                            memory_order_relaxed);
 
                         aura_request_t *fsync_req =
                             aura_fsync(engine, fd, AURA_FSYNC_DEFAULT, tctx->submit_flags,
                                        fsync_callback, fsync_ctx);
                         if (!fsync_req) {
-                            atomic_fetch_sub(&stats->inflight, 1);
+                            atomic_store_explicit(
+                                &stats->inflight,
+                                atomic_load_explicit(&stats->inflight, memory_order_relaxed) - 1,
+                                memory_order_relaxed);
                             io_ctx_pool_put(&tctx->pool, fsync_ctx);
                         }
                     }
                 }
             }
         }
-
-        /* Flush any batched submissions before polling for completions */
-        aura_flush(engine);
 
         /* Reset completion timestamp cache before processing completions.
          * The first callback in this poll cycle will call now_ns() once;
