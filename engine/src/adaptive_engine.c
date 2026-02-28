@@ -680,9 +680,13 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
     int64_t elapsed_ns = now_ns - start_ns;
     if (elapsed_ns < 0) {
-        /* Clock step-back: reset sample_start_ns to avoid stalling the
-         * controller until the max sample window expires. */
+        /* Clock step-back: reset all sample counters to avoid stalling the
+         * controller and to prevent a throughput spike from stale sample_bytes
+         * divided by near-zero elapsed time. */
         atomic_store_explicit(&ctrl->sample_start_ns, now_ns, memory_order_release);
+        atomic_exchange_explicit(&ctrl->sample_bytes, 0, memory_order_relaxed);
+        atomic_exchange_explicit(&ctrl->submit_calls, 0, memory_order_relaxed);
+        atomic_exchange_explicit(&ctrl->sqes_submitted, 0, memory_order_relaxed);
         elapsed_ns = 0;
     }
     int64_t elapsed_ms = elapsed_ns / 1000000LL;
