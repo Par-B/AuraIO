@@ -858,9 +858,9 @@ static void submit_end(submit_ctx_t *ctx) {
          * it was called on the *previous* one. Force flush to submit the
          * entire chain together, then clear TLS state. */
         bool st = ctx->lock_st;
-        if (!st) {
-            /* Entered without lock (single-thread path); acquire now
-             * in case single_thread transitioned to false. */
+        if (st) {
+            /* lock_st==true means single-thread (no lock held).
+             * Acquire now so we hold the lock for flush+cleanup. */
             st = ring_lock(ctx->ring);
         }
         if (ring_flush(ctx->ring) < 0 && flush_error_is_fatal(errno)) {
