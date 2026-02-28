@@ -928,6 +928,11 @@ void *buffer_pool_alloc(buffer_pool_t *pool, size_t size) {
     return buf;
 }
 
+/**
+ * @warning The size parameter MUST match the size used in buffer_pool_alloc().
+ *          Passing a different size places the buffer in the wrong size class,
+ *          which can cause buffer overflows on subsequent allocations.
+ */
 void buffer_pool_free(buffer_pool_t *pool, void *buf, size_t size) {
     if (!pool || !buf) {
         return;
@@ -1068,7 +1073,7 @@ static inline size_t buf_map_hash(uintptr_t key, size_t mask) {
 
 int buf_size_map_init(buf_size_map_t *map) {
     map->capacity = BUF_MAP_INITIAL_CAPACITY;
-    atomic_init(&map->count, 0);
+    map->count = 0;
     map->entries = calloc(map->capacity, sizeof(buf_map_entry_t));
     if (!map->entries) return -1;
     if (pthread_mutex_init(&map->lock, NULL) != 0) {
@@ -1122,7 +1127,7 @@ int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
     pthread_mutex_lock(&map->lock);
 
     /* Check load factor and grow if needed */
-    size_t count = atomic_load_explicit(&map->count, memory_order_relaxed);
+    size_t count = map->count;
     if (count * BUF_MAP_LOAD_FACTOR_DEN >= map->capacity * BUF_MAP_LOAD_FACTOR_NUM) {
         if (buf_map_grow(map) != 0) {
             pthread_mutex_unlock(&map->lock);
@@ -1143,9 +1148,16 @@ int buf_size_map_insert(buf_size_map_t *map, void *ptr, int class_idx) {
         }
         idx = (idx + 1) & mask;
     }
+    /* Defensive check: if table is somehow full despite load-factor check,
+     * don't corrupt an occupied slot. */
+    if (map->entries[idx].key != 0) {
+        pthread_mutex_unlock(&map->lock);
+        errno = ENOMEM;
+        return -1;
+    }
     map->entries[idx].key = key;
     map->entries[idx].class_idx = (uint8_t)class_idx;
-    atomic_fetch_add_explicit(&map->count, 1, memory_order_relaxed);
+    map->count++;
     pthread_mutex_unlock(&map->lock);
     return 0;
 }
@@ -1180,7 +1192,7 @@ int buf_size_map_remove(buf_size_map_t *map, void *ptr) {
                 next = (next + 1) & mask;
             }
             map->entries[hole].key = 0;
-            atomic_fetch_sub_explicit(&map->count, 1, memory_order_relaxed);
+            map->count--;
             pthread_mutex_unlock(&map->lock);
             return class_idx;
         }

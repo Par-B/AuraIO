@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 /**
  * @file adaptive_buffer.h
  * @brief Aligned buffer pool for O_DIRECT I/O
@@ -216,7 +215,7 @@ typedef struct {
 typedef struct {
     buf_map_entry_t *entries;
     size_t capacity;      /**< Always a power of 2 */
-    _Atomic size_t count; /**< Number of live entries */
+    size_t count;         /**< Number of live entries (protected by lock) */
     pthread_mutex_t lock; /**< Single lock (striped locks are unsound with open-addressing) */
 } buf_size_map_t;
 
