@@ -429,7 +429,7 @@ static inline void sqe_apply_link(struct io_uring_sqe *sqe, const aura_request_t
  * ============================================================================ */
 
 /** Common preamble: validate ctx/req and get SQE. */
-static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, aura_request_t *req) {
+static struct io_uring_sqe *submit_get_sqe(ring_ctx_t *ctx, const aura_request_t *req) {
     if (!ctx || !req || !ctx->ring_initialized) {
         errno = EINVAL;
         return NULL;

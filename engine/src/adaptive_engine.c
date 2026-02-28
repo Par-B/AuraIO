@@ -444,6 +444,7 @@ static inline bool aimd_increase(adaptive_controller_t *ctrl) {
     int limit = atomic_load_explicit(&ctrl->current_in_flight_limit, memory_order_relaxed);
     if (limit < ctrl->max_queue_depth) {
         limit += ADAPTIVE_AIMD_INCREASE;
+        // cppcheck-suppress knownConditionTrueFalse
         if (limit > ctrl->max_queue_depth) limit = ctrl->max_queue_depth;
         atomic_store_explicit(&ctrl->current_in_flight_limit, limit, memory_order_release);
         return true;

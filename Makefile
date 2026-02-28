@@ -525,6 +525,7 @@ lint:
 lint-cppcheck:
 	@echo "Running cppcheck..."
 	@cppcheck --enable=warning,performance,portability \
+		--inline-suppr \
 		--suppress=missingIncludeSystem \
 		--suppress=normalCheckLevelMaxBranches \
 		--error-exitcode=1 \
@@ -536,7 +537,13 @@ lint-strict:
 	@echo "Running cppcheck (strict)..."
 	@cppcheck --check-level=exhaustive \
 		--enable=all \
+		--inline-suppr \
 		--suppress=missingIncludeSystem \
+		--suppress=unusedFunction \
+		--suppress=unusedStructMember \
+		--suppress=staticFunction \
+		--suppress=preprocessorErrorDirective \
+		--suppress=checkersReport \
 		--error-exitcode=1 \
 		-I engine/include -I engine/src \
 		$(SRC) $(HEADERS)

@@ -383,7 +383,7 @@ static void latch_fatal_submit_errno(aura_engine_t *engine, int err) {
  * Check if a ring qualifies for the lockless single-thread fast path.
  * True for THREAD_LOCAL mode, or when ring_count == 1 with single_thread set.
  */
-static inline bool ring_is_sole_owner(aura_engine_t *engine, ring_ctx_t *ring) {
+static inline bool ring_is_sole_owner(const aura_engine_t *engine, ring_ctx_t *ring) {
     return atomic_load_explicit(&ring->single_thread, memory_order_acquire) &&
            (engine->ring_select == AURA_SELECT_THREAD_LOCAL || engine->ring_count == 1);
 }
@@ -418,7 +418,7 @@ static inline bool flush_ring_checked(aura_engine_t *engine, ring_ctx_t *ring) {
     return false;
 }
 
-static bool check_fatal_submit_errno(aura_engine_t *engine) {
+static bool check_fatal_submit_errno(const aura_engine_t *engine) {
     int fatal = get_fatal_submit_errno(engine);
     if (fatal != 0) {
         errno = fatal;
