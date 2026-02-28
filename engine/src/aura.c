@@ -95,8 +95,8 @@ struct aura_engine {
     /* === Cache line 1+: registration path === */
     _Alignas(64) _Atomic bool buffers_registered; /**< True if buffers are registered */
     _Atomic bool files_registered; /**< True if files are registered */
-    bool buffers_unreg_pending; /**< Deferred buffer unregister requested */
-    bool files_unreg_pending; /**< Deferred file unregister requested */
+    _Atomic bool buffers_unreg_pending; /**< Deferred buffer unregister requested */
+    _Atomic bool files_unreg_pending; /**< Deferred file unregister requested */
     pthread_rwlock_t reg_lock; /**< Protects registered_buffers/files access */
     struct iovec *registered_buffers; /**< Copy of registered buffer iovecs */
     int *registered_files; /**< Copy of registered file descriptors */
@@ -409,7 +409,7 @@ static bool check_fatal_submit_errno(aura_engine_t *engine) {
 
 static bool resolve_registered_file_locked(const aura_engine_t *engine, int fd, int *fixed_fd) {
     if (!atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
-        engine->files_unreg_pending) {
+        atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed)) {
         return false;
     }
 
@@ -562,7 +562,7 @@ static registered_buf_info_t validate_registered_buffer(aura_engine_t *engine, i
         return info;
     }
 
-    if (engine->buffers_unreg_pending) {
+    if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Unregister in progress */
         return info;
@@ -674,7 +674,8 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
     pthread_rwlock_wrlock(&engine->reg_lock);
 
     if (atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
-        engine->buffers_unreg_pending && fixed_buf_inflight_total(engine) == 0) {
+        atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) &&
+        fixed_buf_inflight_total(engine) == 0) {
         /* No ring_lock needed: reg_lock(write) prevents new registered-buffer
          * submissions, and inflight count is zero so no completions will touch
          * the registered buffer table.  Avoiding ring_lock here prevents a
@@ -688,11 +689,12 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         engine->registered_buffers = NULL;
         engine->registered_buffer_count = 0;
         atomic_store_explicit(&engine->buffers_registered, false, memory_order_release);
-        engine->buffers_unreg_pending = false;
+        atomic_store_explicit(&engine->buffers_unreg_pending, false, memory_order_release);
     }
 
     if (atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
-        engine->files_unreg_pending && fixed_file_inflight_total(engine) == 0) {
+        atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed) &&
+        fixed_file_inflight_total(engine) == 0) {
         /* Same rationale as above — no ring_lock needed. */
         for (int i = 0; i < engine->ring_count; i++) {
             io_uring_unregister_files(&engine->rings[i].ring);
@@ -702,7 +704,7 @@ static int finalize_deferred_unregistration(aura_engine_t *engine) {
         engine->registered_files = NULL;
         atomic_store_explicit(&engine->registered_file_count, 0, memory_order_release);
         atomic_store_explicit(&engine->files_registered, false, memory_order_release);
-        engine->files_unreg_pending = false;
+        atomic_store_explicit(&engine->files_unreg_pending, false, memory_order_release);
     }
 
     pthread_rwlock_unlock(&engine->reg_lock);
@@ -720,7 +722,8 @@ static int maybe_finalize_deferred_unregistration(aura_engine_t *engine) {
     bool need_finalize = false;
 
     pthread_rwlock_rdlock(&engine->reg_lock);
-    need_finalize = engine->buffers_unreg_pending || engine->files_unreg_pending;
+    need_finalize = atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) ||
+                    atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed);
     pthread_rwlock_unlock(&engine->reg_lock);
 
     if (!need_finalize) {
@@ -1315,9 +1318,10 @@ static void destroy_phase_3_unregister(aura_engine_t *engine) {
     pthread_rwlock_rdlock(&engine->reg_lock);
     bool need_unreg_bufs =
         atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
-        !engine->buffers_unreg_pending;
-    bool need_unreg_files = atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
-                            !engine->files_unreg_pending;
+        !atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed);
+    bool need_unreg_files =
+        atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
+        !atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed);
     pthread_rwlock_unlock(&engine->reg_lock);
 
     if (need_unreg_bufs) {
@@ -1912,7 +1916,8 @@ int aura_poll(aura_engine_t *engine) {
             ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
-        if (engine->buffers_unreg_pending || engine->files_unreg_pending)
+        if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) ||
+            atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed))
             maybe_finalize_deferred_unregistration(engine);
         return n > 0 ? n : 0;
     }
@@ -1992,7 +1997,8 @@ int aura_wait(aura_engine_t *engine, int timeout_ms) {
             ring_unlock(ring, st);
         }
         int n = ring_poll(ring);
-        if (engine->buffers_unreg_pending || engine->files_unreg_pending)
+        if (atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed) ||
+            atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed))
             maybe_finalize_deferred_unregistration(engine);
         if (n > 0) return n;
         return ring_wait(ring, timeout_ms);
@@ -2278,7 +2284,7 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, unsig
     pthread_rwlock_wrlock(&engine->reg_lock);
 
     if (atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) ||
-        engine->buffers_unreg_pending) {
+        atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Already registered - must unregister first */
         return (-1);
@@ -2318,7 +2324,7 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, unsig
     }
 
     atomic_store_explicit(&engine->buffers_registered, true, memory_order_release);
-    engine->buffers_unreg_pending = false;
+    atomic_store_explicit(&engine->buffers_unreg_pending, false, memory_order_release);
     pthread_rwlock_unlock(&engine->reg_lock);
     return (0);
 }
@@ -2331,18 +2337,19 @@ int aura_register_buffers(aura_engine_t *engine, const struct iovec *iovs, unsig
 /**
  * Generic deferred unregister: set the pending flag and finalize if possible.
  * @param registered      Pointer to the _Atomic bool (buffers_registered or files_registered)
- * @param unreg_pending   Pointer to the bool (buffers_unreg_pending or files_unreg_pending)
+ * @param unreg_pending   Pointer to the _Atomic bool (buffers_unreg_pending or files_unreg_pending)
  */
 static int request_unregister_generic(aura_engine_t *engine, _Atomic bool *registered,
-                                      bool *unreg_pending) {
+                                      _Atomic bool *unreg_pending) {
     pthread_rwlock_wrlock(&engine->reg_lock);
 
-    if (!atomic_load_explicit(registered, memory_order_relaxed) && !*unreg_pending) {
+    if (!atomic_load_explicit(registered, memory_order_relaxed) &&
+        !atomic_load_explicit(unreg_pending, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
         return (0);
     }
 
-    *unreg_pending = true;
+    atomic_store_explicit(unreg_pending, true, memory_order_release);
     pthread_rwlock_unlock(&engine->reg_lock);
 
     return finalize_deferred_unregistration(engine);
@@ -2401,11 +2408,11 @@ int aura_unregister(aura_engine_t *engine, aura_reg_type_t type) {
         switch (type) {
         case AURA_REG_BUFFERS:
             done = !atomic_load_explicit(&engine->buffers_registered, memory_order_relaxed) &&
-                   !engine->buffers_unreg_pending;
+                   !atomic_load_explicit(&engine->buffers_unreg_pending, memory_order_relaxed);
             break;
         case AURA_REG_FILES:
             done = !atomic_load_explicit(&engine->files_registered, memory_order_relaxed) &&
-                   !engine->files_unreg_pending;
+                   !atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed);
             break;
         default:
             done = true;
@@ -2450,7 +2457,7 @@ int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int coun
     pthread_rwlock_wrlock(&engine->reg_lock);
 
     if (atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
-        engine->files_unreg_pending) {
+        atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
         errno = EBUSY; /* Already registered - must unregister first */
         return (-1);
@@ -2487,7 +2494,7 @@ int aura_register_files(aura_engine_t *engine, const int *fds, unsigned int coun
     }
 
     atomic_store_explicit(&engine->files_registered, true, memory_order_release);
-    engine->files_unreg_pending = false;
+    atomic_store_explicit(&engine->files_unreg_pending, false, memory_order_release);
     pthread_rwlock_unlock(&engine->reg_lock);
     return (0);
 }
@@ -2501,9 +2508,10 @@ int aura_update_file(aura_engine_t *engine, int index, int fd) {
     pthread_rwlock_wrlock(&engine->reg_lock);
 
     if (!atomic_load_explicit(&engine->files_registered, memory_order_relaxed) ||
-        engine->files_unreg_pending) {
+        atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed)) {
         pthread_rwlock_unlock(&engine->reg_lock);
-        errno = engine->files_unreg_pending ? EBUSY : ENOENT;
+        errno = atomic_load_explicit(&engine->files_unreg_pending, memory_order_relaxed) ? EBUSY
+                                                                                         : ENOENT;
         return (-1);
     }
 
