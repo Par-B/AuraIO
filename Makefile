@@ -470,7 +470,6 @@ uninstall:
 
 clean: rust-clean
 	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
-	rm -f $(LIB_SHARED) engine/lib/$(LIB_SONAME) engine/lib/$(LIB_LINKNAME) $(LIB_STATIC) $(PKGCONFIG) $(LIB_TSAN) $(LIB_ASAN)
 	rm -rf engine/lib
 	-$(MAKE) -C tests clean 2>/dev/null || true
 	-$(MAKE) -C examples/C clean 2>/dev/null || true
