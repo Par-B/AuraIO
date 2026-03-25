@@ -468,6 +468,10 @@ uninstall:
 # Clean
 # =============================================================================
 
+clean-engine:
+	rm -f $(OBJ) $(DEP)
+	rm -f $(LIB_STATIC) $(LIB_SHARED) engine/lib/$(LIB_SONAME) engine/lib/$(LIB_LINKNAME)
+
 clean: rust-clean
 	rm -f $(OBJ) $(DEP) $(TSAN_OBJ) $(ASAN_OBJ)
 	rm -rf engine/lib
@@ -484,7 +488,7 @@ clean: rust-clean
 	rm -f integrations/opentelemetry/C/otel_example
 	rm -f integrations/syslog/C/syslog_example
 
-.PHONY: clean
+.PHONY: clean-engine clean
 
 # =============================================================================
 # Dependency management
