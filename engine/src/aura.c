@@ -244,9 +244,11 @@ static ring_ctx_t *select_ring_thread_local(aura_engine_t *engine) {
         atomic_store_explicit(&ring->single_thread, false, memory_order_release);
         while (atomic_load_explicit(&ring->st_users, memory_order_acquire) > 0) {
             /* spin — bounded by the sole owner's critical section duration */
+            sched_yield();
         }
         while (atomic_load_explicit(&ring->st_cq_users, memory_order_acquire) > 0) {
             /* spin */
+            sched_yield();
         }
     }
 
@@ -2841,9 +2843,9 @@ int aura_get_buffer_stats(const aura_engine_t *engine, aura_buffer_stats_t *stat
     return 0;
 }
 
-int aura_request_op_type(const aura_request_t *req) {
-    if (!req) return -1;
-    return (int)req->op_type;
+aura_op_type_t aura_request_op_type(const aura_request_t *req) {
+    if (!req) return (aura_op_type_t)-1;
+    return req->op_type;
 }
 
 int aura_request_set_linked(aura_request_t *req) {

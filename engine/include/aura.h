@@ -530,7 +530,14 @@ _Static_assert(sizeof(aura_options_t) == 88, "aura_options_t ABI size changed");
 #else
 #    define AURA_O_DIRECT 0 /**< O_DIRECT not available on this platform */
 #endif
+#define AURA_O_EXCL 0x0080      /**< Fail if file exists */
+#define AURA_O_CLOEXEC 0x80000  /**< Set close-on-exec flag */
+#define AURA_O_DSYNC 0x1000     /**< Synchronize data */
+#define AURA_O_NOFOLLOW 0x20000 /**< Don't follow symlinks */
+#define AURA_O_NOATIME 0x40000  /**< Don't update access time */
 /**@}*/
+/* Raw O_* kernel flags may also be OR'd in directly for flags not covered
+ * by the AURA_O_* set above. */
 
 /* ============================================================================
  * Buffer Descriptors (Unified Buffer API)
@@ -834,8 +841,10 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_fsync(aura_engine_t *engine, int 
  *
  * Opens a file relative to a directory fd.  The callback receives the new
  * file descriptor as the result (>= 0 on success, negative errno on failure).
- * The pathname must remain valid until the callback fires.
  * Thread-safe: may be called concurrently from multiple threads.
+ *
+ * @note The @p pathname pointer must remain valid until the completion callback
+ *       fires — it is stored in the request and not copied.
  *
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
@@ -876,8 +885,10 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_close(aura_engine_t *engine, int 
  * Submit an asynchronous statx operation.
  *
  * Retrieves file metadata into the caller-provided statx buffer.
- * Both pathname and statxbuf must remain valid until the callback.
  * Thread-safe: may be called concurrently from multiple threads.
+ *
+ * @note The @p pathname pointer must remain valid until the completion callback
+ *       fires — it is stored in the request and not copied.
  *
  * @param engine    Engine handle
  * @param dirfd     Directory fd (AT_FDCWD for current directory)
@@ -1096,7 +1107,7 @@ AURA_API void *aura_request_user_data(const aura_request_t *req);
  * @param req Request handle
  * @return Operation type (AURA_OP_READ, AURA_OP_OPENAT, etc.), or -1 if NULL
  */
-AURA_API int aura_request_op_type(const aura_request_t *req);
+AURA_API aura_op_type_t aura_request_op_type(const aura_request_t *req);
 
 /**
  * Mark a request as linked
@@ -1138,7 +1149,7 @@ AURA_API bool aura_request_is_linked(const aura_request_t *req);
  * Get a pollable file descriptor for the engine
  *
  * Returns a file descriptor that becomes readable when completions are
- * available. Use this for integration with event loops (epoll, kqueue, etc).
+ * available. Use this for integration with event loops (epoll, poll, or select).
  *
  * The fd uses level-triggered semantics: it remains readable as long as
  * unprocessed completions exist. Call aura_poll() to process completions
@@ -1585,7 +1596,7 @@ AURA_API const char *aura_phase_name(int phase);
  *
  * Thread-safe: returns a pointer to a static string.
  *
- * @return Version string (e.g., "0.3.0")
+ * @return Version string (e.g., "0.6.0")
  */
 AURA_API const char *aura_version(void);
 

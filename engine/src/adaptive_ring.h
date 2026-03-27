@@ -23,6 +23,7 @@
 
 #include "adaptive_engine.h"
 #include "aura.h" /* aura_op_type_t, aura_request_t, aura_callback_t */
+#include "log.h"  /* aura_log — used by ring_flush_fast inline */
 
 /**
  * Request context
@@ -458,19 +459,28 @@ int ring_drain_cqes_fast(ring_ctx_t *ctx);
 
 /**
  * Inline flush for single-thread rings.
- * Skips lock, error logging, and partial-submit handling.
+ * Skips lock acquisition; handles errors and partial submits like ring_flush.
  */
 static inline int ring_flush_fast(ring_ctx_t *ctx) {
     int queued = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
     if (queued == 0) return 0;
     ring_clear_last_sqe(); /* Prevent stale SQE access after flush */
     int submitted = io_uring_submit(&ctx->ring);
+    if (submitted < 0) {
+        aura_log(AURA_LOG_WARN, "io_uring_submit failed: %s (queued=%d)", strerror(-submitted),
+                 queued);
+        errno = -submitted;
+        return (-1);
+    }
+    adaptive_record_submit(&ctx->adaptive, submitted);
+    if (submitted < queued) {
+        aura_log(AURA_LOG_WARN, "partial submit: %d of %d SQEs submitted", submitted, queued);
+    }
     if (submitted > 0) {
         /* Single-thread: plain store. No CAS loop needed. */
         int old = atomic_load_explicit(&ctx->queued_sqes, memory_order_relaxed);
         int sub = submitted < old ? submitted : old;
         atomic_store_explicit(&ctx->queued_sqes, old - sub, memory_order_relaxed);
-        adaptive_record_submit(&ctx->adaptive, submitted);
     }
     return submitted;
 }

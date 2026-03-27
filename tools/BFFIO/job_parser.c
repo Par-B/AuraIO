@@ -73,7 +73,9 @@ uint64_t parse_size(const char *str) {
     if (!str || !*str) return 0;
 
     char *endp = NULL;
+    errno = 0;
     unsigned long long val = strtoull(str, &endp, 10);
+    if (errno == ERANGE) return 0;
     if (endp == str) return 0;
 
     if (endp && *endp) {
@@ -462,8 +464,7 @@ static int apply_param(job_config_t *job, const char *key, const char *value) {
 int job_parse_file(const char *path, bench_config_t *config) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        fprintf(stderr, "BFFIO: cannot open job file '%s': ", path);
-        perror("");
+        fprintf(stderr, "BFFIO: cannot open job file '%s': %s\n", path, strerror(errno));
         return -1;
     }
 
