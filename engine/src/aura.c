@@ -2962,6 +2962,50 @@ int aura_set_max_p99_latency(aura_engine_t *engine, double latency_ms) {
     return 0;
 }
 
+int aura_set_min_in_flight(aura_engine_t *engine, int min_in_flight) {
+    if (!engine || min_in_flight < 1 || min_in_flight > engine->queue_depth) {
+        errno = EINVAL;
+        return (-1);
+    }
+
+    for (int i = 0; i < engine->ring_count; i++) {
+        ring_ctx_t *ring = &engine->rings[i];
+        bool st = ring_lock(ring);
+        ring->adaptive.min_in_flight = min_in_flight;
+        ring_unlock(ring, st);
+    }
+
+    return 0;
+}
+
+int aura_set_batch_threshold(aura_engine_t *engine, int threshold) {
+    if (!engine || threshold < -1) {
+        errno = EINVAL;
+        return (-1);
+    }
+
+    for (int i = 0; i < engine->ring_count; i++) {
+        ring_ctx_t *ring = &engine->rings[i];
+        if (threshold == -1) {
+            /* Re-enable auto-tune: clear fixed flag, let AIMD take over */
+            atomic_store_explicit(&ring->adaptive.batch_threshold_fixed, false,
+                                  memory_order_release);
+        } else if (threshold == 0) {
+            atomic_store_explicit(&ring->adaptive.current_batch_threshold, INT_MAX,
+                                  memory_order_release);
+            atomic_store_explicit(&ring->adaptive.batch_threshold_fixed, true,
+                                  memory_order_release);
+        } else {
+            atomic_store_explicit(&ring->adaptive.current_batch_threshold, threshold,
+                                  memory_order_release);
+            atomic_store_explicit(&ring->adaptive.batch_threshold_fixed, true,
+                                  memory_order_release);
+        }
+    }
+
+    return 0;
+}
+
 int aura_histogram_bucket_upper_bound_us(const aura_histogram_t *hist, int bucket) {
     if (!hist || bucket < 0 || bucket >= AURA_HISTOGRAM_BUCKETS) {
         return 0;

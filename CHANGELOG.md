@@ -5,6 +5,11 @@ All notable changes to AuraIO will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Runtime configuration API**: `aura_set_max_p99_latency()`, `aura_set_min_in_flight()`, `aura_set_batch_threshold()` allow changing adaptive controller parameters after engine creation. Useful for engines that receive per-stream tuning hints after context initialization. C++ and Rust bindings include corresponding methods on `Engine`.
+
 ## [0.6.0] - 2026-02-27
 
 ### Breaking Changes

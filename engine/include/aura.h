@@ -91,8 +91,10 @@
  * aura_get_histogram, aura_get_buffer_stats):
  *   Thread-safe. Reads atomic counters and briefly locks each ring.
  *
- * RUNTIME CONFIGURATION (aura_set_max_p99_latency):
- *   Thread-safe. Briefly locks each ring to update the controller.
+ * RUNTIME CONFIGURATION (aura_set_max_p99_latency, aura_set_min_in_flight,
+ *   aura_set_batch_threshold):
+ *   Thread-safe. Briefly locks each ring or uses atomic stores to update
+ *   the controller. Changes take effect on the next AIMD tick.
  *
  * REGISTRATION (aura_register_buffers, aura_register_files, aura_update_file,
  * aura_unregister, aura_request_unregister):
@@ -1624,6 +1626,40 @@ AURA_API const char *aura_version(void);
  *         or latency_ms is negative)
  */
 AURA_API int aura_set_max_p99_latency(aura_engine_t *engine, double latency_ms);
+
+/**
+ * Set the minimum in-flight operation limit at runtime
+ *
+ * Updates the AIMD backoff floor on all adaptive controllers. Takes effect
+ * on the next AIMD tick. The in-flight limit will never be reduced below
+ * this value during backoff.
+ *
+ * Thread-safe: briefly locks each ring to update the controller.
+ *
+ * @param engine        Engine handle
+ * @param min_in_flight Minimum in-flight limit (must be >= 1 and
+ *                      <= queue_depth)
+ * @return 0 on success, -1 on error (errno set to EINVAL if engine is NULL
+ *         or min_in_flight is out of range)
+ */
+AURA_API int aura_set_min_in_flight(aura_engine_t *engine, int min_in_flight);
+
+/**
+ * Set the batch flush threshold at runtime
+ *
+ * Controls when queued SQEs are flushed to the kernel:
+ *   -1 = re-enable AIMD auto-tuning (default behavior)
+ *    0 = never auto-flush (caller controls flushing)
+ *   >0 = fixed threshold (bypass AIMD batch tuning)
+ *
+ * Thread-safe: uses atomic stores (no ring lock needed).
+ *
+ * @param engine    Engine handle
+ * @param threshold Batch threshold value (-1, 0, or positive)
+ * @return 0 on success, -1 on error (errno set to EINVAL if engine is NULL
+ *         or threshold < -1)
+ */
+AURA_API int aura_set_batch_threshold(aura_engine_t *engine, int threshold);
 
 /* ============================================================================
  * Diagnostics

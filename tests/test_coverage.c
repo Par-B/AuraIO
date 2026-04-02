@@ -2556,6 +2556,118 @@ TEST(request_op_type_write) {
 }
 
 /* ============================================================================
+ * Runtime Configuration Setters
+ * ============================================================================ */
+
+TEST(set_max_p99_latency_null) {
+    int rc = aura_set_max_p99_latency(NULL, 5.0);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+}
+
+TEST(set_max_p99_latency_negative) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    int rc = aura_set_max_p99_latency(engine, -1.0);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+    aura_destroy(engine);
+}
+
+TEST(set_max_p99_latency_valid) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    int rc = aura_set_max_p99_latency(engine, 5.0);
+    assert(rc == 0);
+    aura_destroy(engine);
+}
+
+TEST(set_max_p99_latency_zero_reverts) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    /* Set a target, then revert to auto */
+    assert(aura_set_max_p99_latency(engine, 10.0) == 0);
+    assert(aura_set_max_p99_latency(engine, 0.0) == 0);
+    aura_destroy(engine);
+}
+
+TEST(set_min_in_flight_null) {
+    int rc = aura_set_min_in_flight(NULL, 4);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+}
+
+TEST(set_min_in_flight_zero) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    int rc = aura_set_min_in_flight(engine, 0);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+    aura_destroy(engine);
+}
+
+TEST(set_min_in_flight_too_large) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    /* queue_depth is 32, so 33 should fail */
+    int rc = aura_set_min_in_flight(engine, 33);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+    aura_destroy(engine);
+}
+
+TEST(set_min_in_flight_valid) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    assert(aura_set_min_in_flight(engine, 1) == 0);
+    assert(aura_set_min_in_flight(engine, 16) == 0);
+    assert(aura_set_min_in_flight(engine, 32) == 0);
+    aura_destroy(engine);
+}
+
+TEST(set_batch_threshold_null) {
+    int rc = aura_set_batch_threshold(NULL, 8);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+}
+
+TEST(set_batch_threshold_invalid) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    int rc = aura_set_batch_threshold(engine, -2);
+    assert(rc == -1);
+    assert(errno == EINVAL);
+    aura_destroy(engine);
+}
+
+TEST(set_batch_threshold_auto) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    /* -1 re-enables auto-tuning */
+    int rc = aura_set_batch_threshold(engine, -1);
+    assert(rc == 0);
+    aura_destroy(engine);
+}
+
+TEST(set_batch_threshold_never) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    /* 0 = never auto-flush */
+    int rc = aura_set_batch_threshold(engine, 0);
+    assert(rc == 0);
+    aura_destroy(engine);
+}
+
+TEST(set_batch_threshold_fixed) {
+    aura_engine_t *engine = make_engine(1, 32);
+    assert(engine);
+    assert(aura_set_batch_threshold(engine, 16) == 0);
+    /* Switch back to auto-tune */
+    assert(aura_set_batch_threshold(engine, -1) == 0);
+    aura_destroy(engine);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -2735,6 +2847,21 @@ int main(void) {
     RUN_TEST(request_op_type_null);
     RUN_TEST(request_op_type_read);
     RUN_TEST(request_op_type_write);
+
+    /* Runtime configuration setters */
+    RUN_TEST(set_max_p99_latency_null);
+    RUN_TEST(set_max_p99_latency_negative);
+    RUN_TEST(set_max_p99_latency_valid);
+    RUN_TEST(set_max_p99_latency_zero_reverts);
+    RUN_TEST(set_min_in_flight_null);
+    RUN_TEST(set_min_in_flight_zero);
+    RUN_TEST(set_min_in_flight_too_large);
+    RUN_TEST(set_min_in_flight_valid);
+    RUN_TEST(set_batch_threshold_null);
+    RUN_TEST(set_batch_threshold_invalid);
+    RUN_TEST(set_batch_threshold_auto);
+    RUN_TEST(set_batch_threshold_never);
+    RUN_TEST(set_batch_threshold_fixed);
 
     printf("\n  All %d tests passed!\n\n", test_count);
     return 0;

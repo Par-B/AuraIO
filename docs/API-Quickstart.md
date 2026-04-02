@@ -193,6 +193,22 @@ opts2.single_thread = true;            // Skip mutex overhead
 aura_engine_t *engine2 = aura_create_with_options(&opts2);
 ```
 
+#### Runtime configuration
+
+Three options can also be changed after engine creation via runtime setters. This is useful when tuning hints aren't available until after the engine is initialized (e.g., per-stream configuration from a higher-level framework):
+
+```c
+aura_engine_t *engine = aura_create();
+
+// Apply per-stream hints after creation
+aura_set_max_p99_latency(engine, 2.0);   // Target 2ms P99 ceiling
+aura_set_min_in_flight(engine, 8);        // Raise AIMD backoff floor
+aura_set_batch_threshold(engine, 16);     // Fixed batch size (bypass auto-tune)
+// Pass -1 to aura_set_batch_threshold to re-enable auto-tuning
+```
+
+All three are thread-safe and take effect on the next AIMD tick (~10ms). Fields not listed here (`queue_depth`, `ring_count`, `disable_adaptive`, etc.) are structural and can only be set at creation time.
+
 Most users should start with `aura_create()` and only add options when profiling reveals a need.
 
 ### Writing Data

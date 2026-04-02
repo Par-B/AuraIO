@@ -909,6 +909,45 @@ impl Engine {
         }
     }
 
+    /// Set the minimum in-flight operation limit at runtime.
+    ///
+    /// Updates the AIMD backoff floor on all adaptive controllers. Takes effect
+    /// on the next AIMD tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `min_in_flight` is less than 1 or greater than
+    /// the engine's queue depth.
+    pub fn set_min_in_flight(&self, min_in_flight: i32) -> Result<()> {
+        let ret =
+            unsafe { aura_sys::aura_set_min_in_flight(self.inner.raw(), min_in_flight) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
+    /// Set the batch flush threshold at runtime.
+    ///
+    /// Controls when queued SQEs are flushed to the kernel:
+    /// - `-1` = re-enable AIMD auto-tuning
+    /// - `0` = never auto-flush
+    /// - `>0` = fixed threshold
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `threshold` is less than -1.
+    pub fn set_batch_threshold(&self, threshold: i32) -> Result<()> {
+        let ret =
+            unsafe { aura_sys::aura_set_batch_threshold(self.inner.raw(), threshold) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
     /// Get the total number of in-flight operations across all rings.
     ///
     /// A lightweight alternative to [`stats()`](Self::stats) when you only need

@@ -1235,6 +1235,61 @@ Get a human-readable name for an AIMD phase value.
 
 ---
 
+#### Runtime Configuration
+
+Thread-safe functions to update adaptive controller parameters after engine creation. Changes take effect on the next AIMD tick (~10ms). Intended for engines that receive per-stream tuning hints after context initialization.
+
+##### `aura_set_max_p99_latency`
+
+```c
+int aura_set_max_p99_latency(aura_engine_t *engine, double latency_ms);
+```
+
+Set the target maximum P99 latency. Pass `0` to revert to auto-detect (baseline × multiplier). Briefly locks each ring.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `engine` | `aura_engine_t *` | Engine handle |
+| `latency_ms` | `double` | Target P99 latency in milliseconds (0 = auto) |
+
+**Returns:** 0 on success, -1 on error (errno `EINVAL` if engine is `NULL` or `latency_ms` is negative).
+
+---
+
+##### `aura_set_min_in_flight`
+
+```c
+int aura_set_min_in_flight(aura_engine_t *engine, int min_in_flight);
+```
+
+Set the minimum in-flight operation limit (AIMD backoff floor). The in-flight limit will never be reduced below this value during backoff. Briefly locks each ring.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `engine` | `aura_engine_t *` | Engine handle |
+| `min_in_flight` | `int` | Minimum in-flight limit (>= 1, <= queue_depth) |
+
+**Returns:** 0 on success, -1 on error (errno `EINVAL` if engine is `NULL` or value out of range).
+
+---
+
+##### `aura_set_batch_threshold`
+
+```c
+int aura_set_batch_threshold(aura_engine_t *engine, int threshold);
+```
+
+Set the batch flush threshold. Controls when queued SQEs are flushed to the kernel. Uses atomic stores (no ring lock needed).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `engine` | `aura_engine_t *` | Engine handle |
+| `threshold` | `int` | `-1` = re-enable AIMD auto-tuning, `0` = never auto-flush, `>0` = fixed threshold |
+
+**Returns:** 0 on success, -1 on error (errno `EINVAL` if engine is `NULL` or `threshold < -1`).
+
+---
+
 #### Diagnostics
 
 ##### `aura_get_fatal_error`
@@ -1548,6 +1603,14 @@ Coroutine awaitables throw `Error` on negative results when resumed.
 | `get_ring_stats(int ring_idx) const` | `RingStats` | `std::out_of_range` | Per-ring stats |
 | `get_histogram(int ring_idx) const` | `Histogram` | `std::out_of_range` | Latency histogram |
 | `get_buffer_stats() const noexcept` | `BufferStats` | -- | Buffer pool stats |
+
+#### Runtime Configuration
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `set_max_p99_latency(double ms)` | `void` | `Error` | Set target P99 latency (0 = auto) |
+| `set_min_in_flight(int min)` | `void` | `Error` | Set AIMD backoff floor (>= 1, <= queue_depth) |
+| `set_batch_threshold(int threshold)` | `void` | `Error` | Set batch flush threshold (-1 = auto, 0 = never, >0 = fixed) |
 
 #### Diagnostics
 
@@ -1924,6 +1987,14 @@ The callback type is `FnOnce(Result<usize>) + Send + 'static`. The callback rece
 | `histogram(i32)` | `Result<Histogram>` | Get latency histogram for a ring |
 | `buffer_stats()` | `Result<BufferStats>` | Get buffer pool statistics |
 | `get_fatal_error()` | `Result<i32>` | 0 if healthy, positive errno if fatally broken |
+
+#### Runtime Configuration
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `set_max_p99_latency(f64)` | `Result<()>` | Set target P99 latency (0.0 = auto) |
+| `set_min_in_flight(i32)` | `Result<()>` | Set AIMD backoff floor (>= 1, <= queue_depth) |
+| `set_batch_threshold(i32)` | `Result<()>` | Set batch flush threshold (-1 = auto, 0 = never, >0 = fixed) |
 
 #### Free Functions
 

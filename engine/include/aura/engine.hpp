@@ -847,6 +847,38 @@ class Engine {
         }
     }
 
+    /**
+     * Set the minimum in-flight operation limit at runtime
+     *
+     * Updates the AIMD backoff floor on all adaptive controllers. Takes
+     * effect on the next AIMD tick.
+     *
+     * @param min_in_flight Minimum in-flight limit (>= 1, <= queue_depth)
+     * @throws Error if engine handle is NULL or value is out of range
+     */
+    void set_min_in_flight(int min_in_flight) {
+        if (aura_set_min_in_flight(handle_, min_in_flight) != 0) {
+            throw Error(errno, "aura_set_min_in_flight");
+        }
+    }
+
+    /**
+     * Set the batch flush threshold at runtime
+     *
+     * Controls when queued SQEs are flushed to the kernel:
+     *   -1 = re-enable AIMD auto-tuning
+     *    0 = never auto-flush
+     *   >0 = fixed threshold
+     *
+     * @param threshold Batch threshold value
+     * @throws Error if engine handle is NULL or threshold < -1
+     */
+    void set_batch_threshold(int threshold) {
+        if (aura_set_batch_threshold(handle_, threshold) != 0) {
+            throw Error(errno, "aura_set_batch_threshold");
+        }
+    }
+
     // =========================================================================
     // Diagnostics
     // =========================================================================
