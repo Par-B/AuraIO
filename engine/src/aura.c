@@ -2946,6 +2946,22 @@ double aura_histogram_percentile(const aura_histogram_t *hist, double percentile
     return -1.0;
 }
 
+int aura_set_max_p99_latency(aura_engine_t *engine, double latency_ms) {
+    if (!engine || latency_ms < 0) {
+        errno = EINVAL;
+        return (-1);
+    }
+
+    for (int i = 0; i < engine->ring_count; i++) {
+        ring_ctx_t *ring = &engine->rings[i];
+        bool st = ring_lock(ring);
+        ring->adaptive.max_p99_ms = latency_ms;
+        ring_unlock(ring, st);
+    }
+
+    return 0;
+}
+
 int aura_histogram_bucket_upper_bound_us(const aura_histogram_t *hist, int bucket) {
     if (!hist || bucket < 0 || bucket >= AURA_HISTOGRAM_BUCKETS) {
         return 0;

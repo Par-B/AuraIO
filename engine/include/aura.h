@@ -91,6 +91,9 @@
  * aura_get_histogram, aura_get_buffer_stats):
  *   Thread-safe. Reads atomic counters and briefly locks each ring.
  *
+ * RUNTIME CONFIGURATION (aura_set_max_p99_latency):
+ *   Thread-safe. Briefly locks each ring to update the controller.
+ *
  * REGISTRATION (aura_register_buffers, aura_register_files, aura_update_file,
  * aura_unregister, aura_request_unregister):
  *   Registration operations must be serialized (no concurrent register/
@@ -1599,6 +1602,28 @@ AURA_API const char *aura_phase_name(int phase);
  * @return Version string (e.g., "0.6.0")
  */
 AURA_API const char *aura_version(void);
+
+/* ============================================================================
+ * Runtime Configuration
+ * ============================================================================
+ */
+
+/**
+ * Set the target maximum P99 latency at runtime
+ *
+ * Updates the latency guard on all adaptive controllers. Takes effect on
+ * the next AIMD tick. Intended for use during stream initialization, before
+ * I/O begins, but safe to call at any time.
+ *
+ * Thread-safe: briefly locks each ring to update the controller.
+ *
+ * @param engine     Engine handle
+ * @param latency_ms Target P99 latency in milliseconds, or 0 to revert
+ *                   to auto-detect (baseline × multiplier)
+ * @return 0 on success, -1 on error (errno set to EINVAL if engine is NULL
+ *         or latency_ms is negative)
+ */
+AURA_API int aura_set_max_p99_latency(aura_engine_t *engine, double latency_ms);
 
 /* ============================================================================
  * Diagnostics

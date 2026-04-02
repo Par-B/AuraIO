@@ -120,7 +120,7 @@ impl RequestHandle {
     /// The caller must ensure the handle is still valid (the completion
     /// callback has not yet been invoked). See the struct-level docs for
     /// the validity timeline.
-    pub unsafe fn op_type(&self) -> i32 {
+    pub unsafe fn op_type(&self) -> u32 {
         unsafe { aura_sys::aura_request_op_type(self.inner) }
     }
 

@@ -1553,7 +1553,7 @@ mod tests {
 
         assert_eq!(
             op,
-            aura_sys::aura_op_type_t_AURA_OP_READ as i32,
+            aura_sys::aura_op_type_t_AURA_OP_READ,
             "op_type should be AURA_OP_READ"
         );
     }

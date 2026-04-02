@@ -829,6 +829,25 @@ class Engine {
     }
 
     // =========================================================================
+    // Runtime Configuration
+    // =========================================================================
+
+    /**
+     * Set the target maximum P99 latency at runtime
+     *
+     * Updates the latency guard on all adaptive controllers. Takes effect
+     * on the next AIMD tick. Pass 0 to revert to auto-detect.
+     *
+     * @param latency_ms Target P99 latency in milliseconds (0 = auto)
+     * @throws Error if engine handle is NULL or latency_ms is negative
+     */
+    void set_max_p99_latency(double latency_ms) {
+        if (aura_set_max_p99_latency(handle_, latency_ms) != 0) {
+            throw Error(errno, "aura_set_max_p99_latency");
+        }
+    }
+
+    // =========================================================================
     // Diagnostics
     // =========================================================================
 

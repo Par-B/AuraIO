@@ -891,6 +891,24 @@ impl Engine {
     // Statistics
     // =========================================================================
 
+    /// Set the target maximum P99 latency at runtime.
+    ///
+    /// Updates the latency guard on all adaptive controllers. Takes effect
+    /// on the next AIMD tick. Pass `0.0` to revert to auto-detect.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `latency_ms` is negative.
+    pub fn set_max_p99_latency(&self, latency_ms: f64) -> Result<()> {
+        let ret =
+            unsafe { aura_sys::aura_set_max_p99_latency(self.inner.raw(), latency_ms) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Error::Io(io::Error::last_os_error()))
+        }
+    }
+
     /// Get the total number of in-flight operations across all rings.
     ///
     /// A lightweight alternative to [`stats()`](Self::stats) when you only need
