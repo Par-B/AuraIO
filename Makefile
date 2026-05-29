@@ -7,6 +7,9 @@ HARDEN_CFLAGS = -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -
 HARDEN_LDFLAGS = -Wl,-z,relro,-z,now
 LDFLAGS = $(HARDEN_LDFLAGS) -luring -lpthread
 CFLAGS += $(HARDEN_CFLAGS)
+# Optional extra flags appended last, e.g. `make CFLAGS_EXTRA=-DNDEBUG` to
+# verify the engine builds clean in a release/NDEBUG configuration.
+CFLAGS += $(CFLAGS_EXTRA)
 
 # Version (keep in sync with engine/include/aura.h)
 VERSION_MAJOR = 0

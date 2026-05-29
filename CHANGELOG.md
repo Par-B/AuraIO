@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `SECURITY.md` (private vulnerability reporting policy) and `CONTRIBUTING.md`
+  (build/test/sanitizer/style guide) for public open-source release.
+- `CFLAGS_EXTRA` Makefile hook to append extra compiler flags, e.g.
+  `make CFLAGS_EXTRA=-DNDEBUG` to verify a release/NDEBUG build.
+
+### Fixed
+- **Engine failed to compile with `-DNDEBUG`**: `adaptive_tick()`'s concurrency
+  guard referenced an `_Atomic` field that was only declared in debug builds,
+  breaking every release/packaged build (CMake `Release`, distro packaging,
+  downstream bundling). The guard field is now unconditional, matching the
+  intended "active in all builds" behavior.
+- **Rust `async` feature did not compile**: a submission helper had been placed
+  in a trait `impl` where it was not a member, breaking the entire async API
+  and the `async_copy` example since it was introduced. Moved to an inherent
+  `impl` and fixed the callback boxing. Added `--all-features` build/test to CI.
+- **`auracp_cpp` self-copy destroyed the file**: copying a file onto itself
+  (`auracp_cpp file file`) skipped the same-file check and truncated the source
+  before reading it. The dev/ino check now runs unconditionally (matching the C
+  `auracp`).
+- **`auracp`/`auracp_cpp` `--direct` (O_DIRECT) corrupted files whose size is
+  not a 512-byte multiple**: the unaligned final chunk failed with `EINVAL`,
+  leaving a zero-filled tail. The tail read/write are now sector-padded and the
+  destination is `ftruncate`d back to the exact size.
+- **`atree` silently succeeded on an unreadable root directory**, printing an
+  empty tree and exiting `0`. It now reports the error and exits non-zero.
+- **`aura-hash` CPU pinning** now honors the process's allowed CPU set
+  (cgroup/cpuset limits) instead of blindly pinning to `worker_id`.
+- `file_copy` C example now removes the partial destination on failure.
+- Documentation corrections: in-header `@code` examples in `aura.h` now include
+  the `flags` argument added in 0.6.0; stale `0.6.0` version strings in
+  `docs/api-reference.md` updated to `0.7.0`; README Rust dependency snippets
+  use valid Cargo git-dependency syntax.
+
+### Removed
+- Stray self-referential `lib/auraio` git submodule (pointed at the project's
+  own repository; a `--recursive` clone would recurse into itself).
+- Unused `bundled` feature from the `aura-sys` crate. The `aura` crate now pins
+  `aura-sys`'s version alongside the path dependency so it can be published.
+
 ## [0.7.0] - 2026-05-29
 
 ### Added
