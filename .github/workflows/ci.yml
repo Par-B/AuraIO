@@ -24,7 +24,7 @@ jobs:
       matrix:
         liburing: [distro, "2.7"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install base build dependencies
         run: |
@@ -63,7 +63,7 @@ jobs:
     name: lint (cppcheck)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -75,7 +75,7 @@ jobs:
     name: sanitizers (ASan + TSan)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install dependencies
         run: |
           sudo apt-get update
