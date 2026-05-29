@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 AuraIO Contributors
 
-
 //! Async/await support for AuraIO
 //!
 //! This module provides Future-based async I/O operations that integrate with
@@ -42,6 +41,7 @@
 use crate::buffer::BufferRef;
 use crate::engine::EngineInner;
 use crate::error::Result;
+use crate::request::RequestHandle;
 use crate::Engine;
 use std::future::Future;
 use std::os::unix::io::RawFd;
@@ -295,7 +295,7 @@ pub trait AsyncEngine {
     ) -> Result<IoFuture>;
 }
 
-impl AsyncEngine for Engine {
+impl Engine {
     /// Submit an I/O operation with async Future handling (internal helper).
     ///
     /// Eliminates boilerplate for Future creation across all async methods.
@@ -312,7 +312,7 @@ impl AsyncEngine for Engine {
         F: FnOnce(Box<dyn FnOnce(Result<usize>) + Send + 'static>) -> Result<RequestHandle>,
     {
         let (callback, state, request_consumed) = create_io_callback();
-        let handle = submit_fn(callback)?;
+        let handle = submit_fn(Box::new(callback))?;
         Ok(IoFuture {
             state,
             engine: Arc::clone(&self.inner),
@@ -320,7 +320,9 @@ impl AsyncEngine for Engine {
             request_consumed,
         })
     }
+}
 
+impl AsyncEngine for Engine {
     unsafe fn async_read(
         &self,
         fd: RawFd,
@@ -428,10 +430,7 @@ mod tests {
         let engine = Engine::new().unwrap();
 
         let tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file = OpenOptions::new()
-            .write(true)
-            .open(tmpfile.path())
-            .unwrap();
+        let file = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
         let fd = file.as_raw_fd();
 
         let mut buf = engine.allocate_buffer(4096).unwrap();
@@ -457,10 +456,7 @@ mod tests {
         let engine = Engine::new().unwrap();
 
         let tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file = OpenOptions::new()
-            .write(true)
-            .open(tmpfile.path())
-            .unwrap();
+        let file = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
         let fd = file.as_raw_fd();
 
         let future = engine.async_fsync(fd, 0).unwrap();
@@ -473,10 +469,7 @@ mod tests {
         let engine = Engine::new().unwrap();
 
         let tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file = OpenOptions::new()
-            .write(true)
-            .open(tmpfile.path())
-            .unwrap();
+        let file = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
         let fd = file.as_raw_fd();
 
         let future = engine.async_fdatasync(fd, 0).unwrap();
@@ -524,10 +517,7 @@ mod tests {
         let engine = Engine::new().unwrap();
 
         let tmpfile = tempfile::NamedTempFile::new().unwrap();
-        let file = OpenOptions::new()
-            .write(true)
-            .open(tmpfile.path())
-            .unwrap();
+        let file = OpenOptions::new().write(true).open(tmpfile.path()).unwrap();
         let fd = file.as_raw_fd();
 
         let buf1 = b"Hello";
