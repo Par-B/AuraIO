@@ -25,6 +25,8 @@
  * Use version detection instead of opcode detection (opcodes are enums, not macros).
  */
 #if defined(__has_include)
+/* cppcheck cannot evaluate __has_include and emits preprocessorErrorDirective. */
+// cppcheck-suppress preprocessorErrorDirective
 #    if __has_include(<liburing/io_uring_version.h>)
 #        include <liburing/io_uring_version.h>
 #        if (IO_URING_VERSION_MAJOR > 2) || \
