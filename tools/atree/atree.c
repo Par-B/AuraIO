@@ -1106,6 +1106,17 @@ static int scan_tree(tree_node_t *root, const config_t *config) {
         return -1;
     }
 
+    /* Verify the root directory is actually readable up-front. Without this, an
+       unreadable root (e.g. EACCES) would silently scan to an empty tree and
+       exit 0, falsely reporting success. */
+    int root_fd = open(root->full_path, O_RDONLY | O_DIRECTORY);
+    if (root_fd < 0) {
+        fprintf(stderr, "atree: cannot open '%s': %s\n", root->full_path, strerror(errno));
+        visited_destroy(&visited);
+        return -1;
+    }
+    close(root_fd);
+
     /* Scan root directory using the same fast path as workers (getdents64 + async statx) */
     aura_options_t opts;
     aura_options_init(&opts);

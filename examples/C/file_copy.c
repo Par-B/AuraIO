@@ -209,10 +209,18 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
+    int incomplete = (total_copied != (size_t)file_size);
     aura_buffer_free(engine, buf);
     aura_destroy(engine);
     close(src_fd);
     close(dst_fd);
 
-    return (total_copied == (size_t)file_size) ? 0 : 1;
+    /* On failure, remove the partial destination rather than leaving a
+       truncated file behind (models best practice for a copy tool). */
+    if (incomplete) {
+        unlink(dst_path);
+        fprintf(stderr, "Removed incomplete destination '%s'\n", dst_path);
+    }
+
+    return incomplete ? 1 : 0;
 }

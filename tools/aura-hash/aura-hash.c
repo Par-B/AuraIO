@@ -643,11 +643,34 @@ static int run_worker_pipeline(worker_ctx_t *wctx) {
 static void *worker_thread_fn(void *arg) {
     worker_ctx_t *wctx = (worker_ctx_t *)arg;
 
-    /* Pin thread to its designated CPU core */
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(wctx->worker_id, &cpuset);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+    /* Pin the thread to a CPU drawn from the process's *allowed* set so we
+       honor cgroup/cpuset limits (e.g. inside a container) and never target a
+       core that doesn't exist or isn't permitted. Best-effort: if affinity
+       can't be queried or set, run unpinned rather than forcing a bad core. */
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+        int navail = CPU_COUNT(&allowed);
+        if (navail > 0) {
+            int target = wctx->worker_id % navail; /* round-robin over allowed CPUs */
+            int seen = 0, chosen = -1;
+            for (int c = 0; c < CPU_SETSIZE; c++) {
+                if (CPU_ISSET(c, &allowed)) {
+                    if (seen == target) {
+                        chosen = c;
+                        break;
+                    }
+                    seen++;
+                }
+            }
+            if (chosen >= 0) {
+                cpu_set_t one;
+                CPU_ZERO(&one);
+                CPU_SET(chosen, &one);
+                pthread_setaffinity_np(pthread_self(), sizeof(one), &one);
+            }
+        }
+    }
 
     wctx->error = run_worker_pipeline(wctx);
     return NULL;
