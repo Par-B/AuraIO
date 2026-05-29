@@ -399,9 +399,10 @@ typedef struct {
      * the sliding windows above. */
     _Alignas(64) adaptive_histogram_pair_t hist_pair;
 
-#ifndef NDEBUG
-    _Atomic int tick_entered; /**< Runtime guard: detect/reject concurrent adaptive_tick calls */
-#endif
+    /* Runtime guard: detect/reject concurrent adaptive_tick calls. Active in
+     * all builds (adaptive_tick degrades to a skipped tick on concurrent entry
+     * in release; the assert additionally trips in debug). */
+    _Atomic int tick_entered;
 } adaptive_controller_t;
 
 _Static_assert(sizeof(double) == sizeof(uint64_t),
