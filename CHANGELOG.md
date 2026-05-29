@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-29
+
 ### Added
 - **Runtime configuration API**: `aura_set_max_p99_latency()`, `aura_set_min_in_flight()`, `aura_set_batch_threshold()` allow changing adaptive controller parameters after engine creation. Useful for engines that receive per-stream tuning hints after context initialization. C++ and Rust bindings include corresponding methods on `Engine`.
+
+### Fixed
+- Test suite now builds and passes on liburing < 2.7 (e.g. Ubuntu 22.04, which ships 2.5). The `aura_ftruncate` tests previously assumed support and aborted the build; they now skip cleanly. Library behavior is unchanged — `aura_ftruncate` already returned `NULL`/`ENOSYS` on liburing < 2.7 as documented.
 
 ## [0.6.0] - 2026-02-27
 

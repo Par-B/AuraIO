@@ -1,6 +1,6 @@
 # AuraIO API Reference
 
-**Version 0.6.0**
+**Version 0.7.0**
 
 AuraIO is a self-tuning async I/O library for Linux built on io_uring. It provides three API surfaces: a C11 core library, C++20 bindings with RAII and coroutine support, and Rust bindings with safe and async wrappers.
 
@@ -371,7 +371,7 @@ The histogram uses a tiered bucket layout to provide fine-grained resolution at 
 | `AURA_VERSION_MINOR` | 6 | Minor version |
 | `AURA_VERSION_PATCH` | 0 | Patch version |
 | `AURA_VERSION` | 600 | Combined: `major * 10000 + minor * 100 + patch` |
-| `AURA_VERSION_STRING` | `"0.6.0"` | Version string |
+| `AURA_VERSION_STRING` | `"0.7.0"` | Version string |
 
 #### AIMD Phase Constants
 

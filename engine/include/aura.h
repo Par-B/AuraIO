@@ -47,7 +47,7 @@
  */
 
 #define AURA_VERSION_MAJOR 0
-#define AURA_VERSION_MINOR 6
+#define AURA_VERSION_MINOR 7
 #define AURA_VERSION_PATCH 0
 
 /** Version as a single integer: (major * 10000 + minor * 100 + patch) */
