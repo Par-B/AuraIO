@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Matrix over liburing version. The "distro" leg uses whatever
+    # liburing-dev Ubuntu ships (currently < 2.7), which exercises the
+    # graceful ftruncate ENOSYS path; the "2.7" leg builds liburing from
+    # source so aura_ftruncate is actually submitted. This guards the
+    # liburing-version-dependent behavior in both directions.
+    name: test (liburing ${{ matrix.liburing }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        liburing: [distro, "2.7"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install base build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ pkg-config
+
+      - name: Install distro liburing
+        if: matrix.liburing == 'distro'
+        run: sudo apt-get install -y liburing-dev
+
+      - name: Build liburing ${{ matrix.liburing }} from source
+        if: matrix.liburing != 'distro'
+        run: |
+          git clone --depth 1 --branch liburing-${{ matrix.liburing }} \
+            https://github.com/axboe/liburing.git /tmp/liburing
+          cd /tmp/liburing
+          ./configure --prefix=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Environment diagnostics
+        run: |
+          uname -a
+          echo "liburing: $(pkg-config --modversion liburing || echo 'not found via pkg-config')"
+          cat /proc/sys/kernel/io_uring_disabled 2>/dev/null \
+            && echo "(0 = io_uring enabled)" \
+            || echo "io_uring_disabled sysctl not present (older kernel)"
+
+      - name: Build and run full test suite (C + C++ + Rust)
+        run: make test
+
+  lint:
+    name: lint (cppcheck)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck build-essential pkg-config liburing-dev
+      - name: Run cppcheck
+        run: make lint
+
+  sanitizers:
+    name: sanitizers (ASan + TSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ pkg-config liburing-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # Run ASan and TSan directly rather than `make test-sanitizers`, which
+      # also runs Valgrind — Valgrind does not fully model io_uring syscalls
+      # and is flaky/slow in CI. Valgrind stays a local-only target.
+      - name: AddressSanitizer
+        run: make test-asan
+      - name: ThreadSanitizer
+        run: make test-tsan
