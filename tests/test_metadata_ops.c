@@ -313,21 +313,25 @@ TEST(full_lifecycle) {
     /* 4. Ftruncate to half */
     cb_state_t st_t = { 0 };
     req = aura_ftruncate(engine, fd, 4096, 0, basic_cb, &st_t);
-    assert(req);
-    run_until_done(engine, &st_t);
-    if (st_t.result == -EINVAL || st_t.result == -ENOSYS) {
-        printf("(ftruncate skipped: kernel too old) ");
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(ftruncate skipped: liburing too old) ");
     } else {
-        assert(st_t.result == 0);
+        run_until_done(engine, &st_t);
+        if (st_t.result == -EINVAL || st_t.result == -ENOSYS) {
+            printf("(ftruncate skipped: kernel too old) ");
+        } else {
+            assert(st_t.result == 0);
 
-        /* 5. Statx — verify truncated size */
-        struct statx stx2 = { 0 };
-        cb_state_t st_s2 = { 0 };
-        req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, 0, basic_cb, &st_s2);
-        assert(req);
-        run_until_done(engine, &st_s2);
-        assert(st_s2.result == 0);
-        assert(stx2.stx_size == 4096);
+            /* 5. Statx — verify truncated size */
+            struct statx stx2 = { 0 };
+            cb_state_t st_s2 = { 0 };
+            req = aura_statx(engine, fd, "", AT_EMPTY_PATH, STATX_SIZE, &stx2, 0, basic_cb, &st_s2);
+            assert(req);
+            run_until_done(engine, &st_s2);
+            assert(st_s2.result == 0);
+            assert(stx2.stx_size == 4096);
+        }
     }
 
     /* 6. Fsync */
@@ -462,7 +466,14 @@ TEST(ftruncate_registered_file) {
 
     cb_state_t st = { 0 };
     aura_request_t *req = aura_ftruncate(engine, fd, 512, 0, basic_cb, &st);
-    assert(req);
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(skipped: liburing too old) ");
+        aura_unregister(engine, AURA_REG_FILES);
+        close(fd);
+        aura_destroy(engine);
+        return;
+    }
     run_until_done(engine, &st);
 
     if (st.result == -EINVAL || st.result == -ENOSYS) {
@@ -549,7 +560,13 @@ TEST(ftruncate_extend) {
 
     /* Extend to 1MB */
     aura_request_t *req = aura_ftruncate(engine, fd, 1024 * 1024, 0, basic_cb, &st);
-    assert(req);
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(skipped: liburing too old) ");
+        close(fd);
+        aura_destroy(engine);
+        return;
+    }
     run_until_done(engine, &st);
 
     if (st.result == -EINVAL || st.result == -ENOSYS) {
@@ -792,7 +809,12 @@ TEST(ftruncate_bad_fd) {
     cb_state_t st = { 0 };
 
     aura_request_t *req = aura_ftruncate(engine, 9999, 0, 0, basic_cb, &st);
-    assert(req);
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(skipped: liburing too old) ");
+        aura_destroy(engine);
+        return;
+    }
     run_until_done(engine, &st);
     /* Could be -EBADF or -EINVAL/-ENOSYS on older kernels */
     assert(st.result < 0);

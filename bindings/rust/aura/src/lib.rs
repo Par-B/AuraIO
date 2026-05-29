@@ -1406,25 +1406,29 @@ mod tests {
         let done_clone = done.clone();
         let result_clone = result_val.clone();
 
-        engine
-            .ftruncate(fd, 4096, 0, move |result| {
-                match result {
-                    Ok(_) => result_clone.store(0, Ordering::SeqCst),
-                    Err(ref e) => {
-                        // Accept ENOSYS for kernels < 6.9
-                        if let Error::Io(io_err) = e {
-                            result_clone.store(
-                                io_err.raw_os_error().unwrap_or(-1),
-                                Ordering::SeqCst,
-                            );
-                        } else {
-                            result_clone.store(-1, Ordering::SeqCst);
-                        }
+        let submit = engine.ftruncate(fd, 4096, 0, move |result| {
+            match result {
+                Ok(_) => result_clone.store(0, Ordering::SeqCst),
+                Err(ref e) => {
+                    // Accept ENOSYS for kernels < 6.9
+                    if let Error::Io(io_err) = e {
+                        result_clone.store(io_err.raw_os_error().unwrap_or(-1), Ordering::SeqCst);
+                    } else {
+                        result_clone.store(-1, Ordering::SeqCst);
                     }
                 }
-                done_clone.store(true, Ordering::SeqCst);
-            })
-            .unwrap();
+            }
+            done_clone.store(true, Ordering::SeqCst);
+        });
+
+        // liburing < 2.7 rejects the submission outright with ENOSYS.
+        if let Err(Error::Submission(ref io_err)) = submit {
+            if io_err.raw_os_error() == Some(libc::ENOSYS) {
+                eprintln!("test_ftruncate skipped: liburing too old");
+                return;
+            }
+        }
+        submit.unwrap();
 
         while !done.load(Ordering::SeqCst) {
             engine.wait(100).unwrap();

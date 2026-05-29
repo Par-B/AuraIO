@@ -1111,11 +1111,23 @@ TEST(fixed_file_ftruncate) {
 
     cb_called = 0;
     aura_request_t *req = aura_ftruncate(engine, 0, 4096, AURA_FIXED_FILE, basic_cb, NULL);
-    assert(req);
+    if (!req) {
+        /* liburing < 2.7 doesn't support ftruncate */
+        printf("(skipped: liburing too old) ");
+        aura_unregister(engine, AURA_REG_FILES);
+        aura_destroy(engine);
+        io_teardown();
+        return;
+    }
     assert(req->uses_registered_file == true);
     aura_wait(engine, 1000);
     assert(cb_called == 1);
-    assert(cb_result >= 0);
+    if (cb_result == -ENOSYS || cb_result == -EINVAL) {
+        /* ftruncate via io_uring requires kernel 6.9+ */
+        printf("(skipped: kernel too old) ");
+    } else {
+        assert(cb_result >= 0);
+    }
 
     aura_unregister(engine, AURA_REG_FILES);
     aura_destroy(engine);

@@ -1059,11 +1059,20 @@ TEST(ftruncate_callback) {
     bool done = false;
     ssize_t trunc_result = -1;
 
-    (void)engine.ftruncate(file.fd(), 1024,
-                           [&](aura::Request &, ssize_t result) {
-                               trunc_result = result;
-                               done = true;
-                           });
+    try {
+        (void)engine.ftruncate(file.fd(), 1024,
+                               [&](aura::Request &, ssize_t result) {
+                                   trunc_result = result;
+                                   done = true;
+                               });
+    } catch (const aura::Error &e) {
+        // liburing < 2.7 doesn't support ftruncate
+        if (e.code() == ENOSYS) {
+            printf("(skipped: liburing too old) ");
+            return;
+        }
+        throw;
+    }
 
     while (!done) {
         engine.wait(100);
