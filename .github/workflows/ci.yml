@@ -88,3 +88,5 @@ jobs:
         run: make test-asan
       - name: ThreadSanitizer
         run: make test-tsan
+      - name: UndefinedBehaviorSanitizer
+        run: make test-ubsan

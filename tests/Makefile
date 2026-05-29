@@ -10,6 +10,7 @@ RPATH = -Wl,-rpath,'$$ORIGIN/../engine/lib'
 # Sanitizer flags
 TSAN_FLAGS = -fsanitize=thread -fPIE -pie
 ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer
+UBSAN_FLAGS = -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 
 TESTS = test_engine test_buffer test_ring test_stats test_ring_select test_concurrency_stress test_otel test_coverage test_metadata_ops test_spill_stress test_histogram test_linked_ops
 CPP_TESTS = test_cpp
@@ -361,8 +362,56 @@ test_histogram_asan: test_histogram.c ../engine/lib/libaura_asan.a
 test_linked_ops_asan: test_linked_ops.c ../engine/lib/libaura_asan.a
 	$(CC) $(CFLAGS) $(ASAN_FLAGS) $< -o $@ ../engine/lib/libaura_asan.a -luring -lpthread
 
+# ============================================================================
+# UndefinedBehaviorSanitizer tests (requires rebuild with UBSAN)
+# ============================================================================
+UBSAN_TESTS = test_engine_ubsan test_buffer_ubsan test_ring_ubsan test_stats_ubsan test_ring_select_ubsan test_concurrency_stress_ubsan test_otel_ubsan test_coverage_ubsan test_spill_stress_ubsan test_histogram_ubsan test_linked_ops_ubsan
+
+ubsan: $(UBSAN_TESTS)
+	@echo "Running UndefinedBehaviorSanitizer tests..."
+	@for t in $(UBSAN_TESTS); do \
+		echo ""; \
+		echo "=== $$t ==="; \
+		UBSAN_OPTIONS=print_stacktrace=1 ./$$t || exit 1; \
+	done
+	@echo ""
+	@echo "All UBSAN tests passed!"
+
+test_engine_ubsan: test_engine.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_buffer_ubsan: test_buffer.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_ring_ubsan: test_ring.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_stats_ubsan: test_stats.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_ring_select_ubsan: test_ring_select.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_concurrency_stress_ubsan: test_concurrency_stress.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_otel_ubsan: test_otel.c ../engine/lib/libaura_ubsan.a ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) -I../integrations/opentelemetry/C $< ../integrations/opentelemetry/C/aura_otel.c ../integrations/opentelemetry/C/aura_otel_push.c -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_coverage_ubsan: test_coverage.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_spill_stress_ubsan: test_spill_stress.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) -O2 $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_histogram_ubsan: test_histogram.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
+test_linked_ops_ubsan: test_linked_ops.c ../engine/lib/libaura_ubsan.a
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) $< -o $@ ../engine/lib/libaura_ubsan.a -luring -lpthread
+
 clean:
-	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value bench_histogram $(TSAN_TESTS) $(ASAN_TESTS)
+	rm -f $(TESTS) $(CPP_TESTS) stress_test perf_bench perf_regression adaptive_value bench_histogram $(TSAN_TESTS) $(ASAN_TESTS) $(UBSAN_TESTS)
 
 # ============================================================================
 # Deep Performance Analysis (flamegraphs, cachegrind, pahole, callgrind)
@@ -377,7 +426,7 @@ deep-analysis-quick: perf_bench
 deep-analysis-no-valgrind: perf_bench
 	./run_deep_analysis.sh --skip-valgrind
 
-.PHONY: all clean valgrind valgrind-quick tsan asan cpp-test stress stress-full \
+.PHONY: all clean valgrind valgrind-quick tsan asan ubsan cpp-test stress stress-full \
         ring-select bench bench-throughput bench-latency bench-scalability \
         check-deps perf-test perf-test-quick perf-test-full perf-baseline perf-profile \
         analyze analyze-quick analyze-full analyze-no-fio \

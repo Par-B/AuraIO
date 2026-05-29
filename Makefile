@@ -281,7 +281,22 @@ $(LIB_ASAN): $(ASAN_OBJ) | engine/lib
 
 asan: $(LIB_ASAN)
 
-.PHONY: tsan asan
+# UndefinedBehaviorSanitizer build
+# -fno-sanitize-recover makes any detected UB abort (non-zero exit) instead of
+# printing and continuing, so it fails the build/CI rather than passing silently.
+UBSAN_CFLAGS = $(CFLAGS) -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
+UBSAN_OBJ = $(SRC:.c=.ubsan.o)
+LIB_UBSAN = engine/lib/libaura_ubsan.a
+
+engine/src/%.ubsan.o: engine/src/%.c
+	$(CC) $(UBSAN_CFLAGS) -c $< -o $@
+
+$(LIB_UBSAN): $(UBSAN_OBJ) | engine/lib
+	ar rcs $@ $^
+
+ubsan: $(LIB_UBSAN)
+
+.PHONY: tsan asan ubsan
 
 # =============================================================================
 # Sanitizer test targets
@@ -299,14 +314,18 @@ test-tsan: tsan
 test-asan: asan
 	$(MAKE) -C tests asan
 
+# Run tests with UndefinedBehaviorSanitizer
+test-ubsan: ubsan
+	$(MAKE) -C tests ubsan
+
 # Run all sanitizer tests with summary
-test-sanitizers: engine tsan asan
+test-sanitizers: engine tsan asan ubsan
 	@echo ""
 	@echo "========================================"
 	@echo "  Sanitizer Test Suite"
 	@echo "========================================"
 	@failed=""; \
-	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan"; do \
+	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan" "UBSan:ubsan"; do \
 		name=$${suite%%:*}; target=$${suite#*:}; \
 		echo ""; \
 		echo "--- $$name ---"; \
@@ -320,7 +339,7 @@ test-sanitizers: engine tsan asan
 	echo "========================================"; \
 	echo "  Sanitizer Summary"; \
 	echo "========================================"; \
-	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan"; do \
+	for suite in "Valgrind:valgrind" "TSan:tsan" "ASan:asan" "UBSan:ubsan"; do \
 		name=$${suite%%:*}; target=$${suite#*:}; \
 		eval ok=\$$$${target}_ok; \
 		if [ "$$ok" -eq 1 ]; then \
@@ -336,7 +355,7 @@ test-sanitizers: engine tsan asan
 		echo "RESULT: ALL PASSED"; \
 	fi
 
-.PHONY: test-valgrind test-tsan test-asan test-sanitizers
+.PHONY: test-valgrind test-tsan test-asan test-ubsan test-sanitizers
 
 # =============================================================================
 # Performance benchmarks (use BENCH_DIR=/path to override test file location)
