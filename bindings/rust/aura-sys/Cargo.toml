@@ -2,6 +2,7 @@
 name = "aura-sys"
 version = "0.7.0"
 edition = "2021"
+authors = ["Par-B <par.botes@gmail.com>"]
 description = "Raw FFI bindings for AuraIO async I/O library"
 license = "Apache-2.0"
 keywords = ["io_uring", "async", "ffi"]

@@ -398,7 +398,7 @@ make rust-examples  # Build Rust examples
 ## Requirements
 
 - **Linux 5.10+** (io_uring support; 6.0+ recommended for latest features)
-- **liburing** — `apt install liburing-dev`
+- **liburing** — `apt install liburing-dev` (any 2.x release works; liburing 2.7+ additionally enables `aura_ftruncate`, which otherwise returns `ENOSYS`)
 - **C11 compiler** (C API)
 - **C++20 compiler** (C++ API, optional)
 - **Rust 1.70+** (Rust bindings, optional)

@@ -2,6 +2,7 @@
 name = "aura"
 version = "0.7.0"
 edition = "2021"
+authors = ["Par-B <par.botes@gmail.com>"]
 description = "Safe Rust bindings for AuraIO - self-tuning async I/O library"
 license = "Apache-2.0"
 keywords = ["io_uring", "async", "io", "performance"]
