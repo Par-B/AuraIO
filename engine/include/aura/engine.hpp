@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <utility>
 #include <atomic>
+#include <cassert>
 
 namespace aura {
 
@@ -595,6 +596,9 @@ class Engine {
      * @return Number of completions processed
      */
     int poll() {
+        assert(!aura_in_callback_context() &&
+               "Engine::poll() must not be called from a completion callback "
+               "(the event-loop mutex is non-recursive and this deadlocks)");
         std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_poll(handle_);
         if (n < 0) {
@@ -611,6 +615,9 @@ class Engine {
      * @throws Error on failure
      */
     int wait(int timeout_ms = -1) {
+        assert(!aura_in_callback_context() &&
+               "Engine::wait() must not be called from a completion callback "
+               "(the event-loop mutex is non-recursive and this deadlocks)");
         std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_wait(handle_, timeout_ms);
         if (n < 0) {
@@ -626,6 +633,9 @@ class Engine {
      * or another thread to exit.
      */
     void run() {
+        assert(!aura_in_callback_context() &&
+               "Engine::run() must not be called from a completion callback "
+               "(the event-loop mutex is non-recursive and this deadlocks)");
         std::unique_lock<std::mutex> lock(*event_loop_mutex_);
         aura_run(handle_);
     }
@@ -647,6 +657,9 @@ class Engine {
      * @throws Error on timeout or failure
      */
     int drain(int timeout_ms = -1) {
+        assert(!aura_in_callback_context() &&
+               "Engine::drain() must not be called from a completion callback "
+               "(the event-loop mutex is non-recursive and this deadlocks)");
         std::lock_guard<std::mutex> lock(*event_loop_mutex_);
         int n = aura_drain(handle_, timeout_ms);
         if (n < 0) {
