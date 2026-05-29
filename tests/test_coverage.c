@@ -2337,6 +2337,17 @@ static void *run_thread(void *arg) {
 }
 
 TEST(run_stop) {
+#if defined(__SANITIZE_THREAD__)
+    /* Skipped under ThreadSanitizer: this test runs an *idle* event loop (no
+     * I/O submitted) and stops it from another thread. TSan does not model
+     * io_uring's blocking wait, so aura_wait() returns immediately and
+     * aura_run() busy-spins instead of blocking on the timeout, never cleanly
+     * observing the stop — the join then hangs. The same limitation already
+     * excludes Valgrind. The I/O-driven run/stop path is still covered by
+     * test_ring's aura_run_stop, which completes fine under TSan. */
+    printf("(skipped under TSan: idle event loop) ");
+    return;
+#endif
     aura_engine_t *engine = make_engine(1, 32);
     assert(engine);
 
