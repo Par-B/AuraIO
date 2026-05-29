@@ -669,13 +669,18 @@ static void adaptive_reset_to_baseline(adaptive_controller_t *ctrl) {
  * ============================================================================ */
 
 bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
-    /* NOT thread-safe: must be called from a single thread only.
+    /* NOT designed for concurrent use: must be called from a single thread.
      * Concurrent calls would double-swap the histogram (fetch_xor twice),
-     * causing both callers to read the active histogram and corrupt state. */
-#ifndef NDEBUG
-    int prev = atomic_fetch_add_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
-    assert(prev == 0 && "adaptive_tick called concurrently — not thread-safe");
-#endif
+     * causing both callers to read the active histogram and corrupt state.
+     *
+     * Guard at runtime in all builds: a debug build trips the assert loudly,
+     * while a release build degrades to a skipped tick rather than silently
+     * corrupting the controller. The matching fetch_sub runs at every return. */
+    if (atomic_fetch_add_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel) != 0) {
+        assert(!"adaptive_tick called concurrently — not thread-safe");
+        atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
+        return false;
+    }
 
     int64_t now_ns = get_time_ns();
     int64_t start_ns = atomic_load_explicit(&ctrl->sample_start_ns, memory_order_acquire);
@@ -709,9 +714,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
      * accumulate more. Note: hit_max_time (elapsed >= MAX_SAMPLE_WINDOW_MS)
      * is subsumed by have_min_time since MAX >= MIN. */
     if (!have_min_samples && !have_min_time) {
-#ifndef NDEBUG
         atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
-#endif
         return false; /* Skip this tick, keep accumulating */
     }
 
@@ -742,9 +745,7 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
             ctrl->pressure_qualify_count = 0;
         }
 
-#ifndef NDEBUG
         atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
-#endif
         return params_changed;
     }
 
@@ -839,8 +840,6 @@ bool adaptive_tick(adaptive_controller_t *ctrl, int pending_count) {
      * by tick_swap_and_compute_stats(). */
     atomic_store_explicit(&ctrl->sample_start_ns, get_time_ns(), memory_order_release);
 
-#ifndef NDEBUG
     atomic_fetch_sub_explicit(&ctrl->tick_entered, 1, memory_order_acq_rel);
-#endif
     return params_changed;
 }

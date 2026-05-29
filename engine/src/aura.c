@@ -1089,7 +1089,8 @@ static aura_engine_t *validate_and_init_engine_core(const aura_options_t *option
         return NULL;
     }
 
-    aura_engine_t *engine = calloc(1, sizeof(*engine));
+    /* aura_engine_t has _Alignas(64) members; calloc would under-align it. */
+    aura_engine_t *engine = aura_aligned_calloc(_Alignof(aura_engine_t), sizeof(*engine));
     if (!engine) {
         return NULL;
     }
@@ -1147,7 +1148,9 @@ static int init_engine_buffer_pool(aura_engine_t *engine) {
 static int init_engine_rings(aura_engine_t *engine, const aura_options_t *options) {
     /* Create rings */
     engine->ring_count = options->ring_count > 0 ? options->ring_count : get_cpu_count();
-    engine->rings = calloc(engine->ring_count, sizeof(ring_ctx_t));
+    /* ring_ctx_t has _Alignas(64) members; calloc would under-align the array. */
+    engine->rings = aura_aligned_calloc(_Alignof(ring_ctx_t),
+                                        (size_t)engine->ring_count * sizeof(ring_ctx_t));
     if (!engine->rings) {
         return -1;
     }

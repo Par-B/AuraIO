@@ -13,7 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Runtime configuration API**: `aura_set_max_p99_latency()`, `aura_set_min_in_flight()`, `aura_set_batch_threshold()` allow changing adaptive controller parameters after engine creation. Useful for engines that receive per-stream tuning hints after context initialization. C++ and Rust bindings include corresponding methods on `Engine`.
 
 ### Fixed
+- **Under-aligned engine allocations (undefined behavior)**: `aura_engine_t` and `ring_ctx_t` declare `_Alignas(64)` members (to avoid false sharing) but were allocated with `calloc`, which only guarantees `max_align_t` (typically 16-byte) alignment. Accessing those structs through an under-aligned pointer is undefined behavior. They are now allocated with a 64-byte-aligned allocator. Caught by UBSan.
 - Test suite now builds and passes on liburing < 2.7 (e.g. Ubuntu 22.04, which ships 2.5). The `aura_ftruncate` tests previously assumed support and aborted the build; they now skip cleanly. Library behavior is unchanged — `aura_ftruncate` already returned `NULL`/`ENOSYS` on liburing < 2.7 as documented.
+
+### Changed
+- `adaptive_tick()` now guards against concurrent entry at runtime in all builds (previously a debug-only `assert`). On misuse it skips the tick instead of silently corrupting controller state in release builds. The single-threaded contract is unchanged.
+
+### Internal
+- Added UndefinedBehaviorSanitizer build (`make test-ubsan`) alongside the existing ASan/TSan targets, and a GitHub Actions CI workflow running the full suite (liburing version matrix), cppcheck, and all three sanitizers.
 
 ## [0.6.0] - 2026-02-27
 

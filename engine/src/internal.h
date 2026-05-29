@@ -13,7 +13,10 @@
 #ifndef AURA_INTERNAL_H
 #define AURA_INTERNAL_H
 
+#include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <sys/uio.h>
 
@@ -71,6 +74,39 @@ static inline size_t iovec_total_len(const struct iovec *iov, int iovcnt) {
         total += iov[i].iov_len;
     }
     return total;
+}
+
+/**
+ * Allocate zero-initialized memory honoring an over-aligned type's alignment.
+ *
+ * malloc()/calloc() only guarantee alignment up to max_align_t (typically 16),
+ * but several engine structs use _Alignas(64) to avoid false sharing between
+ * hot atomics. Accessing such a struct through an under-aligned pointer is
+ * undefined behavior (flagged by UBSan). Use this for those allocations.
+ *
+ * @param alignment Required alignment in bytes (must be a power of two)
+ * @param size      Number of bytes to allocate
+ * @return Zeroed, suitably-aligned pointer, or NULL on failure (errno set).
+ *         Free with free().
+ */
+static inline void *aura_aligned_calloc(size_t alignment, size_t size) {
+    if (alignment == 0) {
+        alignment = 1;
+    }
+    /* aligned_alloc requires the size to be a multiple of the alignment. */
+    size_t rem = size % alignment;
+    if (rem != 0) {
+        if (size > SIZE_MAX - (alignment - rem)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        size += alignment - rem;
+    }
+    void *p = aligned_alloc(alignment, size);
+    if (p) {
+        memset(p, 0, size);
+    }
+    return p;
 }
 
 #endif /* AURA_INTERNAL_H */
