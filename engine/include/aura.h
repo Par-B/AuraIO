@@ -12,7 +12,7 @@
  * @code
  *   aura_engine_t *engine = aura_create();
  *   void *buf = aura_buffer_alloc(engine, size);
- *   aura_request_t *req = aura_read(engine, fd, aura_buf(buf), size, 0,
+ *   aura_request_t *req = aura_read(engine, fd, aura_buf(buf), size, 0, 0,
  *                                    callback, user_data);
  *   aura_wait(engine, -1);
  *   aura_buffer_free(engine, buf);
@@ -571,10 +571,10 @@ typedef enum {
  * Example:
  * @code
  *   // Regular buffer
- *   aura_read(engine, fd, aura_buf(my_ptr), len, offset, cb, ud);
+ *   aura_read(engine, fd, aura_buf(my_ptr), len, offset, 0, cb, ud);
  *
  *   // Registered buffer (after aura_register_buffers())
- *   aura_read(engine, fd, aura_buf_fixed(0, 0), len, offset, cb, ud);
+ *   aura_read(engine, fd, aura_buf_fixed(0, 0), len, offset, 0, cb, ud);
  * @endcode
  */
 typedef struct {
@@ -737,10 +737,10 @@ AURA_API void aura_destroy(aura_engine_t *engine);
  * Supports both regular and registered buffers via aura_buf_t descriptor:
  * @code
  *   // Regular buffer
- *   aura_read(engine, fd, aura_buf(ptr), len, offset, cb, ud);
+ *   aura_read(engine, fd, aura_buf(ptr), len, offset, 0, cb, ud);
  *
  *   // Registered buffer (after aura_register_buffers())
- *   aura_read(engine, fd, aura_buf_fixed(0, 0), len, offset, cb, ud);
+ *   aura_read(engine, fd, aura_buf_fixed(0, 0), len, offset, 0, cb, ud);
  * @endcode
  *
  * For best performance with O_DIRECT files, use aura_buffer_alloc() to get
@@ -780,10 +780,10 @@ AURA_API AURA_WARN_UNUSED aura_request_t *aura_read(aura_engine_t *engine, int f
  * Supports both regular and registered buffers via aura_buf_t descriptor:
  * @code
  *   // Regular buffer
- *   aura_write(engine, fd, aura_buf(ptr), len, offset, cb, ud);
+ *   aura_write(engine, fd, aura_buf(ptr), len, offset, 0, cb, ud);
  *
  *   // Registered buffer (after aura_register_buffers())
- *   aura_write(engine, fd, aura_buf_fixed(0, 0), len, offset, cb, ud);
+ *   aura_write(engine, fd, aura_buf_fixed(0, 0), len, offset, 0, cb, ud);
  * @endcode
  *
  * @param engine    Engine handle
@@ -1341,7 +1341,7 @@ AURA_API void aura_buffer_free(aura_engine_t *engine, void *buf);
  * Usage:
  *   struct iovec iovs[2] = {{buf1, 4096}, {buf2, 4096}};
  *   aura_register_buffers(engine, iovs, 2);
- *   aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, callback,
+ *   aura_read(engine, fd, aura_buf_fixed(0, 0), 4096, offset, 0, callback,
  * ud);
  *   // buffer index 0 refers to buf1
  */

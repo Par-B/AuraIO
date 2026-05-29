@@ -16,5 +16,3 @@ pkg-config = "0.3"
 
 [features]
 default = []
-# Use bundled headers instead of system-installed
-bundled = []

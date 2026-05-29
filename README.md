@@ -378,10 +378,10 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Callback-based API (default):
-aura = { git = "https://github.com/Par-B/AuraIO.git", subdirectory = "bindings/rust/aura" }
+aura = { git = "https://github.com/Par-B/AuraIO.git" }
 
 # Or with async/await support (enables Future-based async_read/async_write):
-aura = { git = "https://github.com/Par-B/AuraIO.git", subdirectory = "bindings/rust/aura", features = ["async"] }
+aura = { git = "https://github.com/Par-B/AuraIO.git", features = ["async"] }
 
 # For local development, use a path dependency instead:
 # aura = { path = "../AuraIO/bindings/rust/aura" }

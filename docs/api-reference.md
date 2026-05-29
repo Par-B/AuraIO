@@ -1396,7 +1396,7 @@ Emit a log message through the registered handler. No-op when no handler is regi
 const char *aura_version(void);
 ```
 
-**Returns:** Version string (e.g., `"0.6.0"`).
+**Returns:** Version string (e.g., `"0.7.0"`).
 
 ---
 
@@ -1811,7 +1811,7 @@ When `co_await`ed, submits the fsync and suspends. Resumes with `void`. Throws `
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `aura::version()` | `const char*` | Library version string (e.g., `"0.6.0"`) |
+| `aura::version()` | `const char*` | Library version string (e.g., `"0.7.0"`) |
 | `aura::version_int()` | `int` | Version as integer (`major * 10000 + minor * 100 + patch`) |
 
 ---
