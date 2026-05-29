@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 
 #include "aura.h"
+#include "test_util.h"
 #include "adaptive_ring.h" /* struct aura_request (ring_idx) */
 
 static int test_count = 0;
@@ -57,7 +58,7 @@ static void basic_cb(aura_request_t *req, ssize_t result, void *user_data) {
 static void run_until_done(aura_engine_t *engine, cb_state_t *st) {
     int iters = 0;
     while (!st->done && iters++ < 2000) {
-        aura_poll(engine);
+        tu_poll(engine);
         if (!st->done) usleep(1000);
     }
     assert(st->done && "operation did not complete");
@@ -394,7 +395,7 @@ TEST(linked_with_registered_files) {
     /* Unregister files before closing */
     aura_request_unregister(engine, AURA_REG_FILES);
     /* Drain any pending unregistration */
-    aura_poll(engine);
+    tu_poll(engine);
 
     close(fd);
     aura_destroy(engine);
@@ -447,7 +448,7 @@ static void *chain_thread_func(void *arg) {
     /* Wait for completion */
     int iters = 0;
     while ((!ws.done || !fs.done) && iters++ < 5000) {
-        aura_poll(engine);
+        tu_poll(engine);
         usleep(500);
     }
 

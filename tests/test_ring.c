@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 
 #include "../include/aura.h"
+#include "test_util.h"
 #include "../src/adaptive_ring.h"
 
 static int test_count = 0;
@@ -600,7 +601,7 @@ TEST(poll_fd_eventfd_integration) {
     assert(req != NULL);
 
     /* Force flush the submission queue (aura_wait with 0 timeout flushes all rings) */
-    aura_wait(engine, 0);
+    tu_wait(engine, 0);
 
     /* Use poll() to wait on the eventfd - it should become readable when op completes */
     struct pollfd pfd = { .fd = poll_fd, .events = POLLIN };
@@ -656,7 +657,7 @@ TEST(registered_buffers_basic) {
         aura_read(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
 
     assert(callback_called == 1);
     assert(callback_result == 4096);
@@ -815,7 +816,7 @@ TEST(registered_buffers_write_fixed) {
         aura_write(engine, test_fd, aura_buf_fixed(0, 0), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
 
     assert(callback_called == 1);
     assert(callback_result == 4096);
@@ -854,7 +855,7 @@ TEST(registered_buffers_offset) {
         aura_read(engine, test_fd, aura_buf_fixed(0, 1024), 1024, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
 
     assert(callback_called == 1);
     assert(callback_result == 1024);
@@ -1158,7 +1159,7 @@ TEST(aura_fsync_both_modes) {
     aura_request_t *req = aura_fsync(engine, test_fd, AURA_FSYNC_DEFAULT, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
     assert(callback_result == 0);
 
@@ -1167,7 +1168,7 @@ TEST(aura_fsync_both_modes) {
     req = aura_fsync(engine, test_fd, AURA_FSYNC_DATASYNC, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
     assert(callback_result == 0);
 
@@ -1468,7 +1469,7 @@ TEST(shutdown_rejects_new_submissions) {
     assert(req != NULL);
 
     /* Flush and wait for completion before destroy to avoid hanging */
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
 
     /* Free buffer before destroy */
     aura_buffer_free(engine, buf);
@@ -1542,7 +1543,7 @@ TEST(stats_basic) {
         aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
 
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
 
     /* Check stats after completion */
@@ -1785,7 +1786,7 @@ TEST(drain_nonblocking) {
     assert(n >= 0); /* Should not return error */
 
     /* Drain remaining with timeout */
-    aura_drain(engine, 5000);
+    tu_drain(engine, 5000);
     assert(drain_callback_count == 1);
 
     aura_buffer_free(engine, buf);

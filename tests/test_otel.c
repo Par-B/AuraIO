@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 
 #include "../engine/include/aura.h"
+#include "test_util.h"
 #include "../integrations/opentelemetry/C/aura_otel.h"
 #include "../integrations/opentelemetry/C/aura_otel_push.h"
 
@@ -546,7 +547,7 @@ TEST(nonzero_counters_after_io) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 

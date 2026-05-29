@@ -3,6 +3,7 @@
 
 #define _GNU_SOURCE
 #include "aura.h"
+#include "test_util.h"
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
@@ -92,7 +93,7 @@ int main() {
     time_t start = time(NULL);
     while (time(NULL) - start < DURATION_SEC) {
         // aggressive polling
-        aura_wait(engine, 10);
+        tu_wait(engine, 10);
 
         static int print_counter = 0;
         if (print_counter++ % 10 == 0) {
@@ -120,7 +121,7 @@ int main() {
     printf("Average Throughput: %.2f M/s\n", (double)total / DURATION_SEC / 1000000.0);
 
     /* Drain remaining completions */
-    aura_drain(engine, 1000);
+    tu_drain(engine, 1000);
     total_completions = atomic_load(&completions);
 
     /* Sanity: at least some I/O must have completed */

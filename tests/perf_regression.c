@@ -32,6 +32,7 @@
 
 #define _GNU_SOURCE
 #include <aura.h>
+#include "test_util.h"
 #include <liburing.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -640,7 +641,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
         if (!ctx.warming_up && now >= ctx.measure_deadline) {
             if (inflight == 0) break;
             // Drain remaining
-            aura_wait(engine, 1);
+            tu_wait(engine, 1);
             inflight = submitted - ctx.completed;
             continue;
         }
@@ -661,7 +662,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
             if (!req) {
                 // Engine full, return slot and drain some completions
                 ctx.free_stack[ctx.free_top++] = slot;
-                aura_wait(engine, 1);
+                tu_wait(engine, 1);
                 inflight = submitted - ctx.completed;
                 continue;
             }
@@ -671,7 +672,7 @@ static perf_result_t run_aura(int fd, const perf_config_t *cfg, int depth, bool 
 
         // Drain completions
         int n = aura_poll(engine);
-        if (n == 0 && inflight > 0) aura_wait(engine, 1);
+        if (n == 0 && inflight > 0) tu_wait(engine, 1);
         inflight = submitted - ctx.completed;
     }
 

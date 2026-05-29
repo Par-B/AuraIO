@@ -18,6 +18,7 @@
 
 #define _GNU_SOURCE
 #include <aura.h>
+#include "test_util.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,7 +316,7 @@ static void bench_throughput(int duration_sec, int max_inflight, size_t buf_size
         }
 
         // Process completions
-        aura_wait(engine, 1);
+        tu_wait(engine, 1);
 
         // Submit more if under limit and time remains
         while (atomic_load(&stats.inflight) < max_inflight && now_ns() < end_time) {
@@ -430,7 +431,7 @@ static void bench_latency(int duration_sec, size_t buf_size) {
         if (aura_read(engine, test_fds[fd_idx], aura_buf(buf), buf_size, offset, 0,
                       latency_callback, &sync_ctx) != NULL) {
             while (!atomic_load(&done)) {
-                aura_wait(engine, 1);
+                tu_wait(engine, 1);
             }
 
             uint64_t lat = now_ns() - op_start;
@@ -643,7 +644,7 @@ static void bench_scalability(int duration_sec) {
                 }
             }
 
-            aura_wait(engine, 1);
+            tu_wait(engine, 1);
         }
 
         uint64_t elapsed = now_ns() - start;
@@ -724,7 +725,7 @@ static void bench_syscall_batching(int duration_sec) {
             submitted++;
         }
 
-        aura_wait(engine, 1);
+        tu_wait(engine, 1);
     }
 
     uint64_t elapsed = now_ns() - start;
@@ -896,7 +897,7 @@ static void bench_mixed_workload(int duration_sec) {
             }
         }
 
-        aura_wait(engine, 1);
+        tu_wait(engine, 1);
     }
 
     uint64_t elapsed = now_ns() - start;

@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 
 #include "aura.h"
+#include "test_util.h"
 
 static int test_count = 0;
 
@@ -52,7 +53,7 @@ static void basic_cb(aura_request_t *req, ssize_t result, void *user_data) {
 static void run_until_done(aura_engine_t *engine, cb_state_t *st) {
     int iters = 0;
     while (!st->done && iters++ < 1000) {
-        aura_poll(engine);
+        tu_poll(engine);
         if (!st->done) usleep(1000);
     }
     assert(st->done && "operation did not complete");
@@ -660,7 +661,7 @@ TEST(concurrent_metadata_ops) {
     /* Poll until all 3 complete */
     int iters = 0;
     while ((!st1.done || !st2.done || !st3.done) && iters++ < 3000) {
-        aura_poll(engine);
+        tu_poll(engine);
         if (!st1.done || !st2.done || !st3.done) usleep(1000);
     }
     assert(st1.done && st2.done && st3.done);

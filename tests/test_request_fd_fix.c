@@ -12,6 +12,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "aura.h"
+#include "test_util.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -78,7 +79,7 @@ static void test_request_fd_no_registered_files(void) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Expected fd %d, got %d", fd, returned_fd);
         fail(test_name, msg);
-        aura_drain(engine, 1000);
+        tu_drain(engine, 1000);
         aura_buffer_free(engine, rbuf);
         close(fd);
         unlink(template);
@@ -86,7 +87,7 @@ static void test_request_fd_no_registered_files(void) {
         return;
     }
 
-    aura_drain(engine, 1000);
+    tu_drain(engine, 1000);
     aura_buffer_free(engine, rbuf);
     close(fd);
     unlink(template);
@@ -193,7 +194,7 @@ static void test_request_fd_with_registered_files(void) {
         failed = true;
     }
 
-    aura_drain(engine, 1000);
+    tu_drain(engine, 1000);
     aura_buffer_free(engine, rbuf1);
     aura_buffer_free(engine, rbuf2);
     aura_unregister(engine, AURA_REG_FILES);
@@ -254,7 +255,7 @@ static void test_request_fd_fsync_registered(void) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Expected fd %d, got %d", fd, returned_fd);
         fail(test_name, msg);
-        aura_drain(engine, 1000);
+        tu_drain(engine, 1000);
         aura_unregister(engine, AURA_REG_FILES);
         close(fd);
         unlink(template);
@@ -262,7 +263,7 @@ static void test_request_fd_fsync_registered(void) {
         return;
     }
 
-    aura_drain(engine, 1000);
+    tu_drain(engine, 1000);
     aura_unregister(engine, AURA_REG_FILES);
     close(fd);
     unlink(template);

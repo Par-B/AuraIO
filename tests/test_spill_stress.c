@@ -23,6 +23,7 @@
 #include <time.h>
 
 #include "../include/aura.h"
+#include "test_util.h"
 
 #define RING_COUNT 4
 #define QUEUE_DEPTH 32
@@ -77,11 +78,11 @@ static void *worker(void *arg) {
             submitted++;
             batch++;
         } else {
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
         }
 
         if (batch >= QUEUE_DEPTH) {
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
             batch = 0;
         }
     }
@@ -89,7 +90,7 @@ static void *worker(void *arg) {
     /* Drain completions */
     int spins = 0;
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted) {
-        aura_wait(ctx->engine, 100);
+        tu_wait(ctx->engine, 100);
         if (++spins > 50000) break;
     }
 

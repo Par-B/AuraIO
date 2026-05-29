@@ -18,6 +18,7 @@
 #include <stdatomic.h>
 
 #include "../include/aura.h"
+#include "test_util.h"
 
 static int test_count = 0;
 
@@ -388,7 +389,7 @@ TEST(aggregate_stats_sanity) {
     aura_request_t *req =
         aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
 
     aura_stats_t stats;
@@ -433,7 +434,7 @@ TEST(ring_stats_after_io) {
     aura_request_t *req =
         aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
 
     /* Ring stats should now reflect the completed operation */
@@ -465,7 +466,7 @@ TEST(histogram_after_io) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
@@ -515,7 +516,7 @@ TEST(aggregate_stats_match_ring_stats) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
@@ -573,7 +574,7 @@ TEST(ring_select_round_robin) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
     }
 
     /* Verify all 4 rings received some operations */
@@ -611,7 +612,7 @@ TEST(ring_select_cpu_local) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
     }
 
     /* Single thread + CPU_LOCAL = exactly 1 ring should have all ops */
@@ -660,7 +661,7 @@ TEST(ring_select_thread_local) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
@@ -701,7 +702,7 @@ TEST(ring_select_invalid_mode) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
         aura_buffer_free(engine, buf);
         aura_destroy(engine);
@@ -735,7 +736,7 @@ TEST(ring_select_round_robin_distribution) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
     }
 
     /* Each ring should have received at least 1 op */
@@ -779,7 +780,7 @@ TEST(stats_ops_count_accuracy) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
@@ -816,7 +817,7 @@ TEST(stats_bytes_accuracy) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
     }
 
@@ -875,7 +876,7 @@ TEST(stats_monotonic_ops) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
 
         aura_stats_t stats;
@@ -927,7 +928,7 @@ TEST(cancel_completed_request) {
     aura_request_t *req =
         aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
     assert(req != NULL);
-    aura_wait(engine, 1000);
+    tu_wait(engine, 1000);
     assert(callback_called == 1);
 
     /* Request is now completed — cancel should fail */
@@ -966,7 +967,7 @@ TEST(cancel_pending_request) {
     /* Drain any remaining completions */
     int iters = 0;
     while (!callback_called && iters++ < 1000) {
-        aura_poll(engine);
+        tu_poll(engine);
         usleep(1000);
     }
 
@@ -1041,7 +1042,7 @@ TEST(concurrent_stats_and_io) {
         aura_request_t *req =
             aura_read(engine, test_fd, aura_buf(buf), 4096, 0, 0, test_callback, NULL);
         assert(req != NULL);
-        aura_wait(engine, 1000);
+        tu_wait(engine, 1000);
         assert(callback_called == 1);
         if (i % 8 == 0) usleep(100); /* Yield to reader thread */
     }

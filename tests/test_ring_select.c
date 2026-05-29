@@ -34,6 +34,7 @@
 #include <time.h>
 
 #include "../include/aura.h"
+#include "test_util.h"
 
 /* --- Configuration --- */
 #define DEFAULT_OPS 5000
@@ -81,17 +82,17 @@ static void *worker_simple(void *arg) {
             submitted++;
             batch++;
         } else {
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
         }
 
         if (batch >= 16) {
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
             batch = 0;
         }
     }
 
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted)
-        aura_wait(ctx->engine, 100);
+        tu_wait(ctx->engine, 100);
 
     aura_buffer_free(ctx->engine, buf);
     return NULL;
@@ -148,12 +149,12 @@ static void *worker_adaptive(void *arg) {
             batch++;
         } else {
             /* Pool exhausted — must drain some completions to free request slots */
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
         }
 
         /* Poll infrequently to keep pending elevated */
         if (batch >= QUEUE_DEPTH) {
-            aura_poll(ctx->engine);
+            tu_poll(ctx->engine);
             batch = 0;
         }
     }
@@ -161,7 +162,7 @@ static void *worker_adaptive(void *arg) {
     /* Drain */
     int spins = 0;
     while (atomic_load_explicit(&ctx->ops_completed, memory_order_relaxed) < submitted) {
-        aura_wait(ctx->engine, 100);
+        tu_wait(ctx->engine, 100);
         if (++spins > 50000) break;
     }
 
