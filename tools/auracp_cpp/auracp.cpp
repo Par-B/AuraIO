@@ -46,6 +46,11 @@ static constexpr uint64_t PROGRESS_INTERVAL_MS = 200;
 static constexpr int SECTOR_SIZE = 512;
 static constexpr int NFTW_MAX_FDS = 64;
 
+// Round x up to the next multiple of a (a must be a power of two).
+static constexpr size_t round_up_sz(size_t x, size_t a) {
+    return (x + a - 1) & ~(a - 1);
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -107,7 +112,8 @@ enum class BufState { Free, Reading, Writing };
 struct BufSlot {
     aura::Buffer buf;
     off_t offset = 0;
-    size_t bytes = 0;
+    size_t bytes = 0;       // I/O length submitted (sector-padded under O_DIRECT)
+    size_t data_bytes = 0;  // real bytes of file data in this chunk (<= bytes)
     BufState state = BufState::Free;
     size_t task_idx = 0;
 };
@@ -385,15 +391,15 @@ static int build_task_list(const Config &config, TaskQueue &queue) {
                 dst_path = config.dest;
             }
 
-            // Check same file
-            if (dst_is_dir) {
-                struct stat check_st;
-                if (stat(dst_path.c_str(), &check_st) == 0 && src_st.st_dev == check_st.st_dev &&
-                    src_st.st_ino == check_st.st_ino) {
-                    fprintf(stderr, "auracp: '%s' and '%s' are the same file\n", src,
-                            dst_path.c_str());
-                    return -1;
-                }
+            // Check same file (unconditionally — a direct file->file self-copy
+            // would otherwise open the destination O_TRUNC and destroy the
+            // source before reading it). If the destination does not exist yet,
+            // stat() fails and the check is correctly skipped.
+            struct stat check_st;
+            if (stat(dst_path.c_str(), &check_st) == 0 && src_st.st_dev == check_st.st_dev &&
+                src_st.st_ino == check_st.st_ino) {
+                fprintf(stderr, "auracp: '%s' and '%s' are the same file\n", src, dst_path.c_str());
+                return -1;
             }
 
             FileTask task;
@@ -474,6 +480,12 @@ int CopyContext::open_task(FileTask &task) {
 void CopyContext::finish_task(FileTask &task) {
     queue.completed_files++;
 
+    // Under O_DIRECT the final write was padded up to a sector boundary, so the
+    // destination may be longer than the source. Trim it back to the exact size.
+    if (config.use_direct && task.dst_fd >= 0) {
+        if (ftruncate(task.dst_fd, task.file_size) != 0 && error == 0) error = -errno;
+    }
+
     // Preserve timestamps if requested
     if (config.preserve && task.dst_fd >= 0) {
         struct stat src_st;
@@ -538,8 +550,18 @@ void CopyContext::on_read_complete(size_t slot_idx, ssize_t result) {
         return;
     }
 
-    // Submit write for the data we just read
-    slot.bytes = static_cast<size_t>(result);
+    // Submit write for the data we just read. Under O_DIRECT the write length
+    // must be sector-aligned: pad the tail up to a sector (zeroing the slack so
+    // we never write uninitialized memory) and let finish_task() ftruncate the
+    // destination back to the exact size.
+    size_t data = static_cast<size_t>(result);
+    size_t wlen = data;
+    if (config.use_direct) {
+        wlen = round_up_sz(data, SECTOR_SIZE);
+        if (wlen > data) memset(static_cast<char *>(slot.buf.data()) + data, 0, wlen - data);
+    }
+    slot.data_bytes = data;
+    slot.bytes = wlen;
     slot.state = BufState::Writing;
 
     try {
@@ -574,8 +596,8 @@ void CopyContext::on_write_complete(size_t slot_idx, ssize_t result) {
             error = -EIO;
         }
     } else {
-        task.bytes_written += result;
-        queue.total_written += result;
+        task.bytes_written += slot.data_bytes;
+        queue.total_written += slot.data_bytes;
     }
 
     slot.state = BufState::Free;
@@ -626,9 +648,16 @@ void CopyContext::submit_next_read(size_t slot_idx) {
     if (task.read_offset + static_cast<off_t>(chunk) > task.file_size)
         chunk = static_cast<size_t>(task.file_size - task.read_offset);
 
+    // O_DIRECT requires a sector-aligned read length. A file whose size is not
+    // a sector multiple has an unaligned final chunk: round the read length up
+    // (the buffer is chunk_size, always >= the rounded length) and rely on the
+    // kernel returning a short read at EOF.
+    size_t io_len = config.use_direct ? round_up_sz(chunk, SECTOR_SIZE) : chunk;
+
     auto &slot = slots[slot_idx];
     slot.offset = task.read_offset;
-    slot.bytes = chunk;
+    slot.bytes = io_len;
+    slot.data_bytes = chunk;
     slot.state = BufState::Reading;
     slot.task_idx = idx;
     task.read_offset += static_cast<off_t>(chunk);
@@ -639,7 +668,7 @@ void CopyContext::submit_next_read(size_t slot_idx) {
     }
 
     try {
-        (void)engine.read(task.src_fd, slot.buf, chunk, slot.offset,
+        (void)engine.read(task.src_fd, slot.buf, io_len, slot.offset,
                           [this, slot_idx](aura::Request &, ssize_t result) {
                               on_read_complete(slot_idx, result);
                           });

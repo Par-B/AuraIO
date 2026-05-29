@@ -44,6 +44,11 @@
 #define SECTOR_SIZE 512
 #define NFTW_MAX_FDS 64
 
+/* Round x up to the next multiple of a (a must be a power of two). */
+static inline size_t round_up_sz(size_t x, size_t a) {
+    return (x + a - 1) & ~(a - 1);
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -104,7 +109,8 @@ struct copy_ctx;
 typedef struct {
     void *buf;
     off_t offset;
-    size_t bytes;
+    size_t bytes;      /* I/O length submitted (sector-padded under O_DIRECT) */
+    size_t data_bytes; /* real bytes of file data in this chunk (<= bytes) */
     buf_state_t state;
     file_task_t *task;
     struct copy_ctx *ctx;
@@ -530,8 +536,18 @@ static void on_read_complete(aura_request_t *req, ssize_t result, void *user_dat
         return;
     }
 
-    /* Submit write for the data we just read */
-    slot->bytes = (size_t)result;
+    /* Submit write for the data we just read. Under O_DIRECT the write length
+       must be sector-aligned: pad the tail up to a sector (zeroing the slack so
+       we never write uninitialized memory) and let finish_task() ftruncate the
+       destination back to the exact size. */
+    size_t data = (size_t)result;
+    size_t wlen = data;
+    if (ctx->config->use_direct) {
+        wlen = round_up_sz(data, SECTOR_SIZE);
+        if (wlen > data) memset((char *)slot->buf + data, 0, wlen - data);
+    }
+    slot->data_bytes = data;
+    slot->bytes = wlen;
     slot->state = BUF_WRITING;
 
     aura_request_t *wreq = aura_write(ctx->engine, task->dst_fd, aura_buf(slot->buf), slot->bytes,
@@ -574,6 +590,13 @@ static void on_fsync_complete(aura_request_t *req, ssize_t result, void *user_da
 
 static void finish_task(copy_ctx_t *ctx, file_task_t *task, buf_slot_t *slot) {
     ctx->queue->completed_files++;
+
+    /* Under O_DIRECT the final write was padded up to a sector boundary, so the
+       destination may be longer than the source. Trim it back to the exact size. */
+    if (ctx->config->use_direct && task->dst_fd >= 0) {
+        if (ftruncate(task->dst_fd, task->file_size) != 0 && ctx->error == 0)
+            ctx->error = -errno;
+    }
 
     /* Preserve timestamps if requested */
     if (ctx->config->preserve && task->dst_fd >= 0) {
@@ -633,8 +656,8 @@ static void on_write_complete(aura_request_t *req, ssize_t result, void *user_da
             ctx->error = -EIO;
         }
     } else {
-        task->bytes_written += result;
-        ctx->queue->total_written += result;
+        task->bytes_written += slot->data_bytes;
+        ctx->queue->total_written += slot->data_bytes;
     }
 
     slot->state = BUF_FREE;
@@ -719,8 +742,16 @@ static void submit_next_read(copy_ctx_t *ctx, buf_slot_t *slot) {
     if (task->read_offset + (off_t)chunk > task->file_size)
         chunk = (size_t)(task->file_size - task->read_offset);
 
+    /* O_DIRECT requires a sector-aligned read length. A file whose size is not
+       a sector multiple has an unaligned final chunk: round the read length up
+       (the buffer is chunk_size, always >= the rounded length) and rely on the
+       kernel returning a short read at EOF. */
+    size_t io_len = chunk;
+    if (ctx->config->use_direct) io_len = round_up_sz(chunk, SECTOR_SIZE);
+
     slot->offset = task->read_offset;
-    slot->bytes = chunk;
+    slot->bytes = io_len;
+    slot->data_bytes = chunk;
     slot->state = BUF_READING;
     slot->task = task;
     task->read_offset += (off_t)chunk;
@@ -730,7 +761,7 @@ static void submit_next_read(copy_ctx_t *ctx, buf_slot_t *slot) {
         q->current = task->next;
     }
 
-    aura_request_t *req = aura_read(ctx->engine, task->src_fd, aura_buf(slot->buf), chunk,
+    aura_request_t *req = aura_read(ctx->engine, task->src_fd, aura_buf(slot->buf), io_len,
                                     slot->offset, 0, on_read_complete, slot);
     if (!req) {
         if (ctx->error == 0) {
